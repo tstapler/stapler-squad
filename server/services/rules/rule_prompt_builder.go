@@ -1,4 +1,4 @@
-package services
+package rules
 
 import (
 	"encoding/json"

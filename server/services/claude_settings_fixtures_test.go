@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// writeSettingsFile writes a settings file for the rules and session service tests; the
-// claudesettings leaf keeps its own copy.
+// writeSettingsFile writes a settings file for the session service tests; the
+// claudesettings and rules leaves keep their own copies.
 func writeSettingsFile(t *testing.T, path, content string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
