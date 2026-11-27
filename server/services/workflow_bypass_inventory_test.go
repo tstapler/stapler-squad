@@ -131,7 +131,7 @@ var bypassInventory = []bypassSite{
 	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.OverrideVerdict", 1, "GatedTransition as operator_override_verdict (Story 1.5.5a)"),
 
 	// Gate-routed in Story 1.5.5 (operator and agent writers).
-	gateRouted("server/services/notification_action_backlog.go", "backlogDecider.transition", 1, "forwards the operator's inline click to the transition handler as operator_notification_action"),
+	gateRouted("server/services/notifyactions/notification_action_backlog.go", "backlogDecider.transition", 1, "forwards the operator's inline click to the transition handler as operator_notification_action"),
 	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.SubmitManualReview", 1, "GatedTransition as operator_submit_manual_review (Story 1.5.5a)"),
 	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.ArchiveBacklogItem", 1, "GatedArchive as operator_archive_rpc (Story 1.5.5b)"),
 	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.UnarchiveBacklogItem", 1, "GatedUnarchive as operator_unarchive_rpc (Story 1.5.5b)"),

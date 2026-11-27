@@ -1,11 +1,16 @@
 package services
 
 import (
+	"context"
+
 	"connectrpc.com/connect"
+
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -18,9 +23,9 @@ type NotificationActionWiring struct {
 	Guidance *guidance.GuidanceRequestService
 	// Backlog is the TransitionBacklogItemStatus delegate; leave it a nil interface (not a boxed nil
 	// pointer) to disable backlog actions.
-	Backlog BacklogTransitioner
+	Backlog notifyactions.BacklogTransitioner
 	// Cancels backs CANCEL_WAKE and CANCEL_PEER_HELP (optional).
-	Cancels CancelDelegate
+	Cancels notifyactions.CancelDelegate
 	// Mirror re-registers an expired hook question from its durable row (optional).
 	Mirror *questionkit.GuidanceHookMirror
 }
@@ -29,44 +34,57 @@ type NotificationActionWiring struct {
 // history and the dispatcher behind InvokeNotificationAction. Call it once the
 // notification store is wired.
 func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
-	src := notify.DescriptorSources{
-		Approvals: NewApprovalLookup(s.approvalStore),
-		Questions: s.replyState().store,
-		Canary:    s.wireDialogCanary(),
+	deps := notifyactions.Deps{
+		Approvals:     s.approvalSvc,
+		ApprovalStore: s.approvalStore,
+		Guidance:      w.Guidance,
+		Transitions:   w.Backlog,
+		Merger:        s,
+		Cancels:       w.Cancels,
+		Audit:         s.auditSink,
 	}
+	if w.Storage != nil {
+		deps.Storage = w.Storage
+	}
+	src := deps.DescriptorSources()
+	src.Questions = s.replyState().store
+	src.Canary = s.wireDialogCanary()
 	acks := s.wireGuidanceAcks(w.Storage)
 	s.wireHookReply(w.Storage, acks)
 	router := s.WireAnswerRouter(answerRouterDeps(w, acks))
 	src.Routes = router
-	delegates := ActionDelegates{
-		Approvals: NewApprovalResolver(s.approvalSvc, s.approvalStore),
-		Questions: router,
-		Resolver:  NewNotificationResolver(s.GetNotificationStore()),
-		Cancels:   w.Cancels,
-	}
-	if w.Storage != nil {
-		src.Backlog = NewBacklogDecisionLookup(w.Storage)
-		src.Guidance = NewGuidanceLookup(w.Storage)
-	}
+	deps.Questions = router
+	deps.History = s.GetNotificationStore()
 	if w.Guidance != nil {
-		delegates.Guidance = NewGuidanceAnswerer(w.Guidance)
 		w.Guidance.SetDeliveryProbes(s.deliveryProbes(acks))
 	}
-	if w.Backlog != nil && w.Storage != nil {
-		delegates.Backlog = NewBacklogDecider(BacklogDeciderDeps{
-			Status:      NewItemStatusReader(w.Storage),
-			Transitions: w.Backlog,
-			Sessions:    NewWorkSessionFinder(w.Storage),
-			Merger:      s,
-		})
+	deps.Registry = s.InjectedFlagRegistry()
+	s.notificationSvc.SetDescriptorBuilder(notify.NewDescriptorBuilder(src, deps.Registry))
+	s.actionDispatcher = notifyactions.NewDispatcher(deps)
+}
+
+// InvokeNotificationAction applies one inline notification action.
+// +api: notification:invoke-action
+// +api: InvokeNotificationAction
+func (s *SessionService) InvokeNotificationAction(
+	ctx context.Context,
+	req *connect.Request[sessionv1.InvokeNotificationActionRequest],
+) (*connect.Response[sessionv1.InvokeNotificationActionResponse], error) {
+	if s.actionDispatcher == nil {
+		return connect.NewResponse(&sessionv1.InvokeNotificationActionResponse{
+			Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, Detail: flagsvc.FlagOffMessage,
+		}), nil
 	}
-	s.notificationSvc.SetDescriptorBuilder(notify.NewDescriptorBuilder(src, s.InjectedFlagRegistry()))
-	s.actionDispatcher = NewNotificationActionDispatcher(delegates, func() actionAudit {
-		if sink := s.auditSink(); sink != nil {
-			return sink
-		}
-		return nil
-	}, s.InjectedFlagRegistry())
+	resp, err := s.actionDispatcher.Invoke(ctx, notifyactions.ActionCall{Msg: req.Msg, Peer: req.Peer().Addr, Header: req.Header()})
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// SetNotificationActionDispatcher wires the dispatcher behind the RPC.
+func (s *SessionService) SetNotificationActionDispatcher(d *notifyactions.NotificationActionDispatcher) {
+	s.actionDispatcher = d
 }
 
 // inProcessPeer lets the interim adapter call the reply handler in process: a
@@ -105,7 +123,7 @@ func (s *SessionService) WireAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
 	r := &AnswerRouter{
 		sessions: s.answerSessions(), questions: s.replyState().store, hidden: s.ReplyToPendingQuestion,
 		visible: s.paneReplyCore, guard: access.NewHumanActiveGuard(access.DefaultHumanActivity(), tmux.ListClientActivity),
-		flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: s.flagReader()}, rows: d.Rows, acks: d.Acks,
+		flags: notifyactions.NewConfigFlags(flagsvc.CompiledFlagEvidence, s.flagReader()), rows: d.Rows, acks: d.Acks,
 	}
 	r.ensure = s.ensureRegistered(d.Mirror)
 	store := s.replyState().store

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -179,7 +180,7 @@ func TestHookReply_ShouldStayClosedUnderProductionFlags_WhileS1IsNotRecorded(t *
 	}
 	require.NoError(t, cfg.SetFeatureFlagScope(flagsvc.NotificationInlineActionsFlagName, flagsvc.ScopePrefixAction+flagsvc.ActionKindAnswerQuestion, true))
 	e := newHookReplyEnv(t)
-	e.resolver.flags = configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: flagsvc.FlagReader{Reg: testFlagRegistry()}}
+	e.resolver.flags = notifyactions.NewConfigFlags(flagsvc.CompiledFlagEvidence, flagsvc.FlagReader{Reg: testFlagRegistry()})
 	id := e.openRow(t, "s1", "Which cache?", false, "Redis")
 	_, err := e.resolver.PreAnswer(context.Background(), id, "Redis")
 	require.NoError(t, err)
@@ -205,7 +206,7 @@ func TestHookReply_ShouldServeThroughTheRealFlagChain_WhenS1IsRecorded(t *testin
 	}
 	require.NoError(t, cfg.SetFeatureFlagScope(flagsvc.NotificationInlineActionsFlagName, flagsvc.ScopePrefixAction+flagsvc.ActionKindAnswerQuestion, true))
 	e := newHookReplyEnv(t)
-	e.resolver.flags = configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: flagsvc.FlagReader{Reg: testFlagRegistry()}}
+	e.resolver.flags = notifyactions.NewConfigFlags(flagsvc.CompiledFlagEvidence, flagsvc.FlagReader{Reg: testFlagRegistry()})
 	id := e.openRow(t, "s1", "Which cache?", false, "Redis")
 	_, err := e.resolver.PreAnswer(context.Background(), id, "Redis")
 	require.NoError(t, err)

@@ -34,8 +34,9 @@ const (
 // events.EventNotification (split out of server/services), so every Subscribe in
 // them is listed all the same.
 var notificationPackages = map[string]bool{
-	svcPkgPath + "/approvals": true,
-	svcPkgPath + "/notify":    true,
+	svcPkgPath + "/approvals":     true,
+	svcPkgPath + "/notify":        true,
+	svcPkgPath + "/notifyactions": true,
 }
 
 // finding is one scan hit, keyed "<kind>: <package path>.<identifier>".
@@ -315,7 +316,7 @@ func TestSinkGuard_ShouldRequireAllowlistReason_WhenNotifierImplEventNotificatio
 // A package in notificationPackages has every Subscribe listed even though it
 // never names events.EventNotification.
 func TestSinkGuard_ShouldListSubscribe_WhenPackageIsDeclaredNotificationHandling(t *testing.T) {
-	for _, leaf := range []string{"/approvals", "/notify"} {
+	for _, leaf := range []string{"/approvals", "/notify", "/notifyactions"} {
 		if !notificationPackages[svcPkgPath+leaf] {
 			t.Errorf("server/services%s must stay in notificationPackages", leaf)
 		}

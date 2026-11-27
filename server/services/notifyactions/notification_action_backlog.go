@@ -1,4 +1,4 @@
-package services
+package notifyactions
 
 import (
 	"context"
@@ -93,7 +93,7 @@ func (b backlogDecider) transition(ctx context.Context, d BacklogDecision, curre
 	if !stringIn(from, current) {
 		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
 	}
-	ctx = WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
+	ctx = domain.WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
 	_, err := b.Transitions.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId: d.ItemID, TargetStatus: target, ExpectedStatus: current, OverrideReason: d.Reason,
 	}))
@@ -192,17 +192,18 @@ func (f storageSessionFinder) LatestWorkSession(ctx context.Context, itemID stri
 	return "", nil
 }
 
-// historyItemResolver retires the unread decision rows of an item once decided.
-type historyItemResolver struct {
+// HistoryResolver is the NotificationResolver over the notification history: it
+// retires the unread rows of a decided target. A nil store makes it a no-op.
+type HistoryResolver struct {
 	store *notifications.NotificationHistoryStore
 }
 
 // NewNotificationResolver marks an item's decision rows read.
-func NewNotificationResolver(store *notifications.NotificationHistoryStore) NotificationResolver {
-	return historyItemResolver{store}
+func NewNotificationResolver(store *notifications.NotificationHistoryStore) HistoryResolver {
+	return HistoryResolver{store}
 }
 
-func (r historyItemResolver) ResolveItemNotifications(itemID string) {
+func (r HistoryResolver) ResolveItemNotifications(itemID string) {
 	if r.store == nil {
 		return
 	}
@@ -214,7 +215,7 @@ func (r historyItemResolver) ResolveItemNotifications(itemID string) {
 	}
 }
 
-func (r historyItemResolver) ResolveQuestionNotifications(questionID string) {
+func (r HistoryResolver) ResolveQuestionNotifications(questionID string) {
 	if r.store == nil {
 		return
 	}
@@ -223,7 +224,7 @@ func (r historyItemResolver) ResolveQuestionNotifications(questionID string) {
 	}
 }
 
-func (r historyItemResolver) ResolveApprovalNotifications(approvalID string) {
+func (r HistoryResolver) ResolveApprovalNotifications(approvalID string) {
 	if r.store == nil {
 		return
 	}
@@ -233,7 +234,7 @@ func (r historyItemResolver) ResolveApprovalNotifications(approvalID string) {
 }
 
 // ReopenQuestionNotifications puts a question's cards back in Needs you.
-func (r historyItemResolver) ReopenQuestionNotifications(questionID string) {
+func (r HistoryResolver) ReopenQuestionNotifications(questionID string) {
 	if r.store == nil {
 		return
 	}
@@ -243,7 +244,7 @@ func (r historyItemResolver) ReopenQuestionNotifications(questionID string) {
 }
 
 // ResolveGuidanceNotifications retires the cards of a mirrored question whose dialog was resolved elsewhere.
-func (r historyItemResolver) ResolveGuidanceNotifications(guidanceID string) {
+func (r HistoryResolver) ResolveGuidanceNotifications(guidanceID string) {
 	if r.store == nil {
 		return
 	}

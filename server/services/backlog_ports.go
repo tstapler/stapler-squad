@@ -89,16 +89,6 @@ type SessionSteerer interface {
 	SteerSessionGuarded(ctx context.Context, sessionUUID, sig, message string) (SteerOutcome, error)
 }
 
-type transitionCallerKey struct{}
-
-// WithTransitionCaller names the registered operator caller of an RPC that
-// another operator-facing component forwards to TransitionBacklogItemStatus.
-// resolveTransitionCaller honors only session.CallerOperatorNotificationAction,
-// and only for the user actor.
-func WithTransitionCaller(ctx context.Context, caller domain.TransitionCaller) context.Context {
-	return context.WithValue(ctx, transitionCallerKey{}, caller)
-}
-
 // resolveTransitionCaller maps the request's actor to its registered caller:
 // the user actor is an operator; the agent actor, and any unknown value, is the
 // MCP delegate (class agent), so an unknown actor never gains the operator
@@ -107,7 +97,7 @@ func ResolveTransitionCaller(ctx context.Context) domain.TransitionCaller {
 	if TransitionActorFromContext(ctx) != instance.TriggeredByUser {
 		return domain.CallerMCPTransitionDelegate
 	}
-	if c, ok := ctx.Value(transitionCallerKey{}).(domain.TransitionCaller); ok && c == domain.CallerOperatorNotificationAction {
+	if c := domain.TransitionCallerFrom(ctx); c == domain.CallerOperatorNotificationAction {
 		return c
 	}
 	return domain.CallerOperatorTransitionRPC

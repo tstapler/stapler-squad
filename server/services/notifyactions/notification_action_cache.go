@@ -1,10 +1,11 @@
-package services
+package notifyactions
 
 import (
 	"container/list"
 	"context"
-	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"sync"
+
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 // actionCacheMax bounds the idempotency cache; the oldest key is evicted first.

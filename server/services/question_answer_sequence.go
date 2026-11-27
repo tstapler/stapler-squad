@@ -9,6 +9,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -55,7 +56,7 @@ func (r *AnswerRouter) sequenceQuestions(ctx context.Context, questionID string)
 }
 
 // liveSequence types a multi-question answer into a visible session's dialog.
-func (r *AnswerRouter) liveSequence(ctx context.Context, s routedSession, in QuestionAnswer, qs []panereply.TabbedQuestion) (questionkit.ActionResult, error) {
+func (r *AnswerRouter) liveSequence(ctx context.Context, s routedSession, in notifyactions.QuestionAnswer, qs []panereply.TabbedQuestion) (questionkit.ActionResult, error) {
 	picks, err := DecodeSequencePicks(in.OptionLabel)
 	if err != nil {
 		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil

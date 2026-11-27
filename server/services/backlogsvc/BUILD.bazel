@@ -209,6 +209,7 @@ go_test(
         "//server/services/flagsvc",
         "//server/services/internal/svctest",
         "//server/services/notify",
+        "//server/services/notifyactions",
         "//server/services/quota",
         "//server/workflows",
         "//session",

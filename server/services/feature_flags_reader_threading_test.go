@@ -54,26 +54,20 @@ func TestAskUserQuestionRenderGate_ShouldStayClosed_WhenOnlyTheAnswerStageIsSet(
 	assert.False(t, AskUserQuestionRenderGate(testFlagRegistry())())
 }
 
-func TestNewNotificationActionDispatcher_ShouldUseInjectedRegistry(t *testing.T) {
-	svctest.WithIsolatedStateDir(t)
-	assert.True(t, NewNotificationActionDispatcher(ActionDelegates{}, nil, inlineOnRegistry()).flags.Inline(inlineApprove))
-	assert.False(t, NewNotificationActionDispatcher(ActionDelegates{}, nil, testFlagRegistry()).flags.Inline(inlineApprove))
-}
-
 func TestWireAnswerRouter_ShouldUseServiceRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	assert.True(t, newGatedSessionService(svctest.CreateTestStorage(t), inlineOnRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.(actionFlags).Inline(inlineApprove))
-	assert.False(t, newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.(actionFlags).Inline(inlineApprove))
+	assert.True(t, newGatedSessionService(svctest.CreateTestStorage(t), inlineOnRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.(interface{ Inline(string) bool }).Inline(inlineApprove))
+	assert.False(t, newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.(interface{ Inline(string) bool }).Inline(inlineApprove))
 }
 
 func TestWireHookReply_ShouldUseServiceRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	injected := newGatedSessionService(svctest.CreateTestStorage(t), inlineOnRegistry())
 	injected.wireHookReply(svctest.CreateTestStorage(t), nil)
-	assert.True(t, injected.hookReply.Load().flags.(actionFlags).Inline(inlineApprove))
+	assert.True(t, injected.hookReply.Load().flags.(interface{ Inline(string) bool }).Inline(inlineApprove))
 	global := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 	global.wireHookReply(svctest.CreateTestStorage(t), nil)
-	assert.False(t, global.hookReply.Load().flags.(actionFlags).Inline(inlineApprove))
+	assert.False(t, global.hookReply.Load().flags.(interface{ Inline(string) bool }).Inline(inlineApprove))
 }
 
 func TestSessionService_ShouldNotTouchProcessRegistry_WhenNoneInjected(t *testing.T) {
@@ -95,7 +89,7 @@ func TestWireNotificationActions_ShouldThreadServiceRegistryIntoBuilderAndDispat
 			svc := newGatedSessionService(svctest.CreateTestStorage(t), tc.reg)
 			svc.WireNotificationActions(NotificationActionWiring{})
 			assert.Equal(t, tc.want, svc.notificationSvc.InlineActionEnabledForTest(inlineApprove), "descriptor builder")
-			assert.Equal(t, tc.want, svc.actionDispatcher.flags.Inline(inlineApprove), "dispatcher")
+			assert.Equal(t, tc.want, svc.actionDispatcher.InlineActionEnabledForTest(inlineApprove), "dispatcher")
 		})
 	}
 }

@@ -1,4 +1,4 @@
-package services
+package notifyactions
 
 import (
 	"context"
@@ -124,23 +124,28 @@ type actionFlags interface {
 	Answer(route flagsvc.AnswerRoute) bool
 }
 
-// configActionFlags resolves against the live config and the compiled spike
+// ConfigFlags resolves against the live config and the compiled spike
 // evidence. Tests inject evidence to stand in for a recorded spike result.
-type configActionFlags struct {
+type ConfigFlags struct {
 	ev flagsvc.FlagEvidence
 	fr flagsvc.FlagReader
 }
 
-func (f configActionFlags) Inline(dp string) bool {
+// NewConfigFlags returns the flag decisions over fr, gated by ev.
+func NewConfigFlags(ev flagsvc.FlagEvidence, fr flagsvc.FlagReader) ConfigFlags {
+	return ConfigFlags{ev: ev, fr: fr}
+}
+
+func (f ConfigFlags) Inline(dp string) bool {
 	return f.fr.ResolveEffectiveFlag(config.LoadConfig(), f.ev, flagsvc.NotificationInlineActionsFlagName, dp)
 }
 
-func (f configActionFlags) Answer(route flagsvc.AnswerRoute) bool {
+func (f ConfigFlags) Answer(route flagsvc.AnswerRoute) bool {
 	return f.fr.ResolveAnswerQuestion(config.LoadConfig(), f.ev, route)
 }
 
-// actionAudit appends audit lines; *auditkit.AuditSink satisfies it.
-type actionAudit interface {
+// ActionAudit appends audit lines; *auditkit.AuditSink satisfies it.
+type ActionAudit interface {
 	Append(auditkit.AuditLine) error
 	AppendBounded(ctx context.Context, l auditkit.AuditLine) error
 }
@@ -162,7 +167,7 @@ type NotificationActionDispatcher struct {
 	cancels   CancelDelegate
 	resolver  NotificationResolver
 	flags     actionFlags
-	audit     func() actionAudit
+	audit     func() ActionAudit
 	metrics   ActionMetrics
 	reopen    *questionkit.ReopenTracker
 	cache     *actionIdempotency
@@ -183,10 +188,10 @@ type ActionDelegates struct {
 // NewNotificationActionDispatcher builds a dispatcher reading the live flags.
 // audit may return nil (the audit trail is then unavailable and Tier B refuses).
 // reg must be non-nil.
-func NewNotificationActionDispatcher(d ActionDelegates, audit func() actionAudit, reg *featureflags.Registry) *NotificationActionDispatcher {
+func NewNotificationActionDispatcher(d ActionDelegates, audit func() ActionAudit, reg *featureflags.Registry) *NotificationActionDispatcher {
 	return &NotificationActionDispatcher{
 		approvals: d.Approvals, questions: d.Questions, guidance: d.Guidance, backlog: d.Backlog, cancels: d.Cancels, resolver: d.Resolver,
-		flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: flagsvc.FlagReader{Reg: reg}}, audit: audit, metrics: defaultActionMetrics(), reopen: questionkit.DefaultReopenTracker,
+		flags: NewConfigFlags(flagsvc.CompiledFlagEvidence, flagsvc.FlagReader{Reg: reg}), audit: audit, metrics: defaultActionMetrics(), reopen: questionkit.DefaultReopenTracker,
 		cache: newActionIdempotency(actionCacheMax), now: time.Now,
 	}
 }
@@ -458,7 +463,7 @@ func (d *NotificationActionDispatcher) auditLine(m *sessionv1.InvokeNotification
 	}
 }
 
-func (d *NotificationActionDispatcher) sink() actionAudit {
+func (d *NotificationActionDispatcher) sink() ActionAudit {
 	if d.audit == nil {
 		return nil
 	}
@@ -543,26 +548,8 @@ func outcomeLabel(o sessionv1.ActionOutcome) string {
 	return strings.ToLower(strings.TrimPrefix(o.String(), "ACTION_OUTCOME_"))
 }
 
-// InvokeNotificationAction applies one inline notification action.
-// +api: notification:invoke-action
-// +api: InvokeNotificationAction
-func (s *SessionService) InvokeNotificationAction(
-	ctx context.Context,
-	req *connect.Request[sessionv1.InvokeNotificationActionRequest],
-) (*connect.Response[sessionv1.InvokeNotificationActionResponse], error) {
-	if s.actionDispatcher == nil {
-		return connect.NewResponse(&sessionv1.InvokeNotificationActionResponse{
-			Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, Detail: flagsvc.FlagOffMessage,
-		}), nil
-	}
-	resp, err := s.actionDispatcher.Invoke(ctx, ActionCall{Msg: req.Msg, Peer: req.Peer().Addr, Header: req.Header()})
-	if err != nil {
-		return nil, err
-	}
-	return connect.NewResponse(resp), nil
-}
-
-// SetNotificationActionDispatcher wires the dispatcher behind the RPC.
-func (s *SessionService) SetNotificationActionDispatcher(d *NotificationActionDispatcher) {
-	s.actionDispatcher = d
+// InlineActionEnabledForTest reports the dispatcher's notification_inline_actions
+// decision, so wiring tests can check which flag registry it was built with.
+func (d *NotificationActionDispatcher) InlineActionEnabledForTest(decisionPoint string) bool {
+	return d.flags.Inline(decisionPoint)
 }

@@ -101,7 +101,7 @@ type ExemptSite struct {
 
 const (
 	fileLifecycle    = "server/services/backlogsvc/backlog_service_lifecycle.go"
-	fileNotifyAction = "server/services/notification_action_backlog.go"
+	fileNotifyAction = "server/services/notifyactions/notification_action_backlog.go"
 	fileTriage       = "server/services/backlogsvc/backlog_service_triage.go"
 	fileHeadlessRun  = "server/services/backlogsvc/backlog_service_headless_run.go"
 	fileTriggerTri   = "server/services/backlogsvc/backlog_service_trigger_triage.go"

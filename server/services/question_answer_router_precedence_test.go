@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -34,7 +35,7 @@ func TestAnswerRouter_ShouldNeverTypeOrRevive_WhenAnArchivedSessionIsActiveOrSus
 				qid := e.hookRow(inst, colorDialog)
 
 				first := e.answer(inst, qid, replyColorLabel)
-				retry, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{
+				retry, err := e.router.ReplyToQuestion(e.localCtx(), notifyactions.QuestionAnswer{
 					SessionID: inst.UUID, QuestionID: qid, OptionLabel: replyColorLabel, ReplyID: "r-retry", Confirm: true,
 				})
 				require.NoError(t, err)
@@ -82,7 +83,7 @@ func (e *routerEnv) race(n int, inst *instance.Instance, qid string, labels ...s
 		go func() {
 			defer wg.Done()
 			<-start
-			results[i], errs[i] = e.router.ReplyToQuestion(ctx, QuestionAnswer{
+			results[i], errs[i] = e.router.ReplyToQuestion(ctx, notifyactions.QuestionAnswer{
 				SessionID: inst.UUID, QuestionID: qid, OptionLabel: labels[i%len(labels)], ReplyID: "r-" + uuid.NewString(),
 			})
 		}()
@@ -145,7 +146,7 @@ func TestAnswerRouter_ShouldReportTheDialogGone_WhenASecondAnswerArrivesDuringTh
 	answer := func() <-chan questionkit.ActionResult {
 		done := make(chan questionkit.ActionResult, 1)
 		go func() {
-			res, err := e.router.ReplyToQuestion(ctx, QuestionAnswer{
+			res, err := e.router.ReplyToQuestion(ctx, notifyactions.QuestionAnswer{
 				SessionID: inst.UUID, QuestionID: qid, OptionLabel: replyColorLabel, ReplyID: "r-" + uuid.NewString(),
 			})
 			assert.NoError(t, err)

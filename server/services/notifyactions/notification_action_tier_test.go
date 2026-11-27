@@ -1,4 +1,4 @@
-package services
+package notifyactions
 
 import (
 	"context"
@@ -30,7 +30,7 @@ func enableInline(t *testing.T, scopes ...string) {
 
 func tierFixture(ev flagsvc.FlagEvidence) *dispatchFixture {
 	f := newDispatchFixture()
-	f.d.flags = configActionFlags{ev: ev, fr: flagsvc.FlagReader{Reg: testFlagRegistry()}}
+	f.d.flags = NewConfigFlags(ev, flagsvc.FlagReader{Reg: testFlagRegistry()})
 	return f
 }
 
