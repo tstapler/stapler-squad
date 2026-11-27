@@ -238,13 +238,21 @@ test.describe("backlog-jump-to-session", () => {
           const m = (await menu.boundingBox())!;
           return Math.round(Math.min(Math.abs(m.y - (t.y + t.height)), Math.abs(t.y - (m.y + m.height))));
         };
-        const before = (await trigger.boundingBox())!.y;
+        await expect.poll(distance).toBe(4);
+        const menuBefore = (await menu.boundingBox())!.y;
+        // Not -80px: added to the header's own reflow, that can carry the trigger by exactly menu + trigger +
+        // gaps, leaving a menu that never moved adjacent on the trigger's other side.
         await trigger.evaluate((el) => {
           el.parentElement!.style.position = "relative";
-          el.parentElement!.style.top = "-80px";
+          el.parentElement!.style.top = "-40px";
         });
-        expect((await trigger.boundingBox())!.y).toBeLessThan(before);
-        await expect.poll(distance).toBe(4);
+        // The menu may flip sides, so require both that it left its old spot and that it is adjacent.
+        await expect
+          .poll(async () => {
+            const menuMoved = Math.abs((await menu.boundingBox())!.y - menuBefore) > 1;
+            return { menuMoved, gap: await distance() };
+          })
+          .toEqual({ menuMoved: true, gap: 4 });
         await expect(menu).toBeInViewport({ ratio: 1 });
 
         if (viewport.width < 640) {
