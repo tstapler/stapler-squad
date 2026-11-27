@@ -439,7 +439,7 @@ func (t *treeWalk) skipDir(name, rel string) bool {
 	if t.opts.Scope.IncludeIgnored {
 		return false
 	}
-	return fsops.HardSkipDirs[name] || t.ignore.Ignored(rel, true)
+	return fsops.IsHardSkipDir(name) || t.ignore.Ignored(rel, true)
 }
 
 func (t *treeWalk) wantFile(rel string) bool {

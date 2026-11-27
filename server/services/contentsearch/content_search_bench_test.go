@@ -11,7 +11,7 @@ import (
 // Benchmarks the production walker (Story 1.1.3) on the deterministic 50k-file fixture.
 // Run in the background, they take a while:
 //
-//	go test -bench BenchmarkContentSearch -run '^$' -benchtime 5x -benchmem ./server/services &
+//	go test -bench BenchmarkContentSearch -run '^$' -benchtime 5x -benchmem ./server/services/contentsearch &
 //
 // first_result_ms is the time to the first emitted match, total_ms the whole search,
 // cancel_ms the time from cancel() to Search returning. Cold cache: set SSQ_BENCH_COLD=1

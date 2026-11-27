@@ -15,7 +15,6 @@ _SIZES = {
 _HOST_COUPLED = {
     "server/services": ["exec-host-binary"],
     "server/services/approvals": ["exec-host-binary"],
-    "server/services/contentsearch": ["exec-host-binary"],
     "session": ["exec-host-binary", "home"],
     "session/vc": ["home"],
 }

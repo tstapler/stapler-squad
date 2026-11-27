@@ -166,7 +166,7 @@ func (fs *FileService) ListFiles(
 		name := entry.Name()
 
 		// Skip hardcoded directories.
-		if entry.IsDir() && fsops.HardSkipDirs[name] {
+		if entry.IsDir() && fsops.IsHardSkipDir(name) {
 			continue
 		}
 
@@ -383,7 +383,7 @@ func searchFilesInWorktree(ctx context.Context, basePath, query string, includeI
 		}
 
 		// Always skip hardcoded directories.
-		if d.IsDir() && fsops.HardSkipDirs[name] {
+		if d.IsDir() && fsops.IsHardSkipDir(name) {
 			return filepath.SkipDir
 		}
 
@@ -450,7 +450,7 @@ func collectAllGitignorePatterns(rootPath string) []gitignore.Pattern {
 		if err != nil || !d.IsDir() {
 			return nil
 		}
-		if path != rootPath && fsops.HardSkipDirs[d.Name()] {
+		if path != rootPath && fsops.IsHardSkipDir(d.Name()) {
 			return filepath.SkipDir
 		}
 		if d.Type()&os.ModeSymlink != 0 {

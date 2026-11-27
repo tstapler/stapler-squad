@@ -104,14 +104,21 @@ type SearchHandler struct {
 type Ports struct {
 	Workspace fsops.WorkspaceProvider
 	Backend   fsops.FileBackend
-	// Telemetry is called per search: the host may install its sink after construction.
+	// Telemetry is called per search: the host may install its sink after construction. Nil records nothing.
 	Telemetry func() fsops.FilesTelemetry
-	// ViewerV2 gates the search; SetViewerV2 replaces it.
+	// ViewerV2 gates the search and is required; SetViewerV2 replaces it.
 	ViewerV2 func(context.Context) bool
 }
 
 // NewSearchHandler builds the production handler with the process-wide walk and stream caps.
+// Workspace and Backend are not checked: a host with no sessions may leave them nil.
 func NewSearchHandler(ports Ports) *SearchHandler {
+	if ports.ViewerV2 == nil {
+		panic("contentsearch: NewSearchHandler requires Ports.ViewerV2")
+	}
+	if ports.Telemetry == nil {
+		ports.Telemetry = func() fsops.FilesTelemetry { return fsops.NoopFilesTelemetry{} }
+	}
 	return &SearchHandler{
 		ports:     ports,
 		searcher:  NewWalkSearcher(),

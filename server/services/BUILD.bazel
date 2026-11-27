@@ -296,6 +296,7 @@ go_test(
         "config_surface_proof_stateful_test.go",
         "config_surface_proof_test.go",
         "content_search_golden_test.go",
+        "content_search_wire_test.go",
         "create_pull_request_test.go",
         "current_pane_gone_test.go",
         "database_service_merge_backlog_test.go",

@@ -19,6 +19,7 @@ var filesViewerTestFiles = []string{
 	"contentsearch/content_search_fixture_test.go",
 	"contentsearch/content_search_bench_test.go",
 	"content_search_golden_test.go",
+	"content_search_wire_test.go",
 	"files_fixtures_test.go",
 	"file_atomic_test.go",
 	"file_write_test.go",

@@ -766,3 +766,16 @@ func TestSearchHandler_ShouldKeepRunningSearch_When_RefusedRequestForSameKeyCome
 	close(gs.release)
 	require.NoError(t, <-first)
 }
+
+func TestSearchHandler_ShouldRequireViewerFlagAndDefaultTelemetry_When_Constructed(t *testing.T) {
+	assert.PanicsWithValue(t, "contentsearch: NewSearchHandler requires Ports.ViewerV2", func() { NewSearchHandler(Ports{}) })
+
+	h := NewSearchHandler(Ports{
+		Workspace: dirWorkspaces{"s1": fillWorktree(t, map[string]string{"a.txt": "needle\n"})},
+		Backend:   fsops.OsRootBackend{},
+		ViewerV2:  func(context.Context) bool { return true },
+	})
+	var out sink
+	require.NoError(t, h.Handle(context.Background(), searchReq("s1", "c", "needle"), "10.0.0.1:1", out.send))
+	assert.Equal(t, []string{"batch", "stats"}, out.kinds())
+}

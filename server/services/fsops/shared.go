@@ -14,8 +14,10 @@ import (
 // RangeHashCapBytes is the largest file that is hashed by range reads and scanned whole by a large-files search (ADR-036 S-T2).
 const RangeHashCapBytes = 64 << 20
 
-// HardSkipDirs are always excluded from directory listings and searches regardless of gitignore settings.
-var HardSkipDirs = map[string]bool{
+// IsHardSkipDir reports whether directory name is always excluded from listings and searches, whatever gitignore says.
+func IsHardSkipDir(name string) bool { return hardSkipDirs[name] }
+
+var hardSkipDirs = map[string]bool{
 	".git":         true,
 	"node_modules": true,
 	"vendor":       true,

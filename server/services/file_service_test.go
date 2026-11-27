@@ -103,7 +103,7 @@ func (t *testFileService) listFiles(ctx context.Context, req *connect.Request[se
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() && fsops.HardSkipDirs[name] {
+		if entry.IsDir() && fsops.IsHardSkipDir(name) {
 			continue
 		}
 
