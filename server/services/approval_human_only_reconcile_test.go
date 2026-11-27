@@ -18,13 +18,13 @@ import (
 // that decides every Bash request as decision.
 func reconcileWithBashRule(t *testing.T, store *approvalkit.ApprovalStore, decision classifier.ClassificationDecision) {
 	t.Helper()
-	rules := newRulesService(t)
-	rules.SetApprovalService(approvals.NewApprovalService(store))
-	rules.classifier.ReplaceRules(append(rules.classifier.Rules(), classifier.Rule{
+	svc := newRulesService(t)
+	svc.SetApprovalService(approvals.NewApprovalService(store))
+	svc.Classifier().ReplaceRules(append(svc.Classifier().Rules(), classifier.Rule{
 		RuleMeta: classifier.RuleMeta{ID: "all-bash", Name: "All Bash", Enabled: true, Source: "user", Priority: 999},
 		ToolName: "Bash", Decision: decision,
 	}))
-	rules.reconcilePendingApprovalsSafe()
+	svc.ReconcileNow()
 }
 
 func categorizedApproval(category classifier.EscalationCategory) *approvalkit.PendingApproval {

@@ -1,0 +1,81 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "rules",
+    srcs = [
+        "analytics_store.go",
+        "config_file_rules_reload.go",
+        "hub_access.go",
+        "rule_prompt_builder.go",
+        "rules_service.go",
+        "rules_store.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/rules",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//pkg/classifier",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/anthropicwire",
+        "//server/services/antigravityexport",
+        "//server/services/approvalkit",
+        "//server/services/claudesettings",
+        "//server/services/secretscan",
+        "//session",
+        "//session/domain",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":rules",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "rules_test",
+    srcs = [
+        "analytics_store_test.go",
+        "config_file_rules_reload_test.go",
+        "fixtures_test.go",
+        "hub_access_test.go",
+        "rule_prompt_builder_test.go",
+        "rules_service_rpc_test.go",
+        "rules_service_test.go",
+        "testmain_test.go",
+    ],
+    embed = [":rules"],
+    deps = [
+        "//config",
+        "//pkg/classifier",
+        "//proto/session/v1:sessionv1_go",
+        "//server/notifications",
+        "//server/services/anthropicwire",
+        "//server/services/approvalkit",
+        "//server/services/approvals",
+        "//server/services/claudesettings",
+        "//server/services/flagsvc",
+        "//server/services/internal/svctest",
+        "//server/services/secretscan",
+        "//session/domain",
+        "//session/instance",
+        "//testutil/wait",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

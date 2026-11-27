@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/rules"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -25,7 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
-// Tests of ApprovalHandler composed with the hub's AnalyticsStore and RulesService.
+// Tests of ApprovalHandler composed with the rules leaf's AnalyticsStore and RulesService.
 
 // hookResponseBody is the part of the hook response these tests read.
 type hookResponseBody struct {
@@ -82,10 +83,10 @@ func (f fixedLiveInstance) FindLiveInstance(id string) *instance.Instance {
 }
 
 // newTestHandlerWithAnalytics creates an ApprovalHandler with an in-memory AnalyticsStore.
-func newTestHandlerWithAnalytics(t *testing.T) (*approvals.ApprovalHandler, *AnalyticsStore) {
+func newTestHandlerWithAnalytics(t *testing.T) (*approvals.ApprovalHandler, *rules.AnalyticsStore) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
-	analyticsStore := NewAnalyticsStore(storage)
+	analyticsStore := rules.NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 
@@ -203,7 +204,7 @@ func (fakeUnrecognizedDecisionClassifier) BuildContext(_ string) classifier.Clas
 func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
-	analyticsStore := NewAnalyticsStore(storage)
+	analyticsStore := rules.NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 
@@ -226,14 +227,14 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 		t.Errorf("EscalationReason = %q, want the internal-error sentence", captured.EscalationReason)
 	}
 
-	var entries []AnalyticsEntry
+	var entries []rules.AnalyticsEntry
 	wait.RequireEventually(t, func() bool {
 		var err error
 		entries, err = analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		return err == nil && len(entries) >= 1
 	}, 2*time.Second, 10*time.Millisecond, "analytics entry must persist within 2s")
 
-	summary := ComputeSummary(entries)
+	summary := rules.ComputeSummary(entries)
 	if got := summary.EscalationReasonCounts["unexpected"]; got != 1 {
 		t.Errorf("EscalationReasonCounts[\"unexpected\"] = %d, want 1 (got full map: %v)", got, summary.EscalationReasonCounts)
 	}
@@ -293,10 +294,10 @@ func TestHandlePermissionRequest_DeniesBasedOnSessionIdleTime_EndToEnd(t *testin
 	require.NoError(t, err)
 	require.Equal(t, ruleID, upsertResp.Msg.Rule.Id)
 
-	// Wrap the exact classifier instance RulesService just rebuilt (svc.classifier) --
+	// Wrap the exact classifier instance RulesService just rebuilt (svc.Classifier()) --
 	// not a separately-constructed classifier loaded with equivalent rules -- so this
 	// test fails if the two services are ever wired to different classifier instances.
-	rc := &recordingClassifier{inner: svc.classifier}
+	rc := &recordingClassifier{inner: svc.Classifier()}
 
 	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)

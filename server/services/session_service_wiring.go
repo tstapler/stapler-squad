@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/rules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -45,7 +46,7 @@ func (s *SessionService) GetClassifier() *classifier.RuleBasedClassifier {
 	if s.rulesSvc == nil {
 		return nil
 	}
-	return s.rulesSvc.classifier
+	return s.rulesSvc.Classifier()
 }
 
 // GetTaggingEngine returns the live TaggingEngine (the same instance taggingRulesSvc
@@ -57,11 +58,11 @@ func (s *SessionService) GetTaggingEngine() *classifier.TaggingEngine {
 }
 
 // GetAnalyticsStore returns the analytics store for wiring up the ApprovalHandler.
-func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
+func (s *SessionService) GetAnalyticsStore() *rules.AnalyticsStore {
 	if s.rulesSvc == nil {
 		return nil
 	}
-	return s.rulesSvc.analyticsStore
+	return s.rulesSvc.AnalyticsStore()
 }
 
 // ClassificationRecorder is GetAnalyticsStore as the hook paths consume it: a
@@ -79,7 +80,7 @@ func (s *SessionService) GetClaudeSettingsWatcher() *claudesettings.ClaudeSettin
 	if s.rulesSvc == nil {
 		return nil
 	}
-	return s.rulesSvc.claudeSettingsWatcher
+	return s.rulesSvc.ClaudeSettingsWatcher()
 }
 
 // Shutdown stops background goroutines owned by SessionService (currently the

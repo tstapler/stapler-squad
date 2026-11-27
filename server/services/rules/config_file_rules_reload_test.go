@@ -1,4 +1,4 @@
-package services
+package rules
 
 import (
 	"os"
@@ -93,7 +93,7 @@ func TestRebuilds_PreserveConfigFileRules(t *testing.T) {
 	rs.rebuildClassifier()
 	assert.Equal(t, classifier.AutoDeny, classifyMake(rs.classifier), "survives a user-rule rebuild")
 
-	rs.rebuildClaudeSettingsRules(nil)
+	rs.RebuildClaudeSettingsRules(nil)
 	assert.Equal(t, classifier.AutoDeny, classifyMake(rs.classifier), "survives a claude-settings rebuild")
 }
 

@@ -1,4 +1,4 @@
-package services
+package rules
 
 import (
 	"context"
@@ -553,14 +553,4 @@ func TestAnalyticsStore_GetTaggingRuleFireCounts_should_ExcludeFiresOlderThanWin
 	counts, err := store.GetTaggingRuleFireCounts(context.Background(), now.Add(-7*24*time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, 2, counts["seed-bugfix"])
-}
-
-func TestClassificationRecorder_should_BeANilInterface_When_ThereIsNoAnalyticsStore(t *testing.T) {
-	t.Parallel()
-	recorder := (&SessionService{}).ClassificationRecorder()
-
-	// assert.Nil would accept a typed nil pointer, which the hook paths would call.
-	require.True(t, recorder == nil)
-	store := NewAnalyticsStore(nil)
-	assert.Same(t, store, (&SessionService{rulesSvc: &RulesService{analyticsStore: store}}).ClassificationRecorder())
 }

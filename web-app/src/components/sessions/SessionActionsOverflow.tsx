@@ -13,6 +13,7 @@ import { CreatePullRequestModal } from "./CreatePullRequestModal";
 import { ExportBundleModal } from "./ExportBundleModal";
 import { AnalyticsContext } from "@/lib/contexts/AnalyticsContext";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
+import { fitMenuTop } from "@/lib/hooks/useAnchoredMenuPosition";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
@@ -79,14 +80,6 @@ export interface SessionActionsOverflowProps {
   onChangeProgram?: (sessionId: string, program: string) => Promise<void> | void;
 }
 /* eslint-enable no-restricted-syntax */
-
-const VIEWPORT_MARGIN = 8;
-
-/** Top for a fixed menu: below the anchor if it fits, else flipped above it, clamped on-screen. */
-export function fitMenuTop(top: number, anchorTop: number, height: number, viewportHeight: number): number {
-  if (top + height <= viewportHeight - VIEWPORT_MARGIN) return top;
-  return Math.max(VIEWPORT_MARGIN, anchorTop - height);
-}
 
 /** Collapsible group inside the overflow menu; one section open at a time keeps the menu short. */
 function MenuSection({ id, label, openId, onToggle, children }: {
