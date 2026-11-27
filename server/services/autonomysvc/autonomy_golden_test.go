@@ -159,7 +159,7 @@ func autonomyMatrixScenarios() []autonomyScenario {
 }
 
 func autonomyNudgeScenarios(op string) []autonomyScenario {
-	var out []autonomyScenario
+	out := make([]autonomyScenario, 0, 64)
 	nudgeErrs := []struct {
 		name string
 		err  error

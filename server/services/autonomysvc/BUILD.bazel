@@ -51,6 +51,7 @@ go_test(
         "autonomous_stall_recovery_nudge_test.go",
         "autonomous_stop_detail_test.go",
         "autonomy_golden_test.go",
+        "can_restart_test.go",
         "helpers_test.go",
         "lease_wedge_test.go",
         "nudge_outcomes_stall_test.go",
