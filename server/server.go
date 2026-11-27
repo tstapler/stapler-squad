@@ -53,6 +53,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
 	"github.com/tstapler/stapler-squad/server/services/summaryrpc"
 	"github.com/tstapler/stapler-squad/server/services/uploads"
+	"github.com/tstapler/stapler-squad/server/services/wakerpc"
 	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/server/web"
@@ -750,7 +751,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// through deps.Storage rather than constructed with zero args like the
 	// config-only rollout services above.
 	var guidanceRequestSvc *guidance.GuidanceRequestService
-	var wakeTriggerSvc *services.WakeTriggerService
+	var wakeTriggerSvc *wakerpc.WakeTriggerService
 	if deps.Storage != nil {
 		guidanceRequestSvc = newGuidanceRequestService(deps)
 		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)

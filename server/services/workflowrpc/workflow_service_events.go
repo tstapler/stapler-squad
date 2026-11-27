@@ -1,4 +1,4 @@
-package services
+package workflowrpc
 
 // workflow_service_events.go — WatchWorkflows streaming RPC for WorkflowService.
 // Mirrors backlog_service_events.go's WatchBacklogItems shape (subscribe before

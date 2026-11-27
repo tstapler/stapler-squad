@@ -112,7 +112,7 @@ Notes:
 - `wake_trigger_total` has no `scheduled` or `pending` state. The plan lists
   `scheduled`; the code does not emit it.
 - `peer_help_total` has no `cancelled` series. `cancelled` appears only as the derived
-  state `ListPeerHelpRequests` returns (`server/services/wake_trigger_peer_help.go:20`).
+  state `ListPeerHelpRequests` returns (`server/services/wakerpc/wake_trigger_peer_help.go:25`).
 - `wake_fires_per_session` is an in-process tally. A restart or a dispatcher stop and
   start drops the counts of sessions that are still live, and a session that was
   never tallied records a sample of 0 (`SessionEnded`).

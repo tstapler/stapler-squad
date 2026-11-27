@@ -1,4 +1,4 @@
-package services
+package workflowrpc
 
 // Differential golden for the workflow RPC conversions and validation, recorded
 // before the package move; the body is unchanged by it.

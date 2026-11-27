@@ -1,4 +1,4 @@
-package services
+package reviewqueuerpc
 
 // Differential golden for the review queue RPCs and filter conversions, recorded
 // before the package move; the body is unchanged by it.

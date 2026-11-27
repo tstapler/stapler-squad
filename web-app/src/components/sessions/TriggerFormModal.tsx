@@ -79,7 +79,7 @@ function protoToFormData(w: WorkflowProto): WorkflowFormData {
 
 /**
  * Maps a backend connect.CodeInvalidArgument rawMessage (see
- * server/services/workflow_service.go's errors.New/fmt.Errorf call sites) to the
+ * server/services/workflowrpc/workflow_service.go's errors.New/fmt.Errorf call sites) to the
  * specific form field it concerns, so the error renders inline near that field
  * instead of only as a generic top-of-form banner (Task 7.1.2c).
  */

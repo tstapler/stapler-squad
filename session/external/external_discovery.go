@@ -117,6 +117,13 @@ func (e *ExternalSessionDiscovery) GetSession(socketPath string) *instance.Insta
 	return e.sessions[socketPath]
 }
 
+// AddSessionForTest registers a discovered session without a mux socket.
+func (e *ExternalSessionDiscovery) AddSessionForTest(socketPath string, inst *instance.Instance) {
+	e.sessionsMu.Lock()
+	defer e.sessionsMu.Unlock()
+	e.sessions[socketPath] = inst
+}
+
 // GetSessionByTmux returns a specific external session by tmux session name.
 func (e *ExternalSessionDiscovery) GetSessionByTmux(tmuxSessionName string) *instance.Instance {
 	e.sessionsMu.RLock()

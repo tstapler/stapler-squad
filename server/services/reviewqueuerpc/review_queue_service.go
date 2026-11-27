@@ -1,4 +1,6 @@
-package services
+// Package reviewqueuerpc handles the review-queue RPCs that SessionService
+// delegates to. The reactive manager that streams them lives in server/reviewqueue.
+package reviewqueuerpc
 
 import (
 	"context"

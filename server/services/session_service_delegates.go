@@ -8,15 +8,17 @@ import (
 	"sync"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/checkpointrpc"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/search"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // LogUserInteraction logs a user interaction event for audit trail and analytics.
@@ -499,7 +501,7 @@ func (s *SessionService) MergeDatabase(
 }
 
 // SetScrollbackManager wires a scrollback sequence provider for checkpoint creation.
-func (s *SessionService) SetScrollbackManager(mgr ScrollbackSequencer) {
+func (s *SessionService) SetScrollbackManager(mgr checkpointrpc.ScrollbackSequencer) {
 	s.scrollbackMgr = mgr
 	s.checkpointSvc.SetScrollbackMgr(mgr)
 }

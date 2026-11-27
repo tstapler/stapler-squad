@@ -230,7 +230,7 @@ func TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet(t *
 // TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter guards the
 // other half of the predicate: an archive written through the actor setter
 // republishes the snapshot, so IsArchived() flips. A raw `inst.ArchivedAt =`
-// write (the defect fixed in server/services/workflow_service.go) leaves this
+// write (the defect fixed in server/services/workflowrpc/workflow_service.go) leaves this
 // false for the rest of the process lifetime.
 func TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter(t *testing.T) {
 	t.Parallel()

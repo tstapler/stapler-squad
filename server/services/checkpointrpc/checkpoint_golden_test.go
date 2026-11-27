@@ -1,4 +1,4 @@
-package services
+package checkpointrpc
 
 // Differential golden for the checkpoint RPCs, recorded before the package move;
 // the body is unchanged by it. Regenerate with -update-checkpoint-golden.

@@ -1,4 +1,6 @@
-package services
+// Package wakerpc is the operator-facing WakeTriggerService RPC handler. The
+// dispatcher it drives lives in server/wakes.
+package wakerpc
 
 import (
 	"context"

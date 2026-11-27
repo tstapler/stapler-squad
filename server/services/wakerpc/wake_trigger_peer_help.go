@@ -1,4 +1,4 @@
-package services
+package wakerpc
 
 import (
 	"context"

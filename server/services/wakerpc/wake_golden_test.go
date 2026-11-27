@@ -1,4 +1,4 @@
-package services
+package wakerpc
 
 // Differential golden for the operator wake-trigger and peer-help surface,
 // recorded before the package move; the body is unchanged by it.

@@ -1,4 +1,6 @@
-package services
+// Package checkpointrpc handles the checkpoint and conversation-state RPCs
+// that SessionService delegates to.
+package checkpointrpc
 
 import (
 	"context"

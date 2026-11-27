@@ -132,3 +132,7 @@ server/services/autonomysvc !server/web
 server/services/sessiondefaults !server/web
 server/services/claudeconfig !server/web
 server/services/workspacedb !server/web
+server/services/wakerpc !server/web
+server/services/checkpointrpc !server/web
+server/services/reviewqueuerpc !server/web
+server/services/workflowrpc !server/web

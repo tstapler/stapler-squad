@@ -1,4 +1,4 @@
-package services
+package workflowrpc
 
 // workflow_service_events_test.go — WatchWorkflows handler test suite,
 // mirroring backlog_service_events_test.go's shape: drive

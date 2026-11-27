@@ -8,23 +8,25 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/workflowrpc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // createTestWorkflowDelegation wires a SessionService to a WorkflowService over
 // an in-memory SQLite ent client.
-func createTestWorkflowDelegation(t *testing.T) (*SessionService, *WorkflowService) {
+func createTestWorkflowDelegation(t *testing.T) (*SessionService, *workflowrpc.WorkflowService) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	sessSvc := NewSessionService(storage, events.NewEventBus(100))
 	t.Cleanup(func() { sessSvc.Shutdown() })
 
 	workflowRepo := stagecfg.NewEntWorkflowRepository(session.NewTestEntRepository(t).GetEntClient())
-	workflowSvc := NewWorkflowService(workflowRepo, nil /* scheduler nil OK for CRUD tests */, storage)
+	workflowSvc := workflowrpc.NewWorkflowService(workflowRepo, nil /* scheduler nil OK for CRUD tests */, storage)
 	sessSvc.SetWorkflowService(workflowSvc)
 	return sessSvc, workflowSvc
 }

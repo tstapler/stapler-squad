@@ -1,4 +1,6 @@
-package services
+// Package workflowrpc handles the saved-workflow RPCs that SessionService
+// delegates to. Scheduling and firing live in server/workflows.
+package workflowrpc
 
 import (
 	"context"
