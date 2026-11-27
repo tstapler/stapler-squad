@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -706,7 +707,7 @@ func (s *SessionService) RestartSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session: %w", err))
 	}
 
-	RefreshInstanceHookProof(instance)
+	approvals.RefreshInstanceHookProof(instance)
 
 	// Persist the updated instance state.
 	if err := s.storage.SaveInstances([]*instancepkg.Instance{instance}); err != nil {

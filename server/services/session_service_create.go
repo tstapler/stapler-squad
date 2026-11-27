@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"github.com/tstapler/stapler-squad/session/domain"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
@@ -1047,14 +1048,14 @@ func (s *SessionService) setupRemoteApprovalHooks(instance *instancepkg.Instance
 	relay.Start(context.Background())
 
 	token, _ := relay.BearerToken()
-	hookTarget := RemoteHookTarget{
+	hookTarget := approvals.RemoteHookTarget{
 		SocketPath:  sshremote.RemoteApprovalSocketPath(rootDir, instance.GetStableID()),
 		BearerToken: token,
 	}
 
 	injectCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := InjectHookConfigRemote(injectCtx, remoteTarget.Runner(), rootDir, instance.GetStableID(), hookTarget); err != nil {
+	if err := approvals.InjectHookConfigRemote(injectCtx, remoteTarget.Runner(), rootDir, instance.GetStableID(), hookTarget); err != nil {
 		relay.Stop()
 		return fmt.Errorf("inject remote hook config: %w", err)
 	}

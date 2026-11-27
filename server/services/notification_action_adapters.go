@@ -7,6 +7,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
@@ -18,12 +19,12 @@ import (
 // approvalServiceAdapter resolves approvals through ApprovalService, which keeps
 // the CI-red guard, notification stamping and event broadcast.
 type approvalServiceAdapter struct {
-	svc   *ApprovalService
+	svc   *approvals.ApprovalService
 	store *approvalkit.ApprovalStore
 }
 
 // NewApprovalResolver adapts ApprovalService to ApprovalResolver.
-func NewApprovalResolver(svc *ApprovalService, store *approvalkit.ApprovalStore) ApprovalResolver {
+func NewApprovalResolver(svc *approvals.ApprovalService, store *approvalkit.ApprovalStore) ApprovalResolver {
 	return approvalServiceAdapter{svc: svc, store: store}
 }
 
@@ -32,20 +33,20 @@ func (a approvalServiceAdapter) ResolveApproval(ctx context.Context, c ApprovalC
 	if c.Allow {
 		decision = "allow"
 	}
-	_, err := a.svc.resolveApproval(ctx, c.ApprovalID, decision, c.Reason, c.Override, resolutionSourceHuman)
+	_, err := a.svc.ResolveAsHuman(ctx, c.ApprovalID, decision, c.Reason, c.Override)
 	if err == nil {
 		return questionkit.Applied(), nil
 	}
 	switch connect.CodeOf(err) {
 	case connect.CodeNotFound:
-		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.svc.stampedDecision(c.ApprovalID)), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.svc.StampedDecision(c.ApprovalID)), nil
 	case connect.CodeFailedPrecondition:
 		// Still pending: the CI-red guard blocked it ("Approve anyway" needs confirm).
 		// Gone: a rule auto-resolved it while the operator looked.
 		if _, pending := a.store.Get(c.ApprovalID); pending {
 			return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 		}
-		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.svc.stampedDecision(c.ApprovalID)), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.svc.StampedDecision(c.ApprovalID)), nil
 	case connect.CodeInvalidArgument, connect.CodeAborted:
 		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	}

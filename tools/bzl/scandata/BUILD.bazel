@@ -122,6 +122,7 @@ filegroup(
         "//server/services/anthropicwire:go_sources",
         "//server/services/antigravityexport:go_sources",
         "//server/services/approvalkit:go_sources",
+        "//server/services/approvals:go_sources",
         "//server/services/auditkit:go_sources",
         "//server/services/backlogflow:go_sources",
         "//server/services/backlogmisc:go_sources",

@@ -6,6 +6,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
@@ -33,7 +34,7 @@ func newGuidanceRequestService(deps *ServerDependencies) *guidance.GuidanceReque
 // wireGuidanceMirror gives the approval handler its durable hook-question mirror
 // and runs the session reaper on the server's background group, so Shutdown
 // joins it once serverCtx is cancelled.
-func wireGuidanceMirror(h *services.ApprovalHandler, deps *ServerDependencies, serverCtx context.Context, goBackground func(func())) {
+func wireGuidanceMirror(h *approvals.ApprovalHandler, deps *ServerDependencies, serverCtx context.Context, goBackground func(func())) {
 	if deps.Storage == nil || deps.EventBus == nil || deps.SessionService == nil {
 		return
 	}

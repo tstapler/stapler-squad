@@ -116,7 +116,7 @@ code; items marked (name) were classified from the file name and constant only.
 | `server/services/connectrpc_websocket.go:2015` | 1 s per terminal stream | `hub.SubscriberCount()` (O(1)) | Subscriber join/leave callback | Cheap-enough |
 | `server/services/healthnotify/stale_session_notifier.go:98`, `healthnotify/memory_pressure_notifier.go:81`, `server/services/capacity_monitor.go:147`, `stale_creation_sweeper.go:63`, `superseded_session_sweeper.go:69` | 60 s each | Scan sessions or backlog items; `SupersededSessionSweeper` reads `ListBacklogItems` (6 queries, 2.5 s total in 7 min) | Backlog/session transitions | Pure-event for the sweepers, cheap for the rest |
 | `server/server_leasewedge.go:13` | 10 s | Lease scan (name) | Lease events | Cheap-enough |
-| `server/services/approval_handler.go:986` | 30 s | `CleanupExpired` in memory | Per-approval timer | Cheap-enough |
+| `server/services/approvals/approval_handler.go:986` | 30 s | `CleanupExpired` in memory | Per-approval timer | Cheap-enough |
 | `session/sweeper/orphan_tmux_sweeper.go:75`, `tmux/leaked_control_mode_sweeper.go:33` | 5 m | Subprocess scans | none useful | Cheap-enough |
 | `session/wtconsistency/sweep.go:946` | 15 m (flag-gated, default off) | `git worktree list` reconcile | worktree watcher | Cheap-enough |
 | `session/sweeper/hibernation_sweeper.go:216`, `server/services/sessionretention/session_retention_sweeper.go` (1 h), `server/services/guidance/guidance_session_reaper.go:128` (6 h), `contexthistory/recorder.go:100` (6 h), `analytics/retention.go:31` (1 h), `workflows/retention.go:40`, `dependencies.go:1382` (24 h), `dependencies.go:1975` (30 m paused-tmux reaper) | minutes to hours | Retention deletes | none needed | Cheap-enough |

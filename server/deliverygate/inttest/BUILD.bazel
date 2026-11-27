@@ -16,6 +16,7 @@ go_test(
         "//server/push",
         "//server/services",
         "//server/services/approvalkit",
+        "//server/services/approvals",
         "//session/domain",
         "//session/instance",
         "@com_github_stretchr_testify//assert",

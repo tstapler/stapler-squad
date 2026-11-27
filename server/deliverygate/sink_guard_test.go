@@ -33,7 +33,10 @@ const (
 // notificationPackages publish notifications without naming
 // events.EventNotification (split out of server/services), so every Subscribe in
 // them is listed all the same.
-var notificationPackages = map[string]bool{svcPkgPath + "/notify": true}
+var notificationPackages = map[string]bool{
+	svcPkgPath + "/approvals": true,
+	svcPkgPath + "/notify":    true,
+}
 
 // finding is one scan hit, keyed "<kind>: <package path>.<identifier>".
 type finding string
@@ -312,8 +315,10 @@ func TestSinkGuard_ShouldRequireAllowlistReason_WhenNotifierImplEventNotificatio
 // A package in notificationPackages has every Subscribe listed even though it
 // never names events.EventNotification.
 func TestSinkGuard_ShouldListSubscribe_WhenPackageIsDeclaredNotificationHandling(t *testing.T) {
-	if !notificationPackages[svcPkgPath+"/notify"] {
-		t.Error("server/services/notify must stay in notificationPackages")
+	for _, leaf := range []string{"/approvals", "/notify"} {
+		if !notificationPackages[svcPkgPath+leaf] {
+			t.Errorf("server/services%s must stay in notificationPackages", leaf)
+		}
 	}
 	quiet := modulePath + "/server/deliverygate/testdata/sinkfixture/quiet"
 	pkgs := loadPackages(t, "./server/deliverygate/testdata/sinkfixture/quiet")

@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/wakes"
@@ -171,9 +172,9 @@ func TestScheduleWakeupRole_ShouldNameTheBacklogRole_WhenSessionIsLinked(t *test
 
 func TestInjectedPostToolUseGroup_ShouldHaveNoMatcher_SoScheduleWakeupReceiptsArrive(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, InjectHooksConfig(dir, "sess", []HookName{HookPostToolLogging}))
+	require.NoError(t, approvals.InjectHooksConfig(dir, "sess", []approvals.HookName{approvals.HookPostToolLogging}))
 	var top struct {
-		Hooks map[string][]HookMatcherGroup `json:"hooks"`
+		Hooks map[string][]approvals.HookMatcherGroup `json:"hooks"`
 	}
 	data, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.local.json"))
 	require.NoError(t, err)

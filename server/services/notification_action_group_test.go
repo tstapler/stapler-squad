@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -31,7 +32,7 @@ func newGroupedApprovals(t *testing.T, n int) *groupedApprovals {
 	history, err := notifications.NewNotificationHistoryStore(filepath.Join(t.TempDir(), "notifications.json"))
 	require.NoError(t, err)
 	store := approvalkit.NewApprovalStore("")
-	svc := NewApprovalService(store)
+	svc := approvals.NewApprovalService(store)
 	svc.SetNotificationStore(history)
 	base := time.Now()
 	for i := 1; i <= n; i++ {

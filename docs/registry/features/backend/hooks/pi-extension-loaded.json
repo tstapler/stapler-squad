@@ -6,8 +6,8 @@
   "httpMethod": "POST",
   "httpPath": "/api/hooks/pi-extension-loaded",
   "markerFound": true,
-  "handlerFile": "server/services/approval_handler.go",
+  "handlerFile": "server/services/approvals/approval_handler.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-09-02T23:56:18.423968194-07:00"
+  "lastModified": "2026-11-26T16:14:39.915447011-08:00"
 }

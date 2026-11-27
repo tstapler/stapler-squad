@@ -9,15 +9,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/envtest"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestProxyHeaders_should_ReadProofFromSessionFile_When_Present(t *testing.T) {
 	dir := envtest.NewIsolatedStateDir(t)
-	keys, err := services.NewHookProofs(dir)
+	keys, err := approvals.NewHookProofs(dir)
 	require.NoError(t, err)
-	proofs := services.NewMcpProofs(keys, dir)
+	proofs := approvals.NewMcpProofs(keys, dir)
 	t.Setenv("STAPLER_SESSION_UUID", "S")
 	require.NoError(t, proofs.EnsureFile("S"))
 

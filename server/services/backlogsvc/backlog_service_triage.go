@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
@@ -1103,12 +1104,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// remove when not — rather than only ever adding: without the removal side, a
 	// worktree that was ever spawned autonomously once would keep this hook wired
 	// into a later manual session on the same worktree forever.
-	driftHook := []services.HookName{services.HookGitDriftCheck}
+	driftHook := []approvals.HookName{approvals.HookGitDriftCheck}
 	if autonomous {
-		if hookErr := services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, driftHook); hookErr != nil {
+		if hookErr := approvals.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, driftHook); hookErr != nil {
 			log.Warn("[SpawnSessionFromItem] git-drift-check hook injection failed", "item", item.ID, "session", inst.UUID, "error", hookErr)
 		}
-	} else if hookErr := services.RemoveHooksConfig(inst.GetEffectiveRootDir(), driftHook); hookErr != nil {
+	} else if hookErr := approvals.RemoveHooksConfig(inst.GetEffectiveRootDir(), driftHook); hookErr != nil {
 		log.Warn("[SpawnSessionFromItem] git-drift-check hook removal failed", "item", item.ID, "session", inst.UUID, "error", hookErr)
 	}
 

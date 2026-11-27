@@ -8,7 +8,7 @@
 //   - Notifications: Notification + Stop hooks running "<ssq-hook-handler> <event>",
 //     which produce audio chimes / attention alerts.
 //
-// Unlike the per-session HTTP hooks in server/services/hook_injector.go (which are
+// Unlike the per-session HTTP hooks in server/services/approvals/hook_injector.go (which are
 // scoped to a stapler-squad-managed session via X-CS-Session-ID), these target the
 // user's GLOBAL settings so they fire for any Claude Code session, including ones
 // started from a plain terminal.

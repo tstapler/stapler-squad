@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
@@ -208,7 +209,7 @@ type SessionService struct {
 	workspaceSvc    *WorkspaceService
 	configSvc       *ConfigService
 	notificationSvc *notify.NotificationService
-	approvalSvc     *ApprovalService
+	approvalSvc     *approvals.ApprovalService
 	utilitySvc      *UtilityService
 	rulesSvc        *RulesService
 	// taggingRulesSvc is exposed over ListTaggingRules/UpsertTaggingRule/DeleteTaggingRule
@@ -831,7 +832,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	reviewQueueSvc.SetApprovalStore(approvalStore)
 
 	notificationSvc := notify.NewNotificationService(notify.NewNotificationRateLimiter(10, 20), eventBus)
-	approvalSvc := NewApprovalService(approvalStore)
+	approvalSvc := approvals.NewApprovalService(approvalStore)
 	approvalSvc.SetEventBus(eventBus)
 	approvalSvc.SetReviewQueueRemover(reviewQueue)
 	utilitySvc := NewUtilityService(approvalStore)

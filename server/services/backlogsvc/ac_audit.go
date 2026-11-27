@@ -14,7 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/middleware"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -46,7 +46,7 @@ func acActorFromRequest(ctx context.Context, h http.Header, peerAddr string) dom
 		actor.Class = domain.AcActorAgentSession
 		if _, err := uuid.Parse(sid); err == nil {
 			actor.SessionUUID = sid
-			if p := services.DefaultMcpProofs(); p != nil && proof != "" {
+			if p := approvals.DefaultMcpProofs(); p != nil && proof != "" {
 				actor.SessionVerified = p.Verify(sid, proof)
 			}
 		} else {

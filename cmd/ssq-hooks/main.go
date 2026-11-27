@@ -835,7 +835,7 @@ func handleInstall() {
 }
 
 // defaultSsqHooksBaseURL is stapler-squad's well-known local listen address (see top-level
-// CLAUDE.md: "web server on localhost:8543"), mirroring server/services/hook_injector.go's
+// CLAUDE.md: "web server on localhost:8543"), mirroring server/services/approvals/hook_injector.go's
 // hookBaseURLFn default. cmd/ssq-hooks is a standalone CLI that never runs inside the server
 // process, so it cannot read the server's real (possibly PORT=0-resolved) listen address the
 // way hookEndpoints() does — it hardcodes the documented default instead. If the server is
@@ -1422,12 +1422,12 @@ func installOpenCode() {
 // on-disk snapshot and are deliberately NOT reused here). The POST body matches
 // classifier.PermissionRequestPayload's JSON shape (pkg/classifier/classifier.go); the
 // response is parsed per ApprovalHandler.writeDecision's shape
-// (server/services/approval_handler.go): {hookSpecificOutput:{decision:{behavior,message}}}.
+// (server/services/approvals/approval_handler.go): {hookSpecificOutput:{decision:{behavior,message}}}.
 //
 // Per ADR-003, a network error, non-2xx response, or any other unexpected fault is treated as
 // deny (fail closed), with a generous ~4.5-minute timeout so a real pending human-review wait
 // isn't mistaken for a dead connection (mirrors remoteApprovalHookAttemptTimeoutSeconds's
-// reasoning in server/services/hook_injector.go — this must cover a real human decision, not
+// reasoning in server/services/approvals/hook_injector.go — this must cover a real human decision, not
 // just a connectivity probe, unlike openCodePluginTemplate's short 8-second timeout above).
 //
 // The entire handler body is wrapped in try/catch, and the catch block explicitly returns a
@@ -1446,7 +1446,7 @@ func installOpenCode() {
 // available yet at this point in the extension's lifecycle — it's the same
 // cwd-prefix session-resolution fallback HandlePermissionRequest already uses
 // for a missing/unmatched X-CS-Session-ID header
-// (server/services/approval_handler.go's resolveSessionID).
+// (server/services/approvals/approval_handler.go's resolveSessionID).
 //
 // Per Story 4.2.3, the ping is re-sent every piExtensionRepingInterval
 // (server/services/piextension/pi_extension_health.go) for the lifetime of the pi process, in

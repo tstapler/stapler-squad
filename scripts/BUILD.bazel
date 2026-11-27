@@ -4,7 +4,10 @@ exports_files(
         "ssq-hook-handler",
         "ssq-notify",
     ],
-    visibility = ["//server/services:__pkg__"],
+    visibility = [
+        "//server/services:__pkg__",
+        "//server/services/approvals:__pkg__",
+    ],
 )
 
 exports_files(

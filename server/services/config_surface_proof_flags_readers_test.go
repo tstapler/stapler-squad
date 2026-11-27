@@ -20,6 +20,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -69,7 +70,7 @@ func TestConfigSurfaceProof_BrowserPassthrough_ChangesInstanceManagerGate(t *tes
 
 func TestConfigSurfaceProof_PiSupport_ChangesPiExtensionHook(t *testing.T) {
 	set := bkfFlagWriter(t)
-	h := &ApprovalHandler{}
+	h := &approvals.ApprovalHandler{}
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(config.FeaturePiSupport, setting.(bool))
 		rec := httptest.NewRecorder()
@@ -84,7 +85,7 @@ func TestConfigSurfaceProof_BlockApprovalOnCIFailure_ChangesResolveApproval(t *t
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(flagsvc.BlockApprovalOnCIFailureFlagName, setting.(bool))
 		store := approvalkit.NewApprovalStore("")
-		svc := NewApprovalService(store)
+		svc := approvals.NewApprovalService(store)
 		svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("bkf-session")})
 		attempts++
 		id := "bkf-approval-" + strings.Repeat("x", attempts)

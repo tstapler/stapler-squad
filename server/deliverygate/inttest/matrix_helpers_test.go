@@ -7,11 +7,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 )
 
 // postPermission drives the real HandlePermissionRequest synchronously.
-func postPermission(t *testing.T, h *services.ApprovalHandler, sessionID, tool string, input map[string]interface{}) {
+func postPermission(t *testing.T, h *approvals.ApprovalHandler, sessionID, tool string, input map[string]interface{}) {
 	t.Helper()
 	body, err := json.Marshal(map[string]interface{}{"tool_name": tool, "tool_input": input, "cwd": "/tmp/p"})
 	if err != nil {

@@ -122,3 +122,4 @@ server/services/streamhubrollout !server/web
 server/services/domainage !server/web
 server/services/guidance !server/web
 server/services/notify !server/web
+server/services/approvals !server/web

@@ -13,7 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -21,18 +21,18 @@ import (
 // Serial: installs process-wide proofs and a proof provider and sets the state dir.
 func TestWireMCPProofs_should_InstallProviderSweepStaleAndCleanOnDelete(t *testing.T) {
 	dir := envtest.NewIsolatedStateDir(t)
-	keys, err := services.NewHookProofs(dir)
+	keys, err := approvals.NewHookProofs(dir)
 	require.NoError(t, err)
-	prevKeys, prevMcp := services.DefaultHookProofs(), services.DefaultMcpProofs()
-	services.SetDefaultHookProofs(keys)
+	prevKeys, prevMcp := approvals.DefaultHookProofs(), approvals.DefaultMcpProofs()
+	approvals.SetDefaultHookProofs(keys)
 	t.Cleanup(func() {
-		services.SetDefaultHookProofs(prevKeys)
-		services.SetDefaultMcpProofs(prevMcp)
+		approvals.SetDefaultHookProofs(prevKeys)
+		approvals.SetDefaultMcpProofs(prevMcp)
 		instance.SetMCPProofProvider(nil)
 	})
 
 	// A stale file for a session that is no longer known, and one for a kept session.
-	stale := services.NewMcpProofs(keys, dir)
+	stale := approvals.NewMcpProofs(keys, dir)
 	require.NoError(t, stale.EnsureFile("dead"))
 	require.NoError(t, stale.EnsureFile("kept"))
 
@@ -42,7 +42,7 @@ func TestWireMCPProofs_should_InstallProviderSweepStaleAndCleanOnDelete(t *testi
 	done := make(chan struct{})
 	wireMCPProofs(ctx, deps, func(fn func()) { go func() { fn(); close(done) }() })
 
-	proofs := services.DefaultMcpProofs()
+	proofs := approvals.DefaultMcpProofs()
 	require.NotNil(t, proofs, "self-check passed and proofs were installed")
 	assert.NoFileExists(t, instance.MCPProofFilePath(dir, "dead"), "startup sweep")
 	assert.FileExists(t, instance.MCPProofFilePath(dir, "kept"))
@@ -62,17 +62,17 @@ func TestWireMCPProofs_should_InstallProviderSweepStaleAndCleanOnDelete(t *testi
 
 func TestWireMCPProofs_should_InstallNothing_When_HookProofSecretMissing(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
-	prevKeys, prevMcp := services.DefaultHookProofs(), services.DefaultMcpProofs()
-	services.SetDefaultHookProofs(nil)
-	services.SetDefaultMcpProofs(nil)
+	prevKeys, prevMcp := approvals.DefaultHookProofs(), approvals.DefaultMcpProofs()
+	approvals.SetDefaultHookProofs(nil)
+	approvals.SetDefaultMcpProofs(nil)
 	t.Cleanup(func() {
-		services.SetDefaultHookProofs(prevKeys)
-		services.SetDefaultMcpProofs(prevMcp)
+		approvals.SetDefaultHookProofs(prevKeys)
+		approvals.SetDefaultMcpProofs(prevMcp)
 	})
 
 	wireMCPProofs(context.Background(), &ServerDependencies{}, func(func()) {})
 
-	assert.Nil(t, services.DefaultMcpProofs(), "fail closed: nothing verifies")
+	assert.Nil(t, approvals.DefaultMcpProofs(), "fail closed: nothing verifies")
 }
 
 type fakeLiveFinder struct{ live map[string]bool }
@@ -86,11 +86,11 @@ func (f fakeLiveFinder) FindLiveInstance(id string) *instance.Instance {
 
 func TestNewMCPIdentityMiddleware_should_VerifyThroughDefaultProofs(t *testing.T) {
 	dir := envtest.NewIsolatedStateDir(t)
-	keys, err := services.NewHookProofs(dir)
+	keys, err := approvals.NewHookProofs(dir)
 	require.NoError(t, err)
-	proofs := services.NewMcpProofs(keys, dir)
-	prev := services.DefaultMcpProofs()
-	t.Cleanup(func() { services.SetDefaultMcpProofs(prev) })
+	proofs := approvals.NewMcpProofs(keys, dir)
+	prev := approvals.DefaultMcpProofs()
+	t.Cleanup(func() { approvals.SetDefaultMcpProofs(prev) })
 
 	var sawClaim, sawProofHeader bool
 	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -104,7 +104,7 @@ func TestNewMCPIdentityMiddleware_should_VerifyThroughDefaultProofs(t *testing.T
 	req.Header.Set(instance.MCPProofHeader, proofs.HeaderValue("live"))
 
 	// Before wiring (no default proofs) the request is simply unverified, never an error.
-	services.SetDefaultMcpProofs(nil)
+	approvals.SetDefaultMcpProofs(nil)
 	mw.ServeHTTP(httptest.NewRecorder(), req)
 	assert.True(t, sawClaim)
 	assert.True(t, sawProofHeader)

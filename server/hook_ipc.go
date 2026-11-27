@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/internal/hookipc"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 )
 
 type hookIPCState struct {
-	classifier *services.HookClassifier
+	classifier *approvals.HookClassifier
 
 	mu     sync.Mutex
 	server *hookipc.Server
@@ -21,7 +21,7 @@ func newHookIPCState(deps *ServerDependencies) *hookIPCState {
 	if deps == nil || deps.SessionService == nil {
 		return nil
 	}
-	c := services.NewHookClassifier(deps.SessionService.GetClassifier(), deps.SessionService.ClassificationRecorder())
+	c := approvals.NewHookClassifier(deps.SessionService.GetClassifier(), deps.SessionService.ClassificationRecorder())
 	c.SetHookReplier(deps.SessionService.HookReplier())
 	return &hookIPCState{classifier: c}
 }
