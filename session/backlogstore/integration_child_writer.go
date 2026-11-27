@@ -9,10 +9,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 )
 
 // IntegrationCheckACPrefix marks an epic acceptance criterion whose remainder is the end-to-end check command.
@@ -53,7 +55,7 @@ func sanitizedE2ECommand(cmd string) string {
 	return cmd
 }
 
-// integrationGate blocks an epic's done transition while its integration child is unresolved.
+// integrationGate blocks an epic's done transition until its integration child has passed (AC-3).
 func (b *Backlog) integrationGate(ctx context.Context, epic *ent.BacklogItem) error {
 	if epic.IntegrationChildID == nil {
 		return nil
@@ -65,16 +67,47 @@ func (b *Backlog) integrationGate(ctx context.Context, epic *ent.BacklogItem) er
 		}
 		return fmt.Errorf("check integration child of %s: %w", epic.ID, err)
 	}
-	// AC3: the epic unblocks once the child is done or archived (archived is the escape hatch for an abandoned check).
-	if st := child.Status; st != string(domain.BacklogStatusDone) && st != string(domain.BacklogStatusArchived) {
-		return fmt.Errorf("%w: integration child %s is %s", backlogdto.ErrIntegrationCheckPending, child.ID, child.Status)
+	passed, err := integrationChildPassed(ctx, b.client.BacklogStatusEvent, child)
+	if err != nil {
+		return fmt.Errorf("check integration child of %s: %w", epic.ID, err)
 	}
-	return nil
+	if passed {
+		return nil
+	}
+	hint := ""
+	if child.Status == string(domain.BacklogStatusArchived) {
+		hint = " without having passed; unarchive and complete it, or re-run epic integration child creation to replace it"
+	}
+	return fmt.Errorf("%w: integration child %s is %s%s", backlogdto.ErrIntegrationCheckPending, child.ID, child.Status, hint)
+}
+
+// integrationChildPassed reports whether child is done, or was archived out of done (the
+// auto_archive_done sweep archives passed checks too). Its latest status event, ignoring
+// re-archives, must be that archival, so a missing audit row does not revive an older pass.
+func integrationChildPassed(ctx context.Context, events *ent.BacklogStatusEventClient, child *ent.BacklogItem) (bool, error) {
+	if child.Status != string(domain.BacklogStatusArchived) {
+		return child.Status == string(domain.BacklogStatusDone), nil
+	}
+	archived := string(domain.BacklogStatusArchived)
+	last, err := events.Query().
+		Where(
+			backlogstatusevent.ItemID(child.ID),
+			backlogstatusevent.Or(backlogstatusevent.FromStatusNEQ(archived), backlogstatusevent.ToStatusNEQ(archived)),
+		).
+		Order(ent.Desc(backlogstatusevent.FieldCreatedAt)).
+		First(ctx)
+	if ent.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load archival event of %s: %w", child.ID, err)
+	}
+	return last.ToStatus == archived && last.FromStatus == string(domain.BacklogStatusDone), nil
 }
 
 // CreateIntegrationChild creates the epic's integration child, blocked on every sibling, and
 // records it as the epic's IntegrationChildID. Idempotent: when the epic already has one it is
-// returned with created=false. e2eCommand must be non-empty.
+// returned with created=false (one archived without passing is replaced). e2eCommand must be non-empty.
 func (b *Backlog) CreateIntegrationChild(ctx context.Context, epicID string, siblingIDs []string, e2eCommand string) (child *backlogdto.BacklogItemData, created bool, err error) {
 	if sanitizedE2ECommand(strings.TrimSpace(e2eCommand)) == "" {
 		return nil, false, fmt.Errorf("integration child needs a non-empty single-line e2e command of at most %d characters", maxE2ECommandLen)
@@ -163,8 +196,24 @@ func (b *Backlog) CreateIntegrationChild(ctx context.Context, epicID string, sib
 	if err := tx.Commit(); err != nil {
 		return nil, false, fmt.Errorf("create integration child: commit: %w", err)
 	}
+	b.publishIntegrationChildLinked(ctx, parsedEpic)
 	data := BacklogItemToData(item)
 	return &data, true, nil
+}
+
+// publishIntegrationChildLinked tells watchers the epic changed. The child itself gets no event,
+// like any newly created item. Best-effort: the link is already committed.
+func (b *Backlog) publishIntegrationChildLinked(ctx context.Context, epicID uuid.UUID) {
+	epic, err := b.client.BacklogItem.Get(ctx, epicID)
+	if err != nil {
+		log.WarningLog().Printf("[EntRepository] integration child linked but epic %s could not be reloaded for publish: %v", epicID, err)
+		return
+	}
+	data := BacklogItemToData(epic)
+	b.PublishItemChanged(ctx, &data, backlogdto.BacklogItemChange{
+		Kind:          backlogdto.ChangeItemUpdated,
+		UpdatedFields: []string{"integrationChildId"},
+	})
 }
 
 func integrationChildPrompt(epicTitle, cmd string) string {
@@ -256,11 +305,15 @@ func checkIntegrationChildPreconditions(ctx context.Context, tx *ent.Tx, epic *e
 		if getErr != nil {
 			return nil, nil, fmt.Errorf("load existing integration child: %w", getErr)
 		}
-		if child.Status != string(domain.BacklogStatusArchived) {
+		passed, passErr := integrationChildPassed(ctx, tx.BacklogStatusEvent, child)
+		if passErr != nil {
+			return nil, nil, passErr
+		}
+		if passed || child.Status != string(domain.BacklogStatusArchived) {
 			data := BacklogItemToData(child)
 			return &data, nil, nil
 		}
-		// An archived child never ran its check and blocks the epic forever: replace it.
+		// Archived without passing: it holds the epic's done gate, so replace it.
 		replaced = epic.IntegrationChildID
 	}
 	n, err := tx.BacklogItem.Query().Where(backlogitem.IDIn(siblings...)).Count(ctx)

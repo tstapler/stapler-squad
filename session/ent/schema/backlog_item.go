@@ -167,7 +167,7 @@ func (BacklogItem) Fields() []ent.Field {
 		field.UUID("integration_child_id", uuid.UUID{}).
 			Optional().
 			Nillable().
-			Comment("epic-integration-child: on an epic item, the ID of its integration child. While that child is not done the epic's done transition is blocked (ErrIntegrationCheckPending). Doubles as the idempotency marker for integration-child creation."),
+			Comment("epic-integration-child: on an epic item, the ID of its integration child. Until that child has passed (done, or archived out of done) the epic's done transition is blocked (ErrIntegrationCheckPending). Doubles as the idempotency marker for integration-child creation."),
 		field.Int("integration_fix_count").
 			Default(0).
 			Comment("epic-integration-child: how many fix children the epic's integration failures have spawned; capped by rework_cap_override."),

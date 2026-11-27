@@ -28,7 +28,7 @@
 
 **Risk**: If the integration e2e check is flaky or permanently broken, the epic can never transition to `done`, blocking the entire roadmap.
 
-**Verdict**: REAL. Two escape hatches exist: (a) operator archives the integration child (counts as resolved in dependency gate), (b) operator waives the relevant AC on the integration child. Both require deliberate operator action — good, not a bug. Document both escape hatches in the feature's help text (AC-6).
+**Verdict**: REAL. Two escape hatches exist: (a) operator deletes the integration child or replaces an archived one (archiving alone no longer opens the gate; see plan.md), (b) operator waives the relevant AC on the integration child. Both require deliberate operator action — good, not a bug. Document both escape hatches in the feature's help text (AC-6).
 
 ---
 

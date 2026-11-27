@@ -14,6 +14,8 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 )
 
 func newEpicWithSiblings(t *testing.T, repo *EntRepository, n int) (epic *backlogdto.BacklogItemData, sibs []string) {
@@ -109,7 +111,7 @@ func TestIntegrationChild_should_BlockEpicDone_UntilChildResolved(t *testing.T) 
 	require.NoError(t, err)
 }
 
-func TestIntegrationChild_should_UnblockEpicDone_When_ChildArchived(t *testing.T) {
+func TestIntegrationChild_should_KeepEpicBlocked_When_ChildArchivedWithoutPassing(t *testing.T) {
 	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
@@ -120,8 +122,153 @@ func TestIntegrationChild_should_UnblockEpicDone_When_ChildArchived(t *testing.T
 
 	_, err = repo.RawArchiveBacklogItem(ctx, child.ID, nil, "test", "")
 	require.NoError(t, err)
+	// Archiving an already-archived child must not change the verdict.
+	_, err = repo.RawArchiveBacklogItem(ctx, child.ID, nil, "test", "")
+	require.NoError(t, err)
 	_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
-	require.NoError(t, err, "AC3: an archived integration child unblocks the epic")
+	require.ErrorIs(t, err, backlogdto.ErrIntegrationCheckPending, "AC3: only a passed integration child lets the epic close")
+	assert.Contains(t, err.Error(), "unarchive and complete it")
+
+	// Way out: unarchive the child and complete it.
+	_, err = repo.RawUnarchiveBacklogItem(ctx, child.ID, "")
+	require.NoError(t, err)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, child.ID, domain.BacklogStatusDone, nil, "test")
+	require.NoError(t, err)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
+	require.NoError(t, err)
+}
+
+func TestIntegrationChild_should_AllowEpicDone_When_PassedChildArchivedLater(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+	epic, sibs := newEpicWithSiblings(t, repo, 1)
+	child, _, err := repo.CreateIntegrationChild(ctx, epic.ID, sibs, "make e2e")
+	require.NoError(t, err)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, child.ID, domain.BacklogStatusDone, nil, "test")
+	require.NoError(t, err)
+	_, err = repo.RawArchiveBacklogItem(ctx, child.ID, nil, "system", "")
+	require.NoError(t, err)
+	_, err = repo.RawArchiveBacklogItem(ctx, child.ID, nil, "system", "")
+	require.NoError(t, err)
+
+	again, created, err := repo.CreateIntegrationChild(ctx, epic.ID, sibs, "make e2e")
+	require.NoError(t, err)
+	assert.False(t, created, "a passed check is not replaced")
+	assert.Equal(t, child.ID, again.ID)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
+	require.NoError(t, err)
+}
+
+func TestIntegrationChild_should_KeepEpicBlocked_When_ReopenedAfterPassingThenArchived(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+	epic, sibs := newEpicWithSiblings(t, repo, 1)
+	child, _, err := repo.CreateIntegrationChild(ctx, epic.ID, sibs, "make e2e")
+	require.NoError(t, err)
+	for _, to := range []domain.BacklogStatus{domain.BacklogStatusDone, domain.BacklogStatusArchived} {
+		_, err = repo.RawTransitionBacklogItemStatus(ctx, child.ID, to, nil, "test")
+		require.NoError(t, err)
+	}
+	_, err = repo.RawUnarchiveBacklogItem(ctx, child.ID, "")
+	require.NoError(t, err)
+	_, err = repo.RawArchiveBacklogItem(ctx, child.ID, nil, "test", "")
+	require.NoError(t, err)
+
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
+	require.ErrorIs(t, err, backlogdto.ErrIntegrationCheckPending, "only the latest archival counts")
+}
+
+func TestIntegrationChild_should_KeepEpicBlocked_When_ArchivalEventsAreMissing(t *testing.T) {
+	t.Parallel()
+	for name, lost := range map[string]func(ids []uuid.UUID) []uuid.UUID{
+		"no events at all":                  func(ids []uuid.UUID) []uuid.UUID { return ids },
+		"second archival after an old pass": func(ids []uuid.UUID) []uuid.UUID { return ids[len(ids)-1:] },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			repo, cleanup := createTestEntRepository(t)
+			defer cleanup()
+			ctx := context.Background()
+			epic, sibs := newEpicWithSiblings(t, repo, 1)
+			child, _, err := repo.CreateIntegrationChild(ctx, epic.ID, sibs, "make e2e")
+			require.NoError(t, err)
+			for _, to := range []domain.BacklogStatus{domain.BacklogStatusDone, domain.BacklogStatusArchived} {
+				_, err = repo.RawTransitionBacklogItemStatus(ctx, child.ID, to, nil, "test")
+				require.NoError(t, err)
+			}
+			_, err = repo.RawUnarchiveBacklogItem(ctx, child.ID, "")
+			require.NoError(t, err)
+			_, err = repo.RawArchiveBacklogItem(ctx, child.ID, nil, "test", "")
+			require.NoError(t, err)
+
+			ids, err := repo.Client.BacklogStatusEvent.Query().
+				Where(backlogstatusevent.ItemID(uuid.MustParse(child.ID))).
+				Order(ent.Asc(backlogstatusevent.FieldCreatedAt)).
+				IDs(ctx)
+			require.NoError(t, err)
+			_, err = repo.Client.BacklogStatusEvent.Delete().Where(backlogstatusevent.IDIn(lost(ids)...)).Exec(ctx)
+			require.NoError(t, err)
+
+			_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
+			require.ErrorIs(t, err, backlogdto.ErrIntegrationCheckPending)
+		})
+	}
+}
+
+func TestIntegrationChild_should_KeepEpicBlocked_When_ArchivalEventAfterReopenIsMissing(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+	epic, sibs := newEpicWithSiblings(t, repo, 1)
+	child, _, err := repo.CreateIntegrationChild(ctx, epic.ID, sibs, "make e2e")
+	require.NoError(t, err)
+	for _, to := range []domain.BacklogStatus{domain.BacklogStatusDone, domain.BacklogStatusReview, domain.BacklogStatusArchived} {
+		_, err = repo.RawTransitionBacklogItemStatus(ctx, child.ID, to, nil, "test")
+		require.NoError(t, err)
+	}
+	_, err = repo.Client.BacklogStatusEvent.Delete().
+		Where(backlogstatusevent.ItemID(uuid.MustParse(child.ID)), backlogstatusevent.ToStatus(string(domain.BacklogStatusArchived))).
+		Exec(ctx)
+	require.NoError(t, err)
+
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
+	require.ErrorIs(t, err, backlogdto.ErrIntegrationCheckPending, "leaving done is not an archival")
+}
+
+func TestIntegrationChild_should_PublishEpicUpdate_When_Created(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+	epic, sibs := newEpicWithSiblings(t, repo, 1)
+	pub := &recordingItemPublisher{}
+	repo.SetItemChangePublisher(pub)
+
+	child, _, err := repo.CreateIntegrationChild(ctx, epic.ID, sibs, "make e2e")
+	require.NoError(t, err)
+	_, _, err = repo.CreateIntegrationChild(ctx, epic.ID, sibs, "make e2e")
+	require.NoError(t, err)
+
+	require.Len(t, pub.changes, 1, "one event for the create, none for the idempotent retry")
+	assert.Equal(t, epic.ID, pub.items[0].ID)
+	assert.Equal(t, child.ID, pub.items[0].IntegrationChildID)
+	assert.Equal(t, backlogdto.ChangeItemUpdated, pub.changes[0].Kind)
+	assert.Equal(t, []string{"integrationChildId"}, pub.changes[0].UpdatedFields)
+}
+
+type recordingItemPublisher struct {
+	items   []*backlogdto.BacklogItemData
+	changes []backlogdto.BacklogItemChange
+}
+
+func (p *recordingItemPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change backlogdto.BacklogItemChange) {
+	p.items = append(p.items, item)
+	p.changes = append(p.changes, change)
 }
 
 func TestIntegrationChild_should_Reject_When_NoSiblingsOrSiblingMissing(t *testing.T) {

@@ -35,5 +35,5 @@ var ErrAcWaiverViaUpdate = errors.New("a waiver can only be recorded through Wai
 var ErrAcCriterionAlreadyDone = errors.New("acceptance criterion is already done; nothing to waive")
 
 // ErrIntegrationCheckPending is returned when an epic's done transition is attempted while its
-// integration child has not reached done (an archived child never ran the check; re-planning replaces it).
+// integration child has not passed (done, or archived out of done; re-planning replaces any other archived child).
 var ErrIntegrationCheckPending = errors.New("epic integration check is still pending")
