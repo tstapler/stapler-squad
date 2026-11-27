@@ -202,7 +202,7 @@ func (o *FileOps) finishRange(rd *rangeRead, win rangeWindow) *sessionv1.ReadFil
 	token := fsops.NonEditableToken(rd.info.Size(), rd.info.ModTime().UnixNano())
 	if rd.analysis != nil {
 		resp.LineCountKnown, resp.LineCount = true, rd.analysis.LineCount
-		if rd.info.Size() <= rangeHashCapBytes {
+		if rd.info.Size() <= fsops.RangeHashCapBytes {
 			token.SHA256 = rd.analysis.SHA256
 		}
 	}

@@ -601,6 +601,22 @@ linters:
             - github.com/tstapler/stapler-squad/session/instance
             - github.com/tstapler/stapler-squad/session/panereply
             - github.com/tstapler/stapler-squad/session/tmux
+        # server/services/contentsearch greps a session worktree for the SearchContent stream (admission caps,
+        # .gitignore rules, matcher); it never imports the services hub (the hub wires it).
+        isolate_contentsearch:
+          list-mode: strict
+          files:
+            - "**/services/contentsearch/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/bmatcuk/doublestar/v4
+            - github.com/go-git/go-git/v5/plumbing/format/gitignore
+            - golang.org/x/sync/errgroup
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/fsops$
         # server/services/escapecode owns the escape-analytics REST handler and query RPCs; it never imports the hub.
         isolate_escapecode:
           list-mode: strict
