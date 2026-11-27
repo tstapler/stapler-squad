@@ -393,6 +393,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md` an
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
 | Graceful tymuxd handoff: upgrade/downgrade the daemon without killing panes (D1-D6, compat matrix, rollback, squad vs daemon) | `docs/explanation/graceful-tymuxd-handoff.md` |
 | Why service restarts no longer kill tmux sessions (`--tmux-keep-server`, fixed in #180) | `docs/explanation/tmux-keep-server-on-restart.md` |
+| `ssq` CLI for the API: commands built from proto descriptors at runtime, aliases, `--json`, auth token, timeouts | `docs/how-to/use-ssq-cli.md` |
 | Package manager: always Bun (every JS project), never npm/yarn/pnpm | `docs/how-to/use-bun-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
