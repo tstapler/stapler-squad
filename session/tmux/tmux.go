@@ -39,17 +39,38 @@ const ProgramGemini = "gemini"
 const defaultAttachCols = 220
 const defaultAttachRows = 50
 
-// sizedNewSessionArgs builds a "new-session ; ... ; respawn-pane" argv that starts command in a
-// pane already at the default size. Under "window-size latest" tmux sizes a new window from
-// another client (possibly 10x6), ignoring -x/-y, and the reflow on the first wide attach can
-// erase early output. Resizing a placeholder first avoids racing the program's startup.
+// sizedNewSessionArgs builds "new-session ... command ; resize-window ; set-option -u window-size".
+// Version-specific: tmux 3.4 sizes a new window from another attached client (possibly 10x6),
+// ignoring -x/-y, and the reflow on the first wide attach can erase early output. 3.6a honors
+// -x/-y. On 3.4 a program can still read the old size if it starts before the resize reaches it.
+// A failure after new-session leaves the session running command (see isDuplicateSession).
 func sizedNewSessionArgs(session, workDir string, flags []string, command ...string) []string {
-	args := append([]string{"new-session", "-d", "-s", session}, flags...)
-	args = append(args, "-c", workDir, "cat",
-		";", "resize-window", "-t", session, "-x", strconv.Itoa(defaultAttachCols), "-y", strconv.Itoa(defaultAttachRows),
-		";", "set-option", "-w", "-t", session, "-u", "window-size",
-		";", "respawn-pane", "-k", "-t", session, "-c", workDir)
-	return append(args, command...)
+	cols, rows := strconv.Itoa(defaultAttachCols), strconv.Itoa(defaultAttachRows)
+	args := append([]string{"new-session", "-d", "-s", session, "-x", cols, "-y", rows}, flags...)
+	args = append(append(args, "-c", workDir), command...)
+	return append(args,
+		";", "resize-window", "-t", session, "-x", cols, "-y", rows,
+		";", "set-option", "-w", "-t", session, "-u", "window-size")
+}
+
+// isDuplicateSession reports that new-session refused the name, so the session is not ours to kill.
+func isDuplicateSession(stderr string) bool {
+	return strings.Contains(stderr, "duplicate session")
+}
+
+// runCapturingStderr runs cmd with stderr in a scratch file, not a pipe: "new-session -d" forks a
+// server that inherits the fds, so a buffer capture would wait forever for EOF.
+func runCapturingStderr(cmd *exec.Cmd, run func() error) (string, error) {
+	file, tmpErr := os.CreateTemp("", "tmux-new-session-stderr-*")
+	if tmpErr != nil {
+		return "", run()
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	cmd.Stderr = file
+	err := run()
+	data, _ := os.ReadFile(file.Name())
+	return strings.TrimSpace(string(data)), err
 }
 
 // TmuxSession represents a managed tmux session

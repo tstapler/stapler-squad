@@ -77,6 +77,7 @@ test.describe('theme FOUC prevention', () => {
     }
     // <body>'s own background is theme-independent (globals.css --background), so the
     // first-frame check reads the theme tokens instead: a late theme would still show clean's.
+    expect(clean.tokens.replaceAll('|', ''), 'theme tokens were read').not.toBe('');
     for (const theme of DARK_THEMES) {
       expect(byTheme.get(theme)!.tokens, `${theme} first-frame theme tokens`).not.toBe(clean.tokens);
     }
@@ -91,6 +92,7 @@ test.describe('theme FOUC prevention', () => {
     };
     const grimdark = await contextFor('grimdark');
     const legacy = await contextFor('wh40k');
+    expect(grimdark.tokens.replaceAll('|', ''), 'theme tokens were read').not.toBe('');
     expect(legacy.classes.join(' ')).toBe(grimdark.classes.join(' '));
     expect(legacy.tokens).toBe(grimdark.tokens);
   });

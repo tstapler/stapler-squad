@@ -71,7 +71,8 @@ func (h *ShellTmuxHandle) buildCmd(args ...string) *exec.Cmd {
 // Spawn creates a new independent sibling tmux session running the given command in workDir.
 // It does NOT attach a PTY; call Attach() for streaming I/O.
 //
-// Equivalent of: tmux new-session -d -s {sessionName} -c {workDir} -- /bin/sh -c {command}
+// Equivalent of: tmux new-session -d -s {sessionName} -c {workDir} -- /bin/sh -c {command},
+// sized to the default attach size.
 func (h *ShellTmuxHandle) Spawn(workDir, command string) error {
 	h.spawnMu.Lock()
 	defer h.spawnMu.Unlock()
@@ -83,12 +84,19 @@ func (h *ShellTmuxHandle) Spawn(workDir, command string) error {
 		command = "/bin/sh"
 	}
 
-	// Build: tmux [-L socket] new-session -d -s {sessionName} -c {workDir} -- /bin/sh -c {command}
-	// Using "-- /bin/sh -c {command}" avoids shell interpolation of the command string in the
+	// Build: tmux [-L socket] new-session ... -- /bin/sh -c {command} ; resize-window ; set-option
+	// (see sizedNewSessionArgs). Using "-- /bin/sh -c {command}" avoids shell interpolation of the command string in the
 	// tmux argument (SEC-4: no exec.Command("sh", "-c", fmt.Sprintf("... %s ...", command)) pattern).
 	cmd := h.buildCmd(sizedNewSessionArgs(h.sessionName, workDir, nil, "--", "/bin/sh", "-c", command)...)
-	if err := h.cmdExec.Run(cmd); err != nil {
-		return fmt.Errorf("ShellTmuxHandle.Spawn: tmux new-session failed for %q: %w", h.sessionName, err)
+	stderr, err := runCapturingStderr(cmd, func() error { return h.cmdExec.Run(cmd) })
+	if err != nil {
+		// A failure after new-session would otherwise orphan the shell; "=" matches the name exactly.
+		if !isDuplicateSession(stderr) {
+			if killErr := h.cmdExec.Run(h.buildCmd("kill-session", "-t", "="+h.sessionName)); killErr != nil {
+				log.Debug("shell tmux session cleanup found nothing to kill", "session", h.sessionName, "error", killErr)
+			}
+		}
+		return fmt.Errorf("ShellTmuxHandle.Spawn: tmux new-session failed for %q: %s (%w)", h.sessionName, stderr, err)
 	}
 	log.Info("shell tmux session spawned", "session", h.sessionName, "workDir", workDir, "command", command)
 	return nil
