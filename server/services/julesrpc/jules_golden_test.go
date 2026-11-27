@@ -39,9 +39,9 @@ type goldenReconnect bool
 func (g goldenReconnect) AuthReconnectRequired() bool { return bool(g) }
 
 func TestJulesGolden(t *testing.T) {
-	// Process-global: the config RPCs read and write config.json under HOME.
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	// The config RPCs read and write config.json, so this test owns HOME and the state dir.
+	svctest.WithFakeHome(t)
+	svctest.WithIsolatedStateDir(t)
 	ctx := context.Background()
 	var out strings.Builder
 	record := func(step string, msg proto.Message, err error) {

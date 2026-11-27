@@ -41,11 +41,16 @@ func (s bigPayloadStub) GetFileContent(context.Context, *connect.Request[session
 
 // goSourceText concatenates distinct non-test Go files so the sample is real,
 // non-repeating code (a repeated file would overstate the compression ratio).
+// The leaf packages are included: the top level alone is under 1 MiB.
 func goSourceText(t *testing.T, size int) string {
 	t.Helper()
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
+	leaves, err := filepath.Glob("*/*.go")
+	require.NoError(t, err)
 	sort.Strings(files)
+	sort.Strings(leaves)
+	files = append(files, leaves...)
 	var b strings.Builder
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
