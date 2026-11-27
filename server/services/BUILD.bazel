@@ -302,6 +302,7 @@ go_test(
         "config_surface_proof_test.go",
         "content_search_bench_test.go",
         "content_search_fixture_test.go",
+        "content_search_golden_test.go",
         "content_search_handler_test.go",
         "content_search_test.go",
         "create_pull_request_test.go",
