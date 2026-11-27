@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"context"
@@ -28,16 +28,6 @@ const (
 	replyColorLabel   = "Green-label-sentinel"
 )
 
-// replyEnv is a steer env plus a registered single-select question on a hidden
-// session whose pane shows the real captured dialog.
-type replyEnv struct {
-	*steerEnv
-	clock *gateTestClock
-	pm    *replyPM
-	inst  *instance.Instance
-	qid   string
-}
-
 var colorDialog = panereply.QuestionDialog{
 	Question: "Which color should the spike use?",
 	Header:   "Color",
@@ -46,51 +36,38 @@ var colorDialog = panereply.QuestionDialog{
 
 func newReplyEnv(t *testing.T) *replyEnv {
 	t.Helper()
-	e := newSteerEnv(t)
-	clock := newGateTestClock()
-	e.fix.svc.replyNow = clock.Now
-	e.fix.svc.replyPeerAddr = func(connect.AnyRequest) string { return replyLoopbackPeer }
-	e.fix.svc.replyControllerActive = func(*instance.Instance) bool { return true }
-	// Poll timers fire at once; the 5s send timeout never does (nothing sleeps).
-	e.fix.svc.replyAfter = func(d time.Duration) <-chan time.Time {
-		if d >= time.Second {
-			return nil
-		}
-		ch := make(chan time.Time, 1)
-		ch <- time.Time{}
-		return ch
-	}
-	e.fix.svc.replyState().flag.SetEnabled(true)
+	e := newBareEnv(t)
+	e.svc = New(e.ports())
+	e.svc.flag.SetEnabled(true)
 
 	// The fixture's own labels are Red/Green/Blue; the sentinel label proves the
 	// log never carries a label, so the dialog under test is built from it.
 	dialog := strings.ReplaceAll(replyDialogFixture(t, "question_single_select_3opts.txt"), "2. Green", "2. "+replyColorLabel)
-	pm := &replyPM{dialog: dialog, after: "● User answered Claude's questions\n❯ \n"}
-	pm.probe = func() int { return len(e.readLines()) }
-	inst := instance.NewStartedInstanceForTest(t, "reply-hidden", pm)
+	e.pm = &replyPM{dialog: dialog, after: "● User answered Claude's questions\n❯ \n"}
+	e.pm.probe = func() int { return len(e.readLines()) }
+	inst := instance.NewStartedInstanceForTest(t, "reply-hidden", e.pm)
 	inst.UUID = "reply-hidden-uuid"
 	inst.Path = t.TempDir()
 	inst.Status = domain.Active
 	inst.Program = "claude"
 	inst.Hidden = true
 	inst.CreatedAt, inst.UpdatedAt = time.Now(), time.Now()
-	svctest.AddInstanceToPoller(e.fix.poller, inst)
-
-	re := &replyEnv{steerEnv: e, clock: clock, pm: pm, inst: inst}
-	re.qid = re.register(inst, colorDialog)
-	return re
+	svctest.AddInstanceToPoller(e.poller, inst)
+	e.inst = inst
+	e.qid = e.register(inst, colorDialog)
+	return e
 }
 
 func (e *replyEnv) register(inst *instance.Instance, d panereply.QuestionDialog) string {
 	id := questionkit.NewQuestionID()
-	e.fix.svc.PendingQuestions().Register(questionkit.PendingQuestion{
+	e.svc.PendingQuestions().Register(questionkit.PendingQuestion{
 		QuestionID: id, SessionUUID: inst.UUID, Dialog: d, Token: questionkit.QuestionToken(d.Question),
 	})
 	return id
 }
 
 func (e *replyEnv) reply(sessionID, questionID, text, replyID string) (*sessionv1.ReplyToPendingQuestionResponse, error) {
-	resp, err := e.fix.svc.ReplyToPendingQuestion(e.localCtx(), connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
+	resp, err := e.svc.Reply(e.localCtx(), connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
 		SessionId: sessionID, QuestionId: questionID, ReplyText: text, ReplyId: replyID,
 	}))
 	if err != nil {
@@ -111,7 +88,13 @@ func (e *replyEnv) counter(label string) uint64 {
 }
 
 func replyLines(all []auditkit.AuditLine) []auditkit.AuditLine {
-	return steerLines(all, auditkit.AuditKindReply)
+	var out []auditkit.AuditLine
+	for _, l := range all {
+		if l.Kind == auditkit.AuditKindReply {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // T-RP-02, T-RP-07, T-RP-10
@@ -125,7 +108,7 @@ func TestReply_ShouldClaimAuditThenWriteOneDigitOnceAndReportSent_WhenHiddenSess
 	assert.Equal(t, []int{1}, e.pm.probed, "the fsynced requested line was durable when the digit was written, and the result line was not yet")
 	instance.AssertLeaseFree(t, e.inst)
 	assert.EqualValues(t, 1, e.counter("sent"))
-	_, still := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, still := e.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.False(t, still, "the answered question is consumed")
 
 	lines := replyLines(e.auditLines())
@@ -155,8 +138,8 @@ func TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoP
 	e := newReplyEnv(t)
 
 	t.Run("flag off", func(t *testing.T) {
-		e.fix.svc.replyState().flag.SetEnabled(false)
-		defer e.fix.svc.replyState().flag.SetEnabled(true)
+		e.svc.flag.SetEnabled(false)
+		defer e.svc.flag.SetEnabled(true)
 		assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_DISABLED, e.replyOK("1", "r-flag").Outcome)
 		assert.Empty(t, e.pm.writes())
 	})
@@ -165,7 +148,7 @@ func TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoP
 		require.NoError(t, err)
 		assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING, resp.Outcome)
 
-		other := e.addSession("reply-other", true, "")
+		other := e.addSession("reply-other", true)
 		oq := e.register(other.inst, colorDialog)
 		resp, err = e.reply(e.inst.UUID, oq, "1", "r-other")
 		require.NoError(t, err)
@@ -174,7 +157,7 @@ func TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoP
 		assert.Empty(t, other.pm.writes())
 	})
 	t.Run("not hidden", func(t *testing.T) {
-		vis := e.addSession("reply-visible", false, "")
+		vis := e.addSession("reply-visible", false)
 		vq := e.register(vis.inst, colorDialog)
 		resp, err := e.reply(vis.inst.UUID, vq, "1", "r-vis")
 		require.NoError(t, err)
@@ -182,8 +165,8 @@ func TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoP
 		assert.Empty(t, vis.pm.writes())
 	})
 	t.Run("not waiting: no active controller, status value never consulted", func(t *testing.T) {
-		e.fix.svc.replyControllerActive = func(*instance.Instance) bool { return false }
-		defer func() { e.fix.svc.replyControllerActive = func(*instance.Instance) bool { return true } }()
+		e.controllerActive = func(*instance.Instance) bool { return false }
+		defer func() { e.controllerActive = func(*instance.Instance) bool { return true } }()
 		assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING, e.replyOK("1", "r-nw").Outcome)
 		assert.Empty(t, e.pm.writes())
 	})
@@ -205,7 +188,7 @@ func TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoP
 	})
 
 	// Every refusal left the question claimable and released the lease.
-	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok)
 	instance.AssertLeaseFree(t, e.inst)
 }
@@ -249,7 +232,7 @@ func TestReply_ShouldMakeInFlightReplyIdWaitForTheFirstResult_WhenTwoCallersSend
 	go func() { results <- e.replyOK("1", "r-flight") }()
 	<-e.pm.entered // the first caller is inside the write
 	go func() { results <- e.replyOK("1", "r-flight") }()
-	require.Eventually(t, func() bool { return e.fix.svc.replyState().flights.Size() == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return e.svc.flights.Size() == 1 }, time.Second, time.Millisecond)
 	close(e.pm.gate)
 
 	r1, r2 := <-results, <-results
@@ -297,7 +280,7 @@ func TestReply_ShouldReturnRateLimitedWithRetryAfterBeforeTakingAnyClaim_WhenSec
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED, resp.Outcome)
 	assert.EqualValues(t, 4, resp.RetryAfterSeconds)
 	assert.Len(t, e.pm.writes(), 1)
-	_, claimable := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: q2})
+	_, claimable := e.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: q2})
 	assert.True(t, claimable, "rate limiting happens before the claim")
 
 	// A retry of the first id inside the window is the first result, not RATE_LIMITED.
@@ -315,7 +298,7 @@ func TestReply_ShouldReturnInternalWithZeroWritesAndReleaseTheClaim_WhenPreWrite
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
 	assert.Empty(t, e.pm.writes())
 	assert.EqualValues(t, 1, e.counter("audit_failed"))
-	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok, "the claim was released: Retry is safe")
 	instance.AssertLeaseFree(t, e.inst)
 
@@ -349,7 +332,7 @@ func TestReply_ShouldReturnNotSentAndAllowRetry_WhenTheWriteProvablyWroteNothing
 
 	first := e.replyOK("2", "r-ns")
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT, first.Outcome)
-	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok)
 
 	e.pm.mu.Lock()
@@ -367,7 +350,7 @@ func TestReply_ShouldReturnNotSentWithZeroWrites_WhenTheLeaseIsBusy(t *testing.T
 
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT, e.replyOK("1", "r-busy").Outcome)
 	assert.Empty(t, e.pm.writes())
-	_, claimable := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, claimable := e.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, claimable)
 }
 
@@ -375,7 +358,7 @@ func TestReply_ShouldReturnNotSentWithZeroWrites_WhenTheLeaseIsBusy(t *testing.T
 // other session, whichever of uuid, title or tmux name the request carries.
 func TestReply_ShouldNeverWriteToTheWrongInstance_WhenTwoInstancesSharePath(t *testing.T) {
 	e := newReplyEnv(t)
-	vis := e.addSession("reply-sharing", false, "", func(i *instance.Instance) { i.Path = e.inst.Path })
+	vis := e.addSession("reply-sharing", false, func(i *instance.Instance) { i.Path = e.inst.Path })
 	for _, id := range []string{vis.inst.UUID, vis.inst.Title} {
 		resp, err := e.reply(id, e.qid, "1", "r-share-"+id)
 		require.NoError(t, err)
@@ -395,29 +378,21 @@ func TestReply_ShouldNeverWriteToTheWrongInstance_WhenTwoInstancesSharePath(t *t
 func TestReply_ShouldReturnPermissionDeniedAndCountRefused_WhenAuthModeNoneAndPeerNotLoopback(t *testing.T) {
 	e := newReplyEnv(t)
 	for _, peer := range []string{"192.168.1.20:50000", ""} {
-		e.fix.svc.replyPeerAddr = func(connect.AnyRequest) string { return peer }
+		e.peer = func(connect.AnyRequest) string { return peer }
 		_, err := e.reply(e.inst.UUID, e.qid, "1", "r-peer-"+peer)
 		require.Error(t, err)
 		assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 	}
 	// A loopback peer behind a proxy header is remote too.
-	e.fix.svc.replyPeerAddr = func(connect.AnyRequest) string { return replyLoopbackPeer }
+	e.peer = func(connect.AnyRequest) string { return replyLoopbackPeer }
 	ctx := e.requestCtx(access.ListenerLocal, false, "localhost:8543", map[string]string{"X-Forwarded-For": "203.0.113.9"})
-	_, err := e.fix.svc.ReplyToPendingQuestion(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
+	_, err := e.svc.Reply(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
 		SessionId: e.inst.UUID, QuestionId: e.qid, ReplyText: "1", ReplyId: "r-proxy",
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 	assert.EqualValues(t, 3, e.counter("refused"))
 	assert.Empty(t, e.pm.writes())
-}
-
-// T-RP-21: the guards flag has no effect on Reply in either state.
-func TestReply_ShouldIgnoreTheGuardsFlag_WhenItIsOffAndWhenOn(t *testing.T) {
-	e := newReplyEnv(t)
-	e.fix.svc.guards = &access.UnaryGuardsFlag{}
-	e.fix.svc.guards.SetEnabled(false)
-	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT, e.replyOK("1", "r-g-off").Outcome)
 }
 
 // T-RP-36: no option label or question text reaches the INFO log; the audit file
@@ -445,7 +420,7 @@ func TestReply_ShouldWaitNoLonger_WhenFollowerContextIsCancelled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(e.localCtx())
 	cancel()
-	_, err := e.fix.svc.ReplyToPendingQuestion(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
+	_, err := e.svc.Reply(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
 		SessionId: e.inst.UUID, QuestionId: e.qid, ReplyText: "1", ReplyId: "r-cancel",
 	}))
 	require.Error(t, err)

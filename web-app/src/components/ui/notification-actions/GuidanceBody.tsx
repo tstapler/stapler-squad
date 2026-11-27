@@ -14,7 +14,7 @@ import { buildSpec } from "./actionSpec";
 
 const isLive = (d?: NotificationActionDescriptor) => d?.kind === ActionKind.ANSWER_QUESTION;
 const REASON_READ_ONLY = "read_only";
-/** ActionResult.StaleReason (server/services/question_answer_sequence.go) when part of a multi-question answer was typed. */
+/** ActionResult.StaleReason (server/services/qareply/question_answer_sequence.go) when part of a multi-question answer was typed. */
 const ANSWER_ABORTED_PARTIAL = "answer_aborted_partial";
 
 /** What this browser knows about the last attempt, in the vocabulary of the delivery line. */

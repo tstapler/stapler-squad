@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"context"
@@ -25,7 +25,7 @@ func (e *routerEnv) answeredThenShowing(title string, state domain.DeliveryState
 	require.Equal(e.t, outApplied, e.answer(inst, qid, replyColorLabel).Outcome)
 	pm.frames = []string{pm.dialog, pm.dialog, afterRetry}
 	if state == domain.DeliveryStateFailed {
-		moved, err := e.fix.storage.SetGuidanceDelivery(context.Background(), uuid.MustParse(qid), domain.DeliveryRouteLiveKeystroke, state, 0)
+		moved, err := e.storage.SetGuidanceDelivery(context.Background(), uuid.MustParse(qid), domain.DeliveryRouteLiveKeystroke, state, 0)
 		require.NoError(e.t, err)
 		require.True(e.t, moved)
 	}
@@ -82,7 +82,7 @@ func TestAnswerRouter_ShouldNotRewrite_WhenAnAnsweredRowIsRetriedWithoutConfirm(
 func TestAnswerRouter_ShouldReportAlreadyResolved_WhenRetryAnywayRacesAnAcknowledgement(t *testing.T) {
 	e := newRouterEnv(t)
 	inst, pm, qid := e.answeredThenShowing("retry-acked", domain.DeliveryStateSent, "● answered\n❯ \n")
-	moved, err := e.fix.storage.SetGuidanceDelivery(context.Background(), uuid.MustParse(qid), domain.DeliveryRouteLiveKeystroke, domain.DeliveryStateAcknowledged, 0)
+	moved, err := e.storage.SetGuidanceDelivery(context.Background(), uuid.MustParse(qid), domain.DeliveryRouteLiveKeystroke, domain.DeliveryStateAcknowledged, 0)
 	require.NoError(t, err)
 	require.True(t, moved)
 

@@ -58,18 +58,6 @@ func (s *SessionService) PaneCapture(ctx context.Context, sessionUUID string) (s
 	return s.ackCapture(ctx, sessionUUID, false)
 }
 
-// ensureRegistered re-registers an expired hook question from its durable row,
-// through the explicit mirror when given and otherwise the installed one.
-func (s *SessionService) ensureRegistered(explicit *questionkit.GuidanceHookMirror) func(context.Context, questionkit.QuestionKey) bool {
-	return func(ctx context.Context, key questionkit.QuestionKey) bool {
-		m := explicit
-		if m == nil {
-			m = s.guidanceMirror.Load()
-		}
-		return m != nil && m.EnsureRegistered(ctx, key)
-	}
-}
-
 // GuidanceSeedPorts binds the e2e question seed route to this service's live sessions.
 func (s *SessionService) GuidanceSeedPorts() guidance.SeedPorts {
 	return guidance.SeedPorts{
@@ -87,11 +75,8 @@ func (s *SessionService) GuidanceSeedPorts() guidance.SeedPorts {
 // deliveryProbes reads unconfirmed answers from the detector and session
 // liveness from the live service. acks may be nil.
 func (s *SessionService) deliveryProbes(acks *guidance.GuidanceAckDetector) guidance.DeliveryProbes {
-	phase := func(sessionUUID string) answerPhase { return s.answerSessions()(sessionUUID).phase }
-	p := guidance.DeliveryProbes{
-		SessionEnded:    func(sessionUUID string) bool { return phase(sessionUUID) != phaseLive },
-		SessionArchived: func(sessionUUID string) bool { return phase(sessionUUID) == phaseArchived },
-	}
+	replies := s.replyService()
+	p := guidance.DeliveryProbes{SessionEnded: replies.SessionEnded, SessionArchived: replies.SessionArchived}
 	if acks != nil {
 		p.Unconfirmed = acks.Unconfirmed
 	}

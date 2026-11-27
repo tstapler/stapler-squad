@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"context"
@@ -56,11 +56,10 @@ func newRouterEnv(t *testing.T) *routerEnv {
 	t.Helper()
 	e := &routerEnv{replyEnv: newReplyEnv(t), acks: &recordingAcks{}, flags: &fakeActionFlags{off: map[string]bool{}}}
 	e.activity = access.NewHumanActivity(e.clock.Now)
-	e.router = e.fix.svc.WireAnswerRouter(AnswerRouterDeps{Rows: e.fix.storage, Acks: e.acks})
-	e.router.flags = e.flags
-	e.router.guard = access.NewHumanActiveGuard(e.activity, func(context.Context, string) ([]tmux.ClientActivity, error) {
-		return e.clients, nil
-	})
+	e.router = e.svc.NewAnswerRouter(AnswerRouterDeps{Rows: e.storage, Acks: e.acks, Flags: e.flags,
+		Guard: access.NewHumanActiveGuard(e.activity, func(context.Context, string) ([]tmux.ClientActivity, error) {
+			return e.clients, nil
+		})})
 	return e
 }
 
@@ -78,7 +77,7 @@ func (e *routerEnv) addVisible(title string, tweak ...func(*instance.Instance)) 
 	for _, f := range tweak {
 		f(inst)
 	}
-	svctest.AddInstanceToPoller(e.fix.poller, inst)
+	svctest.AddInstanceToPoller(e.poller, inst)
 	return inst, pm
 }
 
@@ -97,9 +96,9 @@ func (e *routerEnv) hookRow(inst *instance.Instance, d panereply.QuestionDialog)
 		DeliveryRoute: domain.DeliveryRouteLiveKeystroke,
 	})
 	require.NoError(e.t, err)
-	row, err := e.fix.storage.CreateMirroredGuidanceRequest(context.Background(), gr, 0)
+	row, err := e.storage.CreateMirroredGuidanceRequest(context.Background(), gr, 0)
 	require.NoError(e.t, err)
-	e.fix.svc.PendingQuestions().Register(questionkit.PendingQuestion{
+	e.svc.PendingQuestions().Register(questionkit.PendingQuestion{
 		QuestionID: row.ID, SessionUUID: inst.UUID, Dialog: d, Token: questionkit.QuestionToken(d.Question),
 	})
 	return row.ID
@@ -108,7 +107,7 @@ func (e *routerEnv) hookRow(inst *instance.Instance, d panereply.QuestionDialog)
 // agentRow stores an agent-created session-scope question.
 func (e *routerEnv) agentRow(inst *instance.Instance) string {
 	e.t.Helper()
-	row, err := e.fix.storage.CreateGuidanceRequest(context.Background(), domain.CreateGuidanceRequestInput{
+	row, err := e.storage.CreateGuidanceRequest(context.Background(), domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeSession, SessionUUID: inst.UUID, QuestionText: "Which cache?",
 		QuestionType: domain.QuestionTypeMultipleChoice, Options: `["Redis","Memcached"]`,
 	})
@@ -118,7 +117,7 @@ func (e *routerEnv) agentRow(inst *instance.Instance) string {
 
 func (e *routerEnv) row(id string) *domain.GuidanceRequestData {
 	e.t.Helper()
-	row, err := e.fix.storage.GetGuidanceRequest(context.Background(), uuid.MustParse(id))
+	row, err := e.storage.GetGuidanceRequest(context.Background(), uuid.MustParse(id))
 	require.NoError(e.t, err)
 	return row
 }
@@ -364,7 +363,7 @@ func TestAnswerRouter_ShouldReportSessionEnded_WhenTheReaperCancelledAHookRow(t 
 	e := newRouterEnv(t)
 	inst, pm := e.addVisible("stopped-hook", func(i *instance.Instance) { i.Status = domain.Stopped })
 	qid := e.hookRow(inst, colorDialog)
-	_, err := e.fix.storage.CancelGuidanceRequest(context.Background(), uuid.MustParse(qid), domain.CancelReasonSessionEnded.String())
+	_, err := e.storage.CancelGuidanceRequest(context.Background(), uuid.MustParse(qid), domain.CancelReasonSessionEnded.String())
 	require.NoError(t, err)
 
 	res := e.answer(inst, qid, replyColorLabel)

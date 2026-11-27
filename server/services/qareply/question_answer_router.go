@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // question_answer_router.go is the AnswerRouter of ADR-005: it picks a delivery
@@ -49,17 +50,22 @@ type routedSession struct {
 
 type answerSessionFinder func(sessionID string) routedSession
 
-// answerFlags resolves the flag composition that gates an answer on route.
-type answerFlags interface {
+// AnswerFlags resolves the flag composition that gates an answer on route.
+type AnswerFlags interface {
 	Answer(route flagsvc.AnswerRoute) bool
 }
 
 // AnswerRouterDeps are the collaborators of the router. Nil members disable
 // what needs them: no Rows means no durable routes and no delivery state.
+// Flags is required.
 type AnswerRouterDeps struct {
-	Rows   questionkit.AnswerRows
+	Rows questionkit.AnswerRows
+	// Mirror re-registers an expired hook question; nil uses Ports.InstalledMirror.
 	Mirror *questionkit.GuidanceHookMirror
 	Acks   questionkit.DeliverySink
+	Flags  AnswerFlags
+	// Guard refuses to type while a person is typing; nil is the process-wide activity record.
+	Guard *access.HumanActiveGuard
 }
 
 // AnswerRouter implements QuestionReplier over the ADR-005 ladder.
@@ -71,9 +77,83 @@ type AnswerRouter struct {
 	hidden    replyFunc
 	visible   func() *PaneReplyCore
 	guard     *access.HumanActiveGuard
-	flags     answerFlags
+	flags     AnswerFlags
 	rows      questionkit.AnswerRows
 	acks      questionkit.DeliverySink
+}
+
+// classify reads how alive a session is from the live poller.
+func (s *Service) classify(sessionID string) routedSession {
+	inst := s.ports.FindInstance(sessionID)
+	switch {
+	case inst == nil:
+		return routedSession{}
+	case inst.IsArchived():
+		return routedSession{inst: inst, phase: phaseArchived}
+	case inst.Snapshot().Status.IsSuspended():
+		return routedSession{inst: inst, phase: phaseStopped}
+	}
+	return routedSession{inst: inst, phase: phaseLive}
+}
+
+// SessionEnded reports a session whose dialog can no longer take a keystroke.
+func (s *Service) SessionEnded(sessionID string) bool {
+	return s.classify(sessionID).phase != phaseLive
+}
+
+// SessionArchived reports a deliberately retired session.
+func (s *Service) SessionArchived(sessionID string) bool {
+	return s.classify(sessionID).phase == phaseArchived
+}
+
+// inProcessPeer lets the router call the reply handler in process: a request
+// built by connect.NewRequest has no peer address, which the handler's
+// local-caller verdict would refuse. The dispatcher has already run that
+// verdict on the real peer. A network request always carries an address.
+func inProcessPeer(req connect.AnyRequest) string {
+	if addr := req.Peer().Addr; addr != "" {
+		return addr
+	}
+	return inProcessPeerAddr
+}
+
+// NewAnswerRouter installs the in-process peer the router needs to call the
+// reply handler (unless a peer reader is already set) and returns the
+// QuestionReplier over this service.
+func (s *Service) NewAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
+	if s.peerAddr == nil {
+		s.peerAddr = inProcessPeer
+	}
+	if d.Guard == nil {
+		d.Guard = access.NewHumanActiveGuard(access.DefaultHumanActivity(), tmux.ListClientActivity)
+	}
+	return &AnswerRouter{
+		sessions: s.classify, questions: s.store, hidden: s.Reply,
+		visible: s.paneReplyCore, guard: d.Guard,
+		flags: d.Flags, rows: d.Rows, acks: d.Acks,
+		ensure: s.ensureRegistered(d.Mirror),
+		reopen: func(q questionkit.PendingQuestion) {
+			s.store.Forget(questionkit.QuestionKey{SessionUUID: q.SessionUUID, QuestionID: q.QuestionID})
+			s.store.Register(q)
+		},
+	}
+}
+
+// ensureRegistered re-registers an expired hook question from its durable row,
+// through the explicit mirror when given and otherwise the installed one.
+func (s *Service) ensureRegistered(explicit *questionkit.GuidanceHookMirror) func(context.Context, questionkit.QuestionKey) bool {
+	return func(ctx context.Context, key questionkit.QuestionKey) bool {
+		m := explicit
+		if m == nil {
+			m = s.ports.InstalledMirror()
+		}
+		return m != nil && m.EnsureRegistered(ctx, key)
+	}
+}
+
+// InlineActionEnabledForTest reports the inline-action flag the router was wired with.
+func (r *AnswerRouter) InlineActionEnabledForTest(decisionPoint string) bool {
+	return r.flags.(interface{ Inline(string) bool }).Inline(decisionPoint)
 }
 
 // RouteFor says where an answer to a question of sessionID would go.

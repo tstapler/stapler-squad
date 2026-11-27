@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"context"
@@ -190,7 +190,7 @@ func TestReply_ShouldFindNothingToClaim_WhenAnotherReplyIDArrivesDuringTheWrite(
 	reply := func(replyID string) <-chan sessionv1.ReplyOutcome {
 		done := make(chan sessionv1.ReplyOutcome, 1)
 		go func() {
-			resp, err := e.fix.svc.ReplyToPendingQuestion(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
+			resp, err := e.svc.Reply(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
 				SessionId: e.inst.UUID, QuestionId: e.qid, ReplyText: "1", ReplyId: replyID,
 			}))
 			assert.NoError(t, err)

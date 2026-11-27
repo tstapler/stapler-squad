@@ -1,7 +1,7 @@
-// Package services mimics server/services/question_answer_router.go. The
+// Package qareply mimics server/services/qareply/question_answer_router.go. The
 // AnswerRouter resume route never revives by decision (Task 3.4d); the file is
 // in lifecycleFiles as a ratchet, so any revival added there needs a guard.
-package services
+package qareply
 
 type inst struct{}
 

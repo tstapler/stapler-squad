@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"testing"
@@ -16,7 +16,7 @@ func (e *replyEnv) assertRefusedAsArchived(resp *sessionv1.ReplyToPendingQuestio
 	e.t.Helper()
 	assert.Equal(e.t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING, resp.Outcome)
 	assert.Empty(e.t, e.pm.writes(), "no keystroke is written to an archived session")
-	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(e.t, ok, "the question is not consumed")
 	instance.AssertLeaseFree(e.t, e.inst)
 }
@@ -33,7 +33,7 @@ func TestReply_ShouldRefuseWithZeroWrites_WhenSessionIsArchived(t *testing.T) {
 // Archival can land after the request was admitted; the last check before the write sees it.
 func TestReply_ShouldRefuseWithZeroWrites_WhenSessionIsArchivedWhileTheReplyIsInFlight(t *testing.T) {
 	e := newReplyEnv(t)
-	e.fix.svc.replyControllerActive = func(inst *instance.Instance) bool {
+	e.controllerActive = func(inst *instance.Instance) bool {
 		now := time.Now()
 		inst.SetArchivedAt(&now)
 		return true

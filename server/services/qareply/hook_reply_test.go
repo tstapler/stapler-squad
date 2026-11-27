@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"context"
@@ -10,8 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/internal/hookipc"
-	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
@@ -35,14 +33,14 @@ func askToolInput(question string, labels ...string) map[string]interface{} {
 type hookReplyEnv struct {
 	storage  *session.Storage
 	acks     *recordingAcks
-	resolver *hookReplyResolver
+	resolver *HookReplyResolver
 	flags    *fakeActionFlags
 }
 
 func newHookReplyEnv(t *testing.T) *hookReplyEnv {
 	t.Helper()
 	e := &hookReplyEnv{storage: svctest.CreateTestStorage(t), acks: &recordingAcks{}, flags: &fakeActionFlags{off: map[string]bool{}}}
-	e.resolver = &hookReplyResolver{rows: e.storage, flags: e.flags, acks: e.acks}
+	e.resolver = &HookReplyResolver{rows: e.storage, flags: e.flags, acks: e.acks}
 	return e
 }
 
@@ -212,43 +210,4 @@ func TestHookReply_ShouldServeThroughTheRealFlagChain_WhenS1IsRecorded(t *testin
 	require.NoError(t, err)
 
 	assert.NotNil(t, e.resolver.Reply(context.Background(), "s1", askToolInput("Which cache?", "Redis")))
-}
-
-type stubReplier struct {
-	out     *hookipc.HookOutput
-	session string
-	calls   int
-}
-
-func (s *stubReplier) Reply(_ context.Context, sessionUUID string, _ map[string]interface{}) *hookipc.HookOutput {
-	s.calls++
-	s.session = sessionUUID
-	return s.out
-}
-
-func TestHookClassifier_Classify_ShouldReturnTheReplierAnswer_WhenAskUserQuestionIsAnswered(t *testing.T) {
-	answer := hookAllowWithAnswers(askToolInput("Q?", "A"), map[string]string{"Q?": "A"})
-	replier := &stubReplier{out: answer}
-	service := approvals.NewHookClassifier(&hookPolicyStub{}, nil)
-	service.SetHookReplier(replier)
-	request := hookRequest("AskUserQuestion")
-	request.Context.Env = map[string]string{approvals.SessionUUIDEnv: "uuid-1"}
-
-	reply, err := service.Classify(context.Background(), request)
-
-	require.NoError(t, err)
-	assert.Same(t, answer, reply.Output)
-	assert.Equal(t, hookipc.DecisionSourcePrimary, reply.Source)
-	assert.Equal(t, "uuid-1", replier.session)
-}
-
-func TestHookClassifier_Classify_ShouldDefer_WhenTheReplierHasNoAnswerOrIsAbsent(t *testing.T) {
-	withReplier := approvals.NewHookClassifier(&hookPolicyStub{}, nil)
-	withReplier.SetHookReplier(&stubReplier{})
-	for name, svc := range map[string]*approvals.HookClassifier{"no answer": withReplier, "no replier": approvals.NewHookClassifier(&hookPolicyStub{}, nil)} {
-		reply, err := svc.Classify(context.Background(), hookRequest("AskUserQuestion"))
-		require.NoError(t, err, name)
-		assert.Nil(t, reply.Output, name)
-		assert.Equal(t, hookipc.DecisionSourceDefer, reply.Source, name)
-	}
 }

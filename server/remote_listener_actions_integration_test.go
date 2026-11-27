@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
+	"github.com/tstapler/stapler-squad/server/services/qareply"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -122,7 +123,7 @@ func newRemoteActionEnv(t *testing.T) *remoteActionEnv {
 
 	f := &actionFakes{}
 	svc.SetNotificationActionDispatcher(notifyactions.NewNotificationActionDispatcher(notifyactions.ActionDelegates{
-		Approvals: f, Questions: svc.WireAnswerRouter(services.AnswerRouterDeps{}), Guidance: f, Backlog: f, Cancels: f,
+		Approvals: f, Questions: svc.WireAnswerRouter(qareply.AnswerRouterDeps{}), Guidance: f, Backlog: f, Cancels: f,
 	}, nil, svc.FeatureFlagRegistry()))
 
 	srv, _ := newChainTestServer(t, "localhost:8543")

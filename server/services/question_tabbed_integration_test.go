@@ -89,8 +89,8 @@ func TestRegisterQuestion_should_KeepATabbedAskViewOnly_WhenTheSenderIsUnverifie
 func tabbedRowOf(t *testing.T) *domain.GuidanceRequestData {
 	t.Helper()
 	env := newRouterEnv(t)
-	inst, _ := env.addTabbed("tabbed-row", nil)
-	return env.row(env.twoQuestionRow(inst, false))
+	inst, _ := env.addVisible("tabbed-row")
+	return env.row(env.twoQuestionRow(inst))
 }
 
 func TestJudgeRow_should_MatchATabbedRowByItsTabBarNotByDialogMatch(t *testing.T) {
@@ -114,23 +114,6 @@ func TestHeadersMatch_should_RejectATabbedFrameOfAnotherQuestionSet(t *testing.T
 	qs[1].Header = "Colours"
 	assert.False(t, questionkit.TabbedHeadersMatch(qs)(frame))
 	assert.False(t, own(replyDialogFixture(t, "question_single_select_3opts.txt")))
-}
-
-func TestSequenceQuestions_should_RefuseARowThatIsNotAReplyableHookRow(t *testing.T) {
-	env := newRouterEnv(t)
-	inst, _ := env.addTabbed("agent-twoq", tabbedFrames(t))
-	_, ok := env.router.sequenceQuestions(context.Background(), env.twoQuestionRow(inst, false))
-	assert.True(t, ok)
-
-	row := *env.row(env.twoQuestionRow(inst, false))
-	row.Source = domain.QuestionSourceAgentMCP
-	_, ok = questionkit.TabbedFromRow(&row)
-	assert.False(t, ok, "an agent_mcp row has no dialog on the pane to type into")
-
-	row = *env.row(env.twoQuestionRow(inst, false))
-	row.DeliveryRoute = ""
-	_, ok = questionkit.TabbedFromRow(&row)
-	assert.False(t, ok, "a view-only hook row is never typed into")
 }
 
 func TestAckDetector_should_JudgeATabbedAnswerByItsTabBar_When_theDialogStaysOrLeaves(t *testing.T) {

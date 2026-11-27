@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"context"
@@ -22,22 +22,34 @@ import (
 // The wire shape is the one spike S1 measured: updatedInput echoes the
 // questions unchanged and adds answers keyed by the full question text.
 
-type hookReplyRows interface {
+// HookReplyRows is the durable question store the hook answerer reads and marks.
+type HookReplyRows interface {
 	ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*domain.GuidanceRequestData, error)
 	AnswerGuidanceRequest(ctx context.Context, id uuid.UUID, answer string) (bool, error)
 	SetGuidanceDelivery(ctx context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, addAttempts int) (bool, error)
 }
 
-type hookReplyResolver struct {
-	rows  hookReplyRows
-	flags answerFlags
+// HookReplyResolver answers an AskUserQuestion hook from a pre-answered row.
+type HookReplyResolver struct {
+	rows  HookReplyRows
+	flags AnswerFlags
 	acks  questionkit.DeliverySink
+}
+
+// NewHookReplyResolver builds the answerer; a nil acks interface records no delivery.
+func NewHookReplyResolver(rows HookReplyRows, flags AnswerFlags, acks questionkit.DeliverySink) *HookReplyResolver {
+	return &HookReplyResolver{rows: rows, flags: flags, acks: acks}
+}
+
+// InlineActionEnabledForTest reports the inline-action flag the resolver was wired with.
+func (r *HookReplyResolver) InlineActionEnabledForTest(decisionPoint string) bool {
+	return r.flags.(interface{ Inline(string) bool }).Inline(decisionPoint)
 }
 
 // PreAnswer records answer on a still-open single-question row for a hook to
 // serve later (a peer or agent answer that arrives before the dialog is asked).
 // It reports false when the row was already answered or cancelled.
-func (r *hookReplyResolver) PreAnswer(ctx context.Context, rowID, answer string) (bool, error) {
+func (r *HookReplyResolver) PreAnswer(ctx context.Context, rowID, answer string) (bool, error) {
 	id, err := uuid.Parse(rowID)
 	if err != nil {
 		return false, err
@@ -50,7 +62,7 @@ func (r *hookReplyResolver) PreAnswer(ctx context.Context, rowID, answer string)
 }
 
 // Reply serves the oldest matching pre-answered row of the session.
-func (r *hookReplyResolver) Reply(ctx context.Context, sessionUUID string, toolInput map[string]interface{}) *hookipc.HookOutput {
+func (r *HookReplyResolver) Reply(ctx context.Context, sessionUUID string, toolInput map[string]interface{}) *hookipc.HookOutput {
 	if sessionUUID == "" || !r.flags.Answer(flagsvc.RouteHookReply) {
 		return nil
 	}
@@ -71,7 +83,7 @@ func (r *hookReplyResolver) Reply(ctx context.Context, sessionUUID string, toolI
 	return nil
 }
 
-func (r *hookReplyResolver) serve(ctx context.Context, row *domain.GuidanceRequestData, sessionUUID string, asked questionkit.AskedQuestion, toolInput map[string]interface{}) *hookipc.HookOutput {
+func (r *HookReplyResolver) serve(ctx context.Context, row *domain.GuidanceRequestData, sessionUUID string, asked questionkit.AskedQuestion, toolInput map[string]interface{}) *hookipc.HookOutput {
 	if row.AnsweredAt == nil || row.CancelledAt != nil || (row.AskerSessionUUID != sessionUUID && row.SessionUUID != sessionUUID) {
 		return nil
 	}

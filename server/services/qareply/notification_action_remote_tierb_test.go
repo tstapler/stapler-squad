@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"testing"

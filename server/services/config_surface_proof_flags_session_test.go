@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/qareply"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -30,7 +31,7 @@ func TestConfigSurfaceProof_HiddenSessionReadonlyGuards_ChangesWriteToHiddenSess
 
 func TestConfigSurfaceProof_HiddenSessionReply_ChangesReplyOutcome(t *testing.T) {
 	e := newReplyEnv(t)
-	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{featureflags.HiddenSessionReplyFlagName: replyFlagAuditPolicy})
+	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{featureflags.HiddenSessionReplyFlagName: qareply.FlagAuditPolicy})
 	e.fix.svc.wireReplyFlag()
 	replies := 0
 

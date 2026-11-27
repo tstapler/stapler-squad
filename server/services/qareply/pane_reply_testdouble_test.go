@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"errors"
@@ -19,7 +19,7 @@ import (
 // replyDialogFixture loads a verbatim capture of a real Claude Code dialog.
 func replyDialogFixture(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "session", "testdata", "reply_dialogs", name))
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "session", "testdata", "reply_dialogs", name))
 	require.NoError(t, err)
 	return string(b)
 }

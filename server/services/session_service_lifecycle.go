@@ -454,7 +454,7 @@ func (s *SessionService) DeleteSession(
 
 	// Publish SessionDeleted event to all watchers. Use UUID so the frontend
 	// entity adapter (keyed by UUID) matches and tombstones the correct entry.
-	s.onSessionDeletedForReply(sessionUUID)
+	s.replyService().SessionDeleted(sessionUUID)
 	s.eventBus.Publish(events.NewSessionDeletedEvent(sessionUUID))
 
 	return connect.NewResponse(&sessionv1.DeleteSessionResponse{

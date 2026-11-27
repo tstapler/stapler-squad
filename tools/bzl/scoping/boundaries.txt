@@ -124,3 +124,4 @@ server/services/guidance !server/web
 server/services/notify !server/web
 server/services/approvals !server/web
 server/services/notifyactions !server/web
+server/services/qareply !server/web

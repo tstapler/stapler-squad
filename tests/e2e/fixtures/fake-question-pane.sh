@@ -15,7 +15,7 @@ dialog="$dialogs/question_single_select_3opts.txt"
 : > "$out"
 
 # tabbed_frame N prints the pane after N keys of the recorded sequence. Frames 2-3 and 5-6 are the real
-# AB_toggled capture with only its focus and checkbox marks moved, as in server/services/pane_reply_sequence_test.go.
+# AB_toggled capture with only its focus and checkbox marks moved, as in server/services/qareply/pane_reply_sequence_test.go.
 tabbed_frame() {
   local ab="$dialogs/claude_auq_twoq_step2_multiselect_AB_toggled.txt"
   case "$1" in

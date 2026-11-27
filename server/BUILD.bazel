@@ -400,6 +400,7 @@ go_test(
         "//server/services/guidance",
         "//server/services/notify",
         "//server/services/notifyactions",
+        "//server/services/qareply",
         "//server/services/questionkit",
         "//server/services/quota",
         "//server/services/webhooks",
