@@ -355,6 +355,8 @@ export class InlineActionRow {
     // Scroll first: the click's own scroll-into-view would fire a scroll event right before the press.
     await control.scrollIntoViewIfNeeded();
     await waitForStableBox(control);
+    // click() can scroll again to get an unobstructed hit point; the trial does that now, outside the fling guard.
+    if (!force) await control.click({ trial: true });
     await waitForTrayScrollIdle(this.page);
     if (tap) await control.tap({ force });
     else await control.click({ force });

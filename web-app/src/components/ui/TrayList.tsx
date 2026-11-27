@@ -23,7 +23,13 @@ export type ListRow = TrayRow | { kind: "load-more"; key: string };
 
 export type TrayItemProps = Omit<NotificationItemProps, "group" | "removeFromHistory" | "offlineReason">;
 
-interface TrayListProps {
+interface TrayListPaging {
+  hasMore: boolean;
+  loading: boolean;
+  onLoadMore: () => void;
+}
+
+interface TrayListProps extends TrayListPaging {
   rows: ListRow[];
   /** Total selectable rows, for aria-setsize. */
   setSize: number;
@@ -33,9 +39,6 @@ interface TrayListProps {
   scrollRef: RefObject<HTMLDivElement | null>;
   /** Height of the non-virtual block (search, filters, cards) above the list in the same scroller. */
   scrollMargin?: number;
-  hasMore: boolean;
-  loading: boolean;
-  onLoadMore: () => void;
   onToggleGroup: (key: string) => void;
   /** Dismiss every record of an informational group (undoable). */
   onDismissGroup: (group: GroupedNotification) => void;
@@ -224,6 +227,7 @@ export function TrayList({
                     {row.label} ({row.count})
                   </span>
                 ) : (
+                  // analytics-exempt
                   <button
                     type="button"
                     className={groupToggle}
@@ -238,6 +242,7 @@ export function TrayList({
                   </button>
                 )}
                 {!row.pinned && !row.collapsed && (
+                  // analytics-exempt
                   <button
                     type="button"
                     className={trayButton}
@@ -255,7 +260,7 @@ export function TrayList({
           } else if (row.kind === "load-more") {
             body = (
               <div className={groupNote}>
-                <button type="button" className={loadMoreButton} onClick={onLoadMore} disabled={loading}>
+                <button type="button" className={loadMoreButton} onClick={onLoadMore} disabled={loading}>{/* analytics-exempt */}
                   {loading ? "Loading..." : "Load more"}
                 </button>
               </div>

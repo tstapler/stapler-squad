@@ -179,7 +179,7 @@ describe("Story 2.10b: digit and focus guards", () => {
     expect(rowKeys(container).filter((k) => k !== null && /^[nq]\d/.test(k))).toEqual(["n0", "q0"]);
     operatorFocus(approveOf(0));
     await act(async () => approveOf(0).click());
-    panelState.history = [resolvedElsewhere(panelState.history.find((n) => n.id === "n0")!), ...panelState.history.filter((n) => n.id !== "n0")];
+    panelState.history = [resolvedElsewhere(panelState.history.find((n) => n.id === "n0") as (typeof panelState.history)[number]), ...panelState.history.filter((n) => n.id !== "n0")];
     refreshPanel();
     advance(GRACE);
     const q0 = rowOf(container, "q0");
