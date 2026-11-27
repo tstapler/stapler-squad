@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/domain"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
@@ -127,7 +128,7 @@ func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionReque
 		if err := instance.Resume(); err != nil {
 			return false, classifyPauseResumeErr(err, "resume")
 		}
-		RefreshInstanceHookProof(instance)
+		approvals.RefreshInstanceHookProof(instance)
 		// Clear pause reason only after a successful resume.
 		instance.SetPauseReason("")
 		return true, nil

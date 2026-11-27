@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/hookipc"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
@@ -227,10 +228,10 @@ func (s *stubReplier) Reply(_ context.Context, sessionUUID string, _ map[string]
 func TestHookClassifier_Classify_ShouldReturnTheReplierAnswer_WhenAskUserQuestionIsAnswered(t *testing.T) {
 	answer := hookAllowWithAnswers(askToolInput("Q?", "A"), map[string]string{"Q?": "A"})
 	replier := &stubReplier{out: answer}
-	service := NewHookClassifier(&hookPolicyStub{}, nil)
+	service := approvals.NewHookClassifier(&hookPolicyStub{}, nil)
 	service.SetHookReplier(replier)
 	request := hookRequest("AskUserQuestion")
-	request.Context.Env = map[string]string{SessionUUIDEnv: "uuid-1"}
+	request.Context.Env = map[string]string{approvals.SessionUUIDEnv: "uuid-1"}
 
 	reply, err := service.Classify(context.Background(), request)
 
@@ -241,9 +242,9 @@ func TestHookClassifier_Classify_ShouldReturnTheReplierAnswer_WhenAskUserQuestio
 }
 
 func TestHookClassifier_Classify_ShouldDefer_WhenTheReplierHasNoAnswerOrIsAbsent(t *testing.T) {
-	withReplier := NewHookClassifier(&hookPolicyStub{}, nil)
+	withReplier := approvals.NewHookClassifier(&hookPolicyStub{}, nil)
 	withReplier.SetHookReplier(&stubReplier{})
-	for name, svc := range map[string]*HookClassifier{"no answer": withReplier, "no replier": NewHookClassifier(&hookPolicyStub{}, nil)} {
+	for name, svc := range map[string]*approvals.HookClassifier{"no answer": withReplier, "no replier": approvals.NewHookClassifier(&hookPolicyStub{}, nil)} {
 		reply, err := svc.Classify(context.Background(), hookRequest("AskUserQuestion"))
 		require.NoError(t, err, name)
 		assert.Nil(t, reply.Output, name)

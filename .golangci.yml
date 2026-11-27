@@ -507,6 +507,45 @@ linters:
           allow:
             - $gostd
             - github.com/tstapler/stapler-squad/config
+        # server/services/approvals decides permission requests and injects the hooks that ask for them; it never
+        # imports the services hub (backlogsvc, the hub and the composition root import it).
+        isolate_approvals:
+          list-mode: strict
+          files:
+            - "**/services/approvals/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - golang.org/x/sync/singleflight
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/executor/safeexec
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/internal/hookipc
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/classifier
+            - github.com/tstapler/stapler-squad/pkg/events
+            - github.com/tstapler/stapler-squad/pkg/localtoken
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/server/notifications
+            - github.com/tstapler/stapler-squad/server/services/approvalkit
+            - github.com/tstapler/stapler-squad/server/services/domainage
+            - github.com/tstapler/stapler-squad/server/services/flagsvc
+            - github.com/tstapler/stapler-squad/server/services/fsops
+            - github.com/tstapler/stapler-squad/server/services/notify
+            - github.com/tstapler/stapler-squad/server/services/piextension
+            - github.com/tstapler/stapler-squad/server/services/questionkit
+            - github.com/tstapler/stapler-squad/server/services/secretscan
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/headless
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/panereply
+            - github.com/tstapler/stapler-squad/session/prpoller
+            - github.com/tstapler/stapler-squad/session/queue
+            - github.com/tstapler/stapler-squad/session/tmux
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict

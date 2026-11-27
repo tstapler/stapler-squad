@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/envtest"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -25,7 +25,7 @@ const matrixMCPURL = "http://localhost:8543/mcp"
 
 type matrixEnv struct {
 	dir    string
-	proofs *services.McpProofs
+	proofs *approvals.McpProofs
 	mw     http.Handler
 	probe  *identityProbe
 }
@@ -36,9 +36,9 @@ type matrixEnv struct {
 func newMatrixEnv(t *testing.T) *matrixEnv {
 	t.Helper()
 	dir := envtest.NewIsolatedStateDir(t)
-	keys, err := services.NewHookProofs(dir)
+	keys, err := approvals.NewHookProofs(dir)
 	require.NoError(t, err)
-	proofs := services.NewMcpProofs(keys, dir)
+	proofs := approvals.NewMcpProofs(keys, dir)
 	instance.SetMCPProofProvider(proofs.Provider())
 	t.Cleanup(func() { instance.SetMCPProofProvider(nil) })
 	probe := &identityProbe{}

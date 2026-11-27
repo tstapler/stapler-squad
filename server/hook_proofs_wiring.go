@@ -6,19 +6,19 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 )
 
 // wireHookProofsAndQuestions installs the process-wide hook proofs, feeds the
 // approval handler's question registry and, once per boot, refreshes every live
 // local session's proof file and stale hook entry in the background.
-func wireHookProofsAndQuestions(h *services.ApprovalHandler, deps *ServerDependencies, goBackground func(func()), serverCtx context.Context) {
+func wireHookProofsAndQuestions(h *approvals.ApprovalHandler, deps *ServerDependencies, goBackground func(func()), serverCtx context.Context) {
 	if dir, err := config.GetConfigDir(); err != nil {
 		log.Warn("hook proofs disabled: config dir unavailable", "err", err)
-	} else if proofs, perr := services.NewHookProofs(dir); perr != nil {
+	} else if proofs, perr := approvals.NewHookProofs(dir); perr != nil {
 		log.Warn("hook proofs disabled: secret unavailable", "err", perr)
 	} else {
-		services.SetDefaultHookProofs(proofs)
+		approvals.SetDefaultHookProofs(proofs)
 		h.SetHookProofs(proofs)
 	}
 	var count func(cause string)
@@ -27,9 +27,9 @@ func wireHookProofsAndQuestions(h *services.ApprovalHandler, deps *ServerDepende
 	}
 	h.SetQuestionRegistry(deps.SessionService.PendingQuestions(), count)
 	wireGuidanceMirror(h, deps, serverCtx, goBackground)
-	if deps.ReviewQueuePoller != nil && services.DefaultHookProofs() != nil {
+	if deps.ReviewQueuePoller != nil && approvals.DefaultHookProofs() != nil {
 		goBackground(func() {
-			n := services.RefreshHookProofs(deps.ReviewQueuePoller.GetInstances())
+			n := approvals.RefreshHookProofs(deps.ReviewQueuePoller.GetInstances())
 			log.Info("[HookProof] refreshed live sessions", "sessions", n)
 		})
 	}

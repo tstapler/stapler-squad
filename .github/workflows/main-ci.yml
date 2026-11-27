@@ -203,7 +203,7 @@ jobs:
       # itself (as opposed to the Go code that builds it) gets caught.
       # Without socat on PATH, those tests silently skip instead of
       # running -- see remoteApprovalWriteTool's doc comment
-      # (server/services/hook_injector.go) for the production bug this
+      # (server/services/approvals/hook_injector.go) for the production bug this
       # class of test exists to catch.
       - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux

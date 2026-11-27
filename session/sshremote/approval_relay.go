@@ -53,7 +53,7 @@ const remoteApprovalSocketIDHashBytes = 4
 
 // RemoteApprovalSocketPath returns the remote-host Unix domain socket path
 // convention for a session rooted at basePath on the remote host, keyed by
-// stableSessionID (the same value server/services.ApprovalHandler.
+// stableSessionID (the same value server/services/approvals.ApprovalHandler.
 // resolveSessionID correlates a relayed request back to -- see
 // RemoteApprovalRelayTarget.StableSessionID's doc comment). Hashed rather
 // than used verbatim in the filename: two sessions can share the exact same
@@ -116,7 +116,7 @@ const defaultDialTimeout = 5 * time.Second
 // network-reconnect window this buffering exists to bridge (SSHClientPool's
 // own dial timeout is on the order of seconds), not to the much longer
 // human-decision wait a single hook attempt can now take
-// (server/services.remoteApprovalHookAttemptTimeoutSeconds) -- those are
+// (server/services/approvals.remoteApprovalHookAttemptTimeoutSeconds) -- those are
 // deliberately different budgets.
 const pendingRedeliveryTTL = 60 * time.Second
 
@@ -142,7 +142,7 @@ func newBearerCredential(ttl time.Duration) (bearerCredential, error) {
 }
 
 // relayedApprovalPayload is the JSON envelope the remote hook script
-// (server/services.remoteApprovalHookCommand, Epic 5.2, not this package)
+// (server/services/approvals.remoteApprovalHookCommand, Epic 5.2, not this package)
 // writes to the fixed Unix socket for a single approval request. Token must
 // equal the relay's current bearer credential and must not be expired (see
 // verifyToken); a payload failing either check is dropped without being
@@ -165,10 +165,10 @@ type relayedApprovalPayload struct {
 
 // PermissionRequestHandler is anything that can process a raw
 // PermissionRequest hook payload the same way
-// server/services.ApprovalHandler.HandlePermissionRequest does -- defined
+// server/services/approvals.ApprovalHandler.HandlePermissionRequest does -- defined
 // here (the consumer package) rather than imported from server/services,
 // which would create an import cycle (server/services already imports
-// session/sshremote for KeyStore/KnownHostsStore). *server/services.
+// session/sshremote for KeyStore/KnownHostsStore). *server/services/approvals.
 // ApprovalHandler already has exactly this method signature and satisfies
 // this interface structurally, with zero changes there.
 type PermissionRequestHandler interface {
@@ -195,7 +195,7 @@ type PermissionRequestHandler interface {
 // human decision is made or its own configured timeout fires, exactly as
 // it does for a real local HTTP hook -- and writes the resulting response
 // body back onto the SAME connection before closing it, so the remote-side
-// hook script (server/services.remoteApprovalHookCommand's socat pipeline)
+// hook script (server/services/approvals.remoteApprovalHookCommand's socat pipeline)
 // gets the identical bytes curl's stdout would have gotten locally. This
 // subsumes what was originally planned as a separate Epic 5.3 response-
 // delivery step: merging request+response into one blocking round trip is
@@ -326,7 +326,7 @@ type RemoteApprovalRelayTarget struct {
 	BasePath string
 	// StableSessionID is written into the synthetic HTTP request's
 	// X-CS-Session-ID header before it's handed to PermissionRequestHandler
-	// -- must be the SAME stable ID server/services.ApprovalHandler.
+	// -- must be the SAME stable ID server/services/approvals.ApprovalHandler.
 	// resolveSessionID resolves this session to locally
 	// (session.Instance.GetStableID(): UUID, falling back to Title), or the
 	// handler silently fails to correlate the relayed request with the
@@ -345,7 +345,7 @@ type RemoteApprovalRelayTarget struct {
 // NewRemoteApprovalRelay constructs a RemoteApprovalRelay for a single
 // remote session: pool is the shared SSH connection pool target.RemoteName
 // is dialed under; handler is what every relayed request is driven through
-// (production callers pass a *server/services.ApprovalHandler, which
+// (production callers pass a *server/services/approvals.ApprovalHandler, which
 // satisfies PermissionRequestHandler structurally). See
 // RemoteApprovalRelayTarget's field docs for the rest.
 //
@@ -557,7 +557,7 @@ func (r *RemoteApprovalRelay) dial(client *ssh.Client) (net.Conn, error) {
 
 // handleConnection reads exactly one JSON relayedApprovalPayload from conn,
 // verifies its bearer token, and -- on success -- drives the raw request
-// bytes through r.handler exactly as server/services.ApprovalHandler.
+// bytes through r.handler exactly as server/services/approvals.ApprovalHandler.
 // HandlePermissionRequest would process a real local HTTP POST, then writes
 // the resulting response body back onto conn before closing it. This call
 // BLOCKS for as long as r.handler takes to resolve the request (a human
@@ -573,7 +573,7 @@ func (r *RemoteApprovalRelay) dial(client *ssh.Client) (net.Conn, error) {
 // payload.Request matches r.pendingRequest -- a decision this method already
 // computed on a PRIOR connection but failed to deliver, because that
 // connection died before the write completed -- this is the hook script's
-// own retry (server/services.remoteApprovalHookCommand) resending the exact
+// own retry (server/services/approvals.remoteApprovalHookCommand) resending the exact
 // same captured request, not a new one. r.handler is NOT called again;
 // r.pendingResponse is written back directly. Re-invoking the handler here
 // would be wrong even though it would "work" mechanically: ApprovalHandler

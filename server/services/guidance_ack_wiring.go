@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
@@ -133,7 +134,7 @@ func (s *SessionService) wireHookReply(storage *session.Storage, acks *guidance.
 
 // HookReplier is the AskUserQuestion hook answerer for the hook IPC server. It
 // reads the resolver at call time, so it may be installed before actions are wired.
-func (s *SessionService) HookReplier() HookReplier { return lazyHookReplier{s} }
+func (s *SessionService) HookReplier() approvals.HookReplier { return lazyHookReplier{s} }
 
 type lazyHookReplier struct{ s *SessionService }
 

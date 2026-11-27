@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
@@ -65,7 +66,7 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 
 // ClassificationRecorder is GetAnalyticsStore as the hook paths consume it: a
 // nil interface, not a typed nil pointer, when there is no store.
-func (s *SessionService) ClassificationRecorder() ClassificationRecorder {
+func (s *SessionService) ClassificationRecorder() approvals.ClassificationRecorder {
 	if a := s.GetAnalyticsStore(); a != nil {
 		return a
 	}

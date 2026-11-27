@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/external"
@@ -174,9 +175,9 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// the server; left set, they make later launch commands reference a proof
 	// config file instead of inlining the MCP URL (breaks -count>1 reruns of
 	// the *Wires*Provider tests, which assert on the inline URL).
-	prevProofs := services.DefaultMcpProofs()
+	prevProofs := approvals.DefaultMcpProofs()
 	t.Cleanup(func() {
-		services.SetDefaultMcpProofs(prevProofs)
+		approvals.SetDefaultMcpProofs(prevProofs)
 		instance.SetMCPProofProvider(nil)
 	})
 	// wireDepsIntoServer unconditionally calls SessionService.SetLifecycleContext,

@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/adminmisc"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/server/services/completionreview"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
@@ -118,7 +119,7 @@ type Server struct {
 	connCtxCancel              context.CancelFunc                       // cancels BaseContext → closes active streams on shutdown
 	availablePrograms          []string                                 // cached once at startup; programs change only on system changes
 	startedAt                  time.Time                                // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
-	approvalHandler            *services.ApprovalHandler                // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
+	approvalHandler            *approvals.ApprovalHandler               // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
 	slackInteractiveDisabled   bool                                     // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
 	finalStatsFlush            func()                                   // delivery-gate stats flush; deferred at the top of Shutdown
 	backgroundTasksWG          sync.WaitGroup                           // joined by Shutdown() — every goroutine wireDepsIntoServer starts (sweepers, pollers, watchers, tickers)
@@ -1025,7 +1026,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 
 	// Register Claude Code HTTP hook approval endpoint
-	approvalHandler := services.NewApprovalHandler(
+	approvalHandler := approvals.NewApprovalHandler(
 		deps.SessionService.GetApprovalStore(),
 		deps.Storage,
 		deps.EventBus,
@@ -1040,7 +1041,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
-	services.SetHookBaseURLFn(hookBaseURLFn)
+	approvals.SetHookBaseURLFn(hookBaseURLFn)
 	// PR-body footers identify this instance from any of the owner's machines, so they
 	// must never carry the loopback listen address hookBaseURLFn returns.
 	if deps.BacklogLifecycleListener != nil {
@@ -1293,7 +1294,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.shutdownHooks = append(srv.shutdownHooks, deps.SessionService.Shutdown)
 
 	// Start background expiration cleanup for pending approvals
-	services.StartExpirationCleanup(serverCtx, deps.SessionService.GetApprovalStore(), &srv.backgroundTasksWG)
+	approvals.StartExpirationCleanup(serverCtx, deps.SessionService.GetApprovalStore(), &srv.backgroundTasksWG)
 
 	// Register Escape Code Analytics handler for debugging terminal rendering
 	escapeCodeHandler := escapecode.NewEscapeCodeHandler()

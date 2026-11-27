@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -18,7 +19,7 @@ import (
 func reconcileWithBashRule(t *testing.T, store *approvalkit.ApprovalStore, decision classifier.ClassificationDecision) {
 	t.Helper()
 	rules := newRulesService(t)
-	rules.SetApprovalService(NewApprovalService(store))
+	rules.SetApprovalService(approvals.NewApprovalService(store))
 	rules.classifier.ReplaceRules(append(rules.classifier.Rules(), classifier.Rule{
 		RuleMeta: classifier.RuleMeta{ID: "all-bash", Name: "All Bash", Enabled: true, Source: "user", Priority: 999},
 		ToolName: "Bash", Decision: decision,
@@ -78,11 +79,11 @@ func TestReconcilePendingApprovals_should_HoldWhatTheHandlerQueuedForAHuman_When
 	for name, tc := range humanOnlyCases() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			h, store := newTestHandler(5 * time.Second)
+			h, store := newTestHandler()
 			h.SetClassifier(&countingClassifier{decision: tc.rules})
 			h.SetDomainChecker(newDomainChecker(5 * 24 * time.Hour))
 			answered := make(chan *httptest.ResponseRecorder, 1)
-			go func() { answered <- postPermissionRequestWithCommand(t, h, "s", "Bash", tc.command) }()
+			go func() { answered <- postHookCommand(t, h, "s", "Bash", tc.command) }()
 			require.NoError(t, testutil.WaitForCondition(func() bool { return len(store.ListAll()) == 1 }, testutil.FastWaitConfig()))
 
 			reconcileWithBashRule(t, store, classifier.AutoAllow)

@@ -54,7 +54,7 @@ const (
 // doc comment -- mirrors PermissionRequestHandler's identical rationale in
 // approval_relay.go.
 //
-// Unlike PermissionRequestHandler (which *server/services.ApprovalHandler
+// Unlike PermissionRequestHandler (which *server/services/approvals.ApprovalHandler
 // already satisfies structurally with zero changes), no existing production
 // type satisfies this interface yet: pkg/events.EventBus.Publish takes a
 // *pkg/events.Event, not this signature. The production wiring that starts

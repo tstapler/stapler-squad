@@ -14,8 +14,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/push"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -235,7 +235,7 @@ func TestMatrix_ShouldYieldZeroRoutineOnAutoApprovedSink_WhenHiddenReviewSession
 	gate.Flags().Reload()
 	gate.Index().Replace([]deliverygate.Entry{{UUID: "u-h", Title: hiddenTitle, Hidden: true, Kind: deliverygate.KindReview}})
 
-	h := services.NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, events.NewEventBus(8))
+	h := approvals.NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, events.NewEventBus(8))
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 	h.SetAutoApprovalLogger(store)
 	h.SetAutoApprovedGate(gate)

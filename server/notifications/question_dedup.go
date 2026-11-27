@@ -1,6 +1,6 @@
 package notifications
 
-// Metadata keys the question notifications carry (server/services/approval_question.go).
+// Metadata keys the question notifications carry (server/services/approvals/approval_question.go).
 const (
 	metaQuestionShape   = "question_shape"
 	metaQuestionOptions = "question_options"

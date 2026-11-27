@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
@@ -407,7 +408,7 @@ func TestApprovalResolver_ShouldBeInvalidWithoutConfirmAndAppliedWithIt_WhenCIBl
 	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 	store := approvalkit.NewApprovalStore("")
-	svc := NewApprovalService(store)
+	svc := approvals.NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: &instance.Instance{
 		Title: "session-X", UUID: "session-X", GitHubPRNumber: 42, GitHubCheckConclusion: ciConclusionFailure,
 	}})
@@ -498,7 +499,7 @@ func TestApprovalResolver_ShouldCarryTheStampedDecision_WhenAlreadyResolved(t *t
 		Metadata: map[string]string{"approval_id": "appr-1"},
 	}))
 	store := approvalkit.NewApprovalStore("")
-	svc := NewApprovalService(store)
+	svc := approvals.NewApprovalService(store)
 	svc.SetNotificationStore(history)
 	require.NoError(t, store.Create(newTestPendingApproval("appr-1", "session-X", "Bash")))
 	resolver := NewApprovalResolver(svc, store)

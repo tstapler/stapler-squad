@@ -27,7 +27,7 @@ const (
 // after reading ActivePR; for readsInstanceData entries, after reading the link rows.
 var legacyPRReaders = map[string]string{
 	"server/adapters/instance_adapter.go":                       readsSnapshot,
-	"server/services/active_pr_status.go":                       readsSnapshot,     // reads ActivePR first; scalars only when the session has no links
+	"server/services/approvals/active_pr_status.go":             readsSnapshot,     // reads ActivePR first; scalars only when the session has no links
 	"session/pr_cleanup_gate.go":                                readsInstanceData, // OwnPRsBlockReason (shared with the retention sweeper) reads the link rows; the scalar only decides the no-link and unrepresented cases
 	"session/instance/instance_pr_edit.go":                      readsSnapshot,     // persists the mirror projected from the set
 	"session/pr_legacy_safe.go":                                 readsInstanceData, // the shared rule for a legacy number with no link
@@ -35,7 +35,7 @@ var legacyPRReaders = map[string]string{
 	"server/pr_annotations.go":                                  readsSnapshot,
 	"server/prwatch_sessions.go":                                readsSnapshot,
 	"server/reviewqueue/review_queue_manager.go":                readsSnapshot,
-	"server/services/approval_service.go":                       readsSnapshot,
+	"server/services/approvals/approval_service.go":             readsSnapshot,
 	"server/services/debug_snapshot.go":                         readsInstanceData,
 	"server/services/session_service_create.go":                 readsSnapshot, // writes InstanceOptions only; the instance attaches it
 	"server/services/unfinishedwork/unfinished_work_service.go": readsInstanceData,

@@ -1,6 +1,6 @@
 // Pure helpers for the Reply card (ADR-010, design/ux.md Surface 12b). The server stamps
 // question_id, question_shape, question_options and question_pending_count (server const
-// metaQuestionPending, server/services/approval_question.go) on a replyable question's
+// metaQuestionPending, server/services/approvals/approval_question.go) on a replyable question's
 // notification; everything else is "Answer in the terminal".
 
 import type { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";

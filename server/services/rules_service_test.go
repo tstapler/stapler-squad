@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -1934,7 +1935,7 @@ func upsertAllowRule(t *testing.T, svc *RulesService, id, name, commandPattern s
 func TestReconcilePendingApprovals_AutoAllowResolves(t *testing.T) {
 	store := approvalkit.NewApprovalStore("")
 	notifStore := newTestNotificationStore(t)
-	approvalSvc := NewApprovalService(store)
+	approvalSvc := approvals.NewApprovalService(store)
 	approvalSvc.SetNotificationStore(notifStore)
 
 	rulesSvc := newRulesService(t)
@@ -1990,7 +1991,7 @@ func upsertDenyRule(t *testing.T, svc *RulesService, id, name, commandPattern st
 func TestReconcilePendingApprovals_AutoDenyResolves(t *testing.T) {
 	store := approvalkit.NewApprovalStore("")
 	notifStore := newTestNotificationStore(t)
-	approvalSvc := NewApprovalService(store)
+	approvalSvc := approvals.NewApprovalService(store)
 	approvalSvc.SetNotificationStore(notifStore)
 
 	rulesSvc := newRulesService(t)
@@ -2050,7 +2051,7 @@ func TestReconcilePendingApprovals_StillEscalates_LeftUntouched(t *testing.T) {
 // deterministic on every run.
 func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
 	store := approvalkit.NewApprovalStore("")
-	approvalSvc := NewApprovalService(store)
+	approvalSvc := approvals.NewApprovalService(store)
 	rulesSvc := newRulesService(t)
 	rulesSvc.SetApprovalService(approvalSvc)
 
@@ -2247,7 +2248,7 @@ func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 
 	store := approvalkit.NewApprovalStore("")
-	approvalSvc := NewApprovalService(store)
+	approvalSvc := approvals.NewApprovalService(store)
 	approvalSvc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("sess-ci-guard")})
 
 	rulesSvc := newRulesService(t)
@@ -2307,7 +2308,7 @@ func TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIG
 // pending item it would now cover is left untouched.
 func TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger(t *testing.T) {
 	store := approvalkit.NewApprovalStore("")
-	approvalSvc := NewApprovalService(store)
+	approvalSvc := approvals.NewApprovalService(store)
 	rulesSvc := newRulesService(t)
 	rulesSvc.SetApprovalService(approvalSvc)
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
@@ -44,7 +45,7 @@ func TestWireGuidanceMirror_ShouldGateOnServiceRegistry(t *testing.T) {
 	require.NoError(t, err)
 	deps := &ServerDependencies{SessionService: svc, Storage: core.Storage, EventBus: core.EventBus}
 
-	wireGuidanceMirror(&services.ApprovalHandler{}, deps, context.Background(), func(func()) {})
+	wireGuidanceMirror(&approvals.ApprovalHandler{}, deps, context.Background(), func(func()) {})
 
 	mirror := svc.GuidanceMirror()
 	require.NotNil(t, mirror)

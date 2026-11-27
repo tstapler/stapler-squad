@@ -11,7 +11,7 @@
     "server/services/hidden_question_reply_test.go",
     "session/panereply/pane_reply_test.go",
     "server/services/questionkit/pending_question_store_test.go",
-    "server/services/approval_question_test.go",
+    "server/services/approvals/approval_question_test.go",
     "tests/e2e/hidden-session-reply.spec.ts"
   ],
   "lastModified": "2026-10-10T11:04:31.256479995-07:00"

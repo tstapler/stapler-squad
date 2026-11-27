@@ -194,6 +194,7 @@ go_test(
         "//server/events",
         "//server/notifications",
         "//server/services",
+        "//server/services/approvals",
         "//server/services/backlogflow",
         "//server/services/backlogsvc",
         "//server/services/guidance",

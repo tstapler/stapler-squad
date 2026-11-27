@@ -269,7 +269,7 @@ scripts/wake-baseline.sh --self-test
 ### Receipt coverage
 
 The receipt is the `PostToolUse` hook that the `post_tool_logging` hook injects
-(`HookPostToolLogging`, `server/services/hook_injector.go:26`). Its endpoint is
+(`HookPostToolLogging`, `server/services/approvals/hook_injector.go:26`). Its endpoint is
 `/api/hooks/post-tool-use`, and `ObservePostToolUse` counts the `ScheduleWakeup`
 tool name (`server/services/guidance_ack_wiring.go:82`).
 

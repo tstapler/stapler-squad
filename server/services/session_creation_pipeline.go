@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -316,7 +317,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if err := s.setupRemoteApprovalHooks(p.instance, instanceRootDir, p.instanceTitle); err != nil {
 			log.Warn("[session pipeline] failed to set up remote approval relay", "session", p.instanceTitle, "err", err)
 		}
-	} else if err := InjectHookConfig(instanceRootDir, p.instanceTitle, p.instance.UUID); err != nil {
+	} else if err := approvals.InjectHookConfig(instanceRootDir, p.instanceTitle, p.instance.UUID); err != nil {
 		log.Warn("[session pipeline] failed to inject hook config", "session", p.instanceTitle, "err", err)
 	}
 
