@@ -218,6 +218,8 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// nested Claude Code sessions are not blocked by the "nested session" guard.
 	historyPath := fmt.Sprintf("%s/.stapler_squad_history", workDir)
 	programWithHistory := fmt.Sprintf("env HISTFILE=%s %s", historyPath, t.program)
+	// The existence checks above can fail open (timeout), so ask again before claiming ownership.
+	wasAbsent := sessionKnownAbsent(t.cmdExec, t.buildTmuxCommand("has-session", "-t", "="+t.sanitizedName))
 	cmd := t.buildTmuxCommand(t.newSessionArgs(workDir, programWithHistory)...)
 
 	// Use cmdExec.Run() instead of pty.Start() for detached session creation
@@ -229,7 +231,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	})
 	if err != nil {
 		// Cleanup any partially created session if any exists.
-		if !isDuplicateSession(stderrOutput) && t.DoesSessionExist() {
+		if wasAbsent && !isDuplicateSession(stderrOutput) && t.DoesSessionExist() {
 			cleanupCmd := t.buildTmuxCommand("kill-session", "-t", t.sanitizedName)
 			cleanupErr := runGatedErr(context.Background(), t.serverSocket, func() error {
 				return t.cmdExec.Run(cleanupCmd)
@@ -628,24 +630,25 @@ func (t *TmuxSession) newSessionArgs(workDir, program string) []string {
 // concurrent creator already won (DoesSessionExist may have timed out earlier)
 // or because only the sizing step after new-session failed; the program runs.
 func (t *TmuxSession) runNewSessionCommand(cmd *exec.Cmd, workDir, program string) error {
-	err := runGatedErr(context.Background(), t.serverSocket, func() error {
-		return t.cmdExec.Run(cmd)
+	stderrOutput, err := runCapturingStderr(cmd, func() error {
+		return runGatedErr(context.Background(), t.serverSocket, func() error {
+			return t.cmdExec.Run(cmd)
+		})
 	})
 	if err != nil {
 		// Session creation failed - but it might be because the session already exists
 		// (DoesSessionExist may have timed out and returned false incorrectly)
 		// Invalidate cache and re-check before returning error
 		t.invalidateExistsCache()
-		if t.DoesSessionExist() {
-			// Session actually exists - the initial check was wrong (likely timeout)
-			// Continue with restore instead of returning error
-			log.Warn("tmux new-session reported an error but the session exists, continuing with restore", "session", t.sanitizedName, "error", err)
-			return nil
+		if !t.DoesSessionExist() {
+			return fmt.Errorf("failed to create tmux session '%s': %s (%w)", t.sanitizedName, stderrOutput, err)
 		}
-		return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
+		// Session actually exists: continue with restore instead of returning error
+		log.Warn("tmux new-session reported an error but the session exists, continuing with restore", "session", t.sanitizedName, "error", err, "stderr", stderrOutput)
+	} else {
+		log.Info("created new tmux session", "session", t.sanitizedName, "dir", workDir, "program", program)
 	}
 
-	log.Info("created new tmux session", "session", t.sanitizedName, "dir", workDir, "program", program)
 	t.invalidateExistsCache() // Session was created, invalidate cache
 	// new-session started the tmux server; reset this session's circuit breakers
 	// so subsequent DoesSessionExist() calls can verify the session is running.

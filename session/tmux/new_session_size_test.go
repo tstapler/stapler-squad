@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"slices"
@@ -13,9 +14,10 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // The behavioural tests below only reproduce the bug on tmux 3.4; newer versions honor -x/-y.
@@ -72,7 +74,7 @@ func (p privateTmux) exists(session string) bool {
 }
 
 // executor runs the real tmux commands; breakResize makes the chained resize-window fail at run time.
-func (p privateTmux) executor(breakResize bool) executor.Executor {
+func (p privateTmux) executor(breakResize bool) MockCmdExec {
 	run := func(cmd *exec.Cmd) error {
 		if i := slices.Index(cmd.Args, "resize-window"); breakResize && i >= 0 {
 			cmd.Args[slices.Index(cmd.Args[i:], "-x")+i+1] = "0"
@@ -80,8 +82,9 @@ func (p privateTmux) executor(breakResize bool) executor.Executor {
 		return cmd.Run()
 	}
 	return MockCmdExec{
-		RunFunc:    run,
-		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return cmd.Output() },
+		RunFunc:            run,
+		OutputFunc:         func(cmd *exec.Cmd) ([]byte, error) { return cmd.Output() },
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return cmd.CombinedOutput() },
 	}
 }
 
@@ -149,15 +152,17 @@ func TestShellSpawn_should_KeepTheExistingSession_When_NameIsTaken(t *testing.T)
 	require.Equal(t, pid, server.run("display-message", "-p", "-t", "base", "#{pane_pid}"))
 }
 
-// start() kills what it half-created, but never a session that new-session reports as a duplicate.
+// start() kills what it half-created, but never a duplicate or a session it cannot prove it made.
 func TestStart_should_KillOnlyItsOwnSession_When_NewSessionFails(t *testing.T) {
 	t.Parallel()
+	absent := "can't find session: staplersquad_x"
 	for _, tc := range []struct {
-		name, stderr string
-		wantKill     bool
+		name, hasSession, stderr string
+		wantKill                 bool
 	}{
-		{"duplicate", "duplicate session: staplersquad_x", false},
-		{"resize failed after create", "width too small", true},
+		{"duplicate", absent, "duplicate session: staplersquad_x", false},
+		{"resize failed after create", absent, "width too small", true},
+		{"stderr lost and existence unknown beforehand", "lost server", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -176,6 +181,16 @@ func TestStart_should_KillOnlyItsOwnSession_When_NewSessionFails(t *testing.T) {
 					}
 					return nil
 				},
+				CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+					switch {
+					case slices.Contains(cmd.Args, "has-session") && !created.Load():
+						assert.Contains(t, cmd.Args, "=staplersquad_x", "exact match, or a prefix sibling reads as ours")
+						return []byte(tc.hasSession), fmt.Errorf("exit status 1")
+					case created.Load():
+						return []byte("staplersquad_x"), nil
+					}
+					return nil, fmt.Errorf("no server running")
+				},
 				OutputFunc: func(*exec.Cmd) ([]byte, error) {
 					if created.Load() {
 						return []byte("staplersquad_x"), nil
@@ -189,4 +204,106 @@ func TestStart_should_KillOnlyItsOwnSession_When_NewSessionFails(t *testing.T) {
 			require.Equal(t, tc.wantKill, killed.Load())
 		})
 	}
+}
+
+// Without stderr a duplicate looks like any other failure; the earlier has-session must protect it.
+func TestShellSpawn_should_KeepTheExistingSession_When_StderrCannotBeCaptured(t *testing.T) {
+	server := newPrivateTmux(t)
+	workDir := t.TempDir()
+	pid := server.run("display-message", "-p", "-t", "base", "#{pane_pid}")
+	t.Setenv("TMPDIR", "/nonexistent-tmpdir") // not parallel: process-global
+
+	require.Error(t, NewShellTmuxHandle("base", server.socket, nil, server.executor(false)).Spawn(workDir, "sleep 60"))
+
+	require.Equal(t, pid, server.run("display-message", "-p", "-t", "base", "#{pane_pid}"))
+}
+
+func TestShellSpawn_should_KillNothing_When_ExistenceIsUnknown(t *testing.T) {
+	t.Parallel()
+	var killed atomic.Bool
+	handle := NewShellTmuxHandle("s", "", nil, MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if slices.Contains(cmd.Args, "kill-session") {
+				killed.Store(true)
+			}
+			return fmt.Errorf("signal: killed")
+		},
+		CombinedOutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, fmt.Errorf("signal: killed") },
+	})
+
+	require.Error(t, handle.Spawn("/w", "prog"))
+	require.False(t, killed.Load())
+}
+
+// "=" on kill-session: without it, a shell that was never created takes a prefix sibling down.
+func TestShellSpawn_should_SpareAPrefixSibling_When_NothingWasCreated(t *testing.T) {
+	t.Parallel()
+	server := newPrivateTmux(t)
+	server.run("new-session", "-d", "-s", "shell-x-longer", "sleep 60")
+	exe := server.executor(false)
+	run := exe.RunFunc
+	exe.RunFunc = func(cmd *exec.Cmd) error {
+		if slices.Contains(cmd.Args, "new-session") {
+			return fmt.Errorf("exit status 1")
+		}
+		return run(cmd)
+	}
+
+	require.Error(t, NewShellTmuxHandle("shell-x", server.socket, nil, exe).Spawn(t.TempDir(), "sleep 60"))
+
+	require.True(t, server.exists("shell-x-longer"))
+}
+
+// "=" on has-session: without it, a prefix sibling reads as "already there" and the shell is orphaned.
+func TestShellSpawn_should_CleanUpItsOwnSession_When_APrefixSiblingExists(t *testing.T) {
+	t.Parallel()
+	server := newPrivateTmux(t)
+	server.run("new-session", "-d", "-s", "shell-y-longer", "sleep 60")
+
+	require.Error(t, NewShellTmuxHandle("shell-y", server.socket, nil, server.executor(true)).Spawn(t.TempDir(), "sleep 60"))
+
+	require.False(t, server.exists("shell-y"))
+	require.True(t, server.exists("shell-y-longer"))
+}
+
+func TestShellSpawn_should_AddressTheSessionItCreated_When_NameHasTargetSyntax(t *testing.T) {
+	t.Parallel()
+	server := newPrivateTmux(t)
+
+	handle := NewShellTmuxHandle("v1.2:x", server.socket, nil, server.executor(false))
+	require.NoError(t, handle.Spawn(t.TempDir(), "sleep 60"))
+	require.Equal(t, "220x50", server.run("display-message", "-p", "-t", "v1_2_x", "#{window_width}x#{window_height}"))
+	require.True(t, handle.DoesSessionExist())
+
+	require.Error(t, NewShellTmuxHandle("v3.4", server.socket, nil, server.executor(true)).Spawn(t.TempDir(), "sleep 60"))
+	require.False(t, server.exists("v3_4"), "a failed spawn must not orphan the shell")
+}
+
+func TestToStaplerSquadTmuxName_should_ReplaceTargetSyntaxInThePrefix(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "v1_2_x_title", toStaplerSquadTmuxNameWithPrefix("title", "v1.2:x_"))
+}
+
+type resettableExec struct {
+	MockCmdExec
+	resets *atomic.Int32
+}
+
+func (r resettableExec) Reset() { r.resets.Add(1) }
+
+// The tolerated recreate path keeps what a clean create does, and says why tmux complained.
+func TestRunNewSessionCommand_should_FinishSetupAndLogStderr_When_ResizeFails(t *testing.T) {
+	server := newPrivateTmux(t)
+	var logs log.SyncBuffer
+	previous := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&logs, nil))) // not parallel: process-global
+	t.Cleanup(func() { log.SetSlogDefaultForTest(previous) })
+	exe := resettableExec{MockCmdExec: server.executor(true), resets: &atomic.Int32{}}
+	session := newTmuxSessionWithSocket("recreate", "sleep 61", NewMockPtyFactory(t), exe, TmuxPrefix, server.socket, WithRegistry(nil))
+	cmd := session.buildTmuxCommand(session.newSessionArgs(t.TempDir(), "sleep 61")...)
+
+	require.NoError(t, session.runNewSessionCommand(cmd, t.TempDir(), "sleep 61"))
+
+	require.Equal(t, int32(1), exe.resets.Load())
+	require.Equal(t, "remain-on-exit on", server.run("show-options", "-w", "-t", session.sanitizedName, "remain-on-exit"))
+	require.Contains(t, logs.String(), "width too small")
 }

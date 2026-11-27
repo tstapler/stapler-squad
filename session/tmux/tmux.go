@@ -53,6 +53,13 @@ func sizedNewSessionArgs(session, workDir string, flags []string, command ...str
 		";", "set-option", "-w", "-t", session, "-u", "window-size")
 }
 
+// sessionKnownAbsent runs a has-session command and reports true only when tmux positively says
+// there is no such session. A timeout or any other failure is unknown, never "absent".
+func sessionKnownAbsent(e executor.Executor, hasSession *exec.Cmd) bool {
+	out, err := e.CombinedOutput(hasSession)
+	return err != nil && (strings.Contains(string(out), "can't find session") || serverNotRunning(out))
+}
+
 // isDuplicateSession reports that new-session refused the name, so the session is not ours to kill.
 func isDuplicateSession(stderr string) bool {
 	return strings.Contains(stderr, "duplicate session")
@@ -405,10 +412,17 @@ func ToStaplerSquadTmuxName(str string) string {
 
 func toStaplerSquadTmuxNameWithPrefix(str string, prefix string) string {
 	str = whiteSpaceRegex.ReplaceAllString(str, "")
-	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
-	str = strings.ReplaceAll(str, ":", "_") // colons are special in tmux (session:window.pane)
+	str = SafeSessionName(str) // one "_" each, before the next pass collapses runs
 	str = nonSafeTmuxNameChar.ReplaceAllString(str, "_")
-	return fmt.Sprintf("%s%s", prefix, str)
+	return SafeSessionName(prefix) + str
+}
+
+var tmuxTargetSyntax = strings.NewReplacer(".", "_", ":", "_")
+
+// SafeSessionName replaces "." and ":", which tmux either renames (3.4, 3.6a) or keeps but
+// cannot target (3.8), so the name asked for is the name later commands can address.
+func SafeSessionName(name string) string {
+	return tmuxTargetSyntax.Replace(name)
 }
 
 // SessionName is a sanitized tmux session identifier — the only string form that is
