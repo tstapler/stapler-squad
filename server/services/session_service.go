@@ -16,7 +16,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
+	"github.com/tstapler/stapler-squad/server/services/capacity"
 	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
+	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/prs"
@@ -272,7 +274,7 @@ type SessionService struct {
 	// source registry, poller) are wired post-construction via
 	// SetJulesConfigDependencies once server/dependencies.go builds them
 	// (Task 2.4.4a), since Jules-enablement is only known after config load.
-	julesConfigSvc *JulesConfigService
+	julesConfigSvc *julesrpc.JulesConfigService
 
 	// credChain resolves AI-provider credentials (Anthropic, Google, Jules)
 	// for capacityMonitor's limits clients. Its JulesCredentialSource starts
@@ -343,7 +345,7 @@ type SessionService struct {
 	sessionSummaryGenerator *summaries.SessionSummaryGenerator
 
 	// capacityMonitor tracks rate limits and triggers transitions.
-	capacityMonitor *CapacityMonitor
+	capacityMonitor *capacity.CapacityMonitor
 
 	// quotaGate feeds account-wide rate-limit detections into the quota
 	// headroom gate that pauses/resumes backlog automation. Late-wired via
@@ -955,8 +957,8 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	credChain := credkit.NewDefaultChain(directCfg)
 
-	var capRoleResolver SessionRoleResolver
-	var capTerminator SessionTerminator
+	var capRoleResolver capacity.SessionRoleResolver
+	var capTerminator capacity.SessionTerminator
 	if concStorage != nil {
 		capRoleResolver = func(ctx context.Context, sessionUUID string) string {
 			is, err := concStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
@@ -972,7 +974,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			return stopGuardrailSession(ctx, concStorage, inst, reason)
 		}
 	}
-	capacityMonitor := NewCapacityMonitor(CapacityMonitorParams{
+	capacityMonitor := capacity.NewCapacityMonitor(capacity.CapacityMonitorParams{
 		Config:       capCfg,
 		EventBus:     eventBus,
 		RoleResolver: capRoleResolver,
@@ -1017,7 +1019,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		slashCommandSvc:             NewSlashCommandService(),
 		defaultsSvc:                 sessiondefaults.NewDefaultsService(),
 		slackConfigSvc:              notify.NewSlackConfigService(notify.NewSlackNotifier()),
-		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
+		julesConfigSvc:              julesrpc.NewJulesConfigService(nil, nil, nil),
 		callbackConfigSvc:           webhooks.NewCallbackConfigService(),
 		streamHubRolloutSvc:         streamhubrollout.NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          sessiondefaults.NewLauncherPresetsService(),
@@ -1033,8 +1035,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		githubResolver:              testModeGitHubResolver(),
 		creationResolutionTimeout:   maxCreationResolutionTimeout,
 	}
-	capacityMonitor.sessionSwitcher = svc
-	capacityMonitor.poller = svc
+	capacityMonitor.SetSessionPorts(svc, svc)
 
 	svc.guards = &access.UnaryGuardsFlag{}
 	svc.terminalSvc.SetGuardsFlag(svc.guards)

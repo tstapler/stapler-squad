@@ -51,10 +51,10 @@ type julesStatusClient interface {
 // the whole time its session is open — Story 2.1.3 — so applyJulesState must
 // transition in_progress -> review itself before recording a PR, mirroring
 // what request_review does for a local agent session).
-// julesUsageRecorder is the narrow slice of *services.JulesUsageCounter
+// julesUsageRecorder is the narrow slice of *julesrpc.JulesUsageCounter
 // JulesSessionPoller needs (Task 4.1.1a) — declared locally, not imported,
 // since session cannot import server/services (import-direction constraint,
-// see domain.JulesSessionUUIDPrefix's doc comment above). *services.JulesUsageCounter
+// see domain.JulesSessionUUIDPrefix's doc comment above). *julesrpc.JulesUsageCounter
 // satisfies this structurally; server/dependencies.go passes it in via
 // SetUsageCounter after constructing both.
 type julesUsageRecorder interface {
@@ -114,7 +114,7 @@ type JulesSessionPoller struct {
 
 	// usage (julesUsageRecorder, Task 4.1.1a) is nil until SetUsageCounter is
 	// called — server/dependencies.go wires the process-wide
-	// *services.JulesUsageCounter after constructing both. Every Inc call
+	// *julesrpc.JulesUsageCounter after constructing both. Every Inc call
 	// site below is nil-guarded via incSessionCompleted/incSessionFailed/
 	// incAPIRateLimited/incAPIError, so no existing test that never calls
 	// SetUsageCounter needs updating.
@@ -168,7 +168,7 @@ func (p *JulesSessionPoller) now() time.Time {
 	return time.Now()
 }
 
-// SetUsageCounter wires the process-wide *services.JulesUsageCounter
+// SetUsageCounter wires the process-wide *julesrpc.JulesUsageCounter
 // dependency post-construction (Task 4.1.1a) — needed because
 // server/dependencies.go constructs the counter alongside, not before, this
 // poller. nil (the zero value) is safe: every increment call site is

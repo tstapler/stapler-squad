@@ -1042,7 +1042,7 @@ message TriggerShipPRResponse {
 
 // DispatchToJulesRequest deliberately carries no egress_acknowledged field
 // (google-jules-integration pre-mortem P1 #3, mirrors
-// services.JulesDispatchRequest's doc comment): consent is a durable,
+// julesrpc.JulesDispatchRequest's doc comment): consent is a durable,
 // server-side fact only ConfirmEgressConsent can write, never a
 // caller-supplied boolean this RPC could trust.
 message DispatchToJulesRequest {

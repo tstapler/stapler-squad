@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/capacity"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -71,8 +72,8 @@ func TestProviderLimitsGolden(t *testing.T) {
 		inst.SetClaudeConversationUUID("conv-" + p)
 		poller.AddInstance(inst)
 	}
-	newMonitor := func(clients ...string) *CapacityMonitor {
-		m := NewCapacityMonitor(CapacityMonitorParams{
+	newMonitor := func(clients ...string) *capacity.CapacityMonitor {
+		m := capacity.NewCapacityMonitor(capacity.CapacityMonitorParams{
 			Config: config.CapacityConfig{PollIntervalSeconds: 3600, ContextWindowWarnPct: 2}, EventBus: events.NewEventBus(8),
 		})
 		for _, name := range clients {
@@ -93,7 +94,7 @@ func TestProviderLimitsGolden(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name    string
-		monitor *CapacityMonitor
+		monitor *capacity.CapacityMonitor
 	}{
 		{"no-monitor", nil},
 		{"no-clients", newMonitor()},
@@ -112,7 +113,7 @@ func TestProviderLimitsGolden(t *testing.T) {
 	// A nil monitor makes SetTokenStoreReader a no-op; a real one is read by the
 	// next poll, whose session limits GetProviderLimits then prefers.
 	(&SessionService{}).SetTokenStoreReader(&recordingTokenStore{})
-	m := NewCapacityMonitor(CapacityMonitorParams{
+	m := capacity.NewCapacityMonitor(capacity.CapacityMonitorParams{
 		Config: config.CapacityConfig{PollIntervalSeconds: 3600, ContextWindowWarnPct: 2}, EventBus: events.NewEventBus(8),
 		Poller: singleInstancePoller{poller.FindInstance("claude")},
 	})

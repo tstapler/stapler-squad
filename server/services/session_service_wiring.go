@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/rules"
 	"github.com/tstapler/stapler-squad/session"
@@ -550,8 +551,8 @@ func (s *SessionService) SlackNotifierForTest() *notify.SlackNotifier {
 // nil-safe for both (UpdateJulesConfig's api_key path and TestJulesConnection
 // then return CodeUnavailable rather than panicking). poller is nil unless
 // the poller was actually started.
-func (s *SessionService) SetJulesConfigDependencies(keys julesKeyManager, sources julesSourceResolver, poller julesAuthReconnectReporter) {
-	s.julesConfigSvc = NewJulesConfigService(keys, sources, poller)
+func (s *SessionService) SetJulesConfigDependencies(keys julesrpc.JulesKeyManager, sources julesrpc.JulesSourceResolver, poller julesrpc.JulesAuthReconnectReporter) {
+	s.julesConfigSvc = julesrpc.NewJulesConfigService(keys, sources, poller)
 }
 
 // SetJulesKeyringTokenSource rewires credChain's JulesCredentialSource onto
@@ -572,7 +573,7 @@ func (s *SessionService) SetJulesKeyringTokenSource(tokens credkit.JulesKeyringT
 // usage snapshot. Constructed unconditionally in server/dependencies.go
 // (cheap, no I/O) regardless of whether Jules itself is enabled, so this
 // should be called once at startup alongside SetJulesConfigDependencies.
-func (s *SessionService) SetJulesUsageCounter(usage julesUsageSnapshotter) {
+func (s *SessionService) SetJulesUsageCounter(usage julesrpc.JulesUsageSnapshotter) {
 	s.julesConfigSvc.SetUsageCounter(usage)
 }
 

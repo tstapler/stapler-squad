@@ -1,4 +1,4 @@
-package services
+package capacity
 
 // Differential golden for CapacityMonitor (limits, events, switch, compact and
 // terminate calls), recorded from origin/main before the move.

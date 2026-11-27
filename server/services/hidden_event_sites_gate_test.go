@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/capacity"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -122,11 +124,20 @@ func TestAutonomous_ShouldDeliverStuckFailureAndDropCompleteInfo_WhenHiddenAndGa
 // The capacity monitor's guardrail stop is a hard stop: its WARNING carries the
 // failure stamp so a hidden session's termination still delivers.
 func TestCapacityGuardrailStop_ShouldDeliverForHiddenSession_WhenGateOn(t *testing.T) {
-	inst := &instance.Instance{Title: "hidden-capacity", UUID: "hidden-capacity-uuid", Hidden: true}
+	inst := &instance.Instance{Title: "hidden-capacity", UUID: "hidden-capacity-uuid", Hidden: true, Status: domain.Active, Program: "claude"}
+	inst.SetClaudeConversationUUID("hidden-capacity-conv")
 	e := newHiddenSiteEnv(t, true, inst)
-	m := NewCapacityMonitor(CapacityMonitorParams{EventBus: e.bus})
-
-	m.stopForGuardrail(t.Context(), inst, inst.Snapshot(), "cost_budget_exceeded", "Budget exceeded", "stopped")
+	m := capacity.NewCapacityMonitor(capacity.CapacityMonitorParams{
+		Config:       config.CapacityConfig{PollIntervalSeconds: 3600, CostBudgetUSD: 0.000001},
+		EventBus:     e.bus,
+		Poller:       singleInstancePoller{inst},
+		TokenStore:   &recordingTokenStore{},
+		RoleResolver: func(context.Context, string) string { return instance.SessionRoleTriage },
+	})
+	m.RegisterClient("anthropic", providerLimitsStub{"anthropic"})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	m.Start(ctx) // polls once, tripping the pipeline-role cost budget
 
 	got := notificationsOf(e.collect(t), int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING))
 	require.Len(t, got, 1, "stamped hard-stop WARNING must pass the gate for a hidden session")

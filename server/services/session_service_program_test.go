@@ -277,7 +277,7 @@ collectLoop:
 
 // TestUpdateSessionProgram_RealInstance_SwitchesAndPersists exercises
 // SessionService.UpdateSessionProgram directly against a real SessionService/Instance
-// (not capacity_monitor_test.go's mockSessionSwitcher), verifying the program change
+// (not the capacity package's mockSessionSwitcher), verifying the program change
 // persists to storage.
 func TestUpdateSessionProgram_RealInstance_SwitchesAndPersists(t *testing.T) {
 	t.Parallel()

@@ -132,3 +132,6 @@ server/services/autonomysvc !server/web
 server/services/sessiondefaults !server/web
 server/services/claudeconfig !server/web
 server/services/workspacedb !server/web
+server/services/capacity !server/web
+server/services/julesrpc !server/web
+server/services/updatecheck !server/web

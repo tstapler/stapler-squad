@@ -1,4 +1,4 @@
-package services
+package capacity
 
 import (
 	"context"
@@ -128,6 +128,32 @@ func NewCapacityMonitor(p CapacityMonitorParams) *CapacityMonitor {
 		lastWarningTime:    make(map[string]time.Time),
 		idleWaitState:      make(map[string]idleWaitTracker),
 	}
+}
+
+// SetSessionPorts wires the live sessions the monitor watches and switches. They
+// are set after construction (their owner holds the monitor) and before Start.
+func (m *CapacityMonitor) SetSessionPorts(poller InstancePoller, switcher SessionSwitcher) {
+	m.poller = poller
+	m.sessionSwitcher = switcher
+}
+
+// SessionPortsForTest lets a wiring test check SetSessionPorts was called.
+func (m *CapacityMonitor) SessionPortsForTest() (InstancePoller, SessionSwitcher) {
+	return m.poller, m.sessionSwitcher
+}
+
+// SetTokenStoreReader wires the parsed token store evaluate reads usage from.
+func (m *CapacityMonitor) SetTokenStoreReader(store tokens.TokenStoreReader) {
+	m.tokenStore = store
+}
+
+// ProviderLimits returns the last polled limits of provider and the client
+// registered for it, if any.
+func (m *CapacityMonitor) ProviderLimits(provider string) (credkit.ProviderLimits, credkit.ProviderLimitsClient, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	client, ok := m.clients[provider]
+	return m.current[provider], client, ok
 }
 
 func (m *CapacityMonitor) RegisterClient(name string, client credkit.ProviderLimitsClient) {

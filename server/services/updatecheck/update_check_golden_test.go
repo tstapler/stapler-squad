@@ -1,4 +1,4 @@
-package services
+package updatecheck
 
 // Differential golden for the update-check JSON over a flag, build and fetch
 // matrix, recorded from origin/main before the move.
