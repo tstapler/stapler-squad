@@ -39,6 +39,7 @@ var notificationPackages = map[string]bool{
 	svcPkgPath + "/notify":        true,
 	svcPkgPath + "/notifyactions": true,
 	svcPkgPath + "/prs":           true,
+	svcPkgPath + "/workflowrpc":   true,
 }
 
 // finding is one scan hit, keyed "<kind>: <package path>.<identifier>".
@@ -58,8 +59,8 @@ var reviewedConsumers = map[finding]string{
 
 	// server/services references EventNotification (event_converter, producers),
 	// so every Subscribe there is listed; only WatchSessions forwards it.
-	"consumer: " + svcPkgPath + ".WatchSessions":  "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
-	"consumer: " + svcPkgPath + ".watchWorkflows": "workflow stream; ignores notifications",
+	"consumer: " + svcPkgPath + ".WatchSessions":              "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
+	"consumer: " + svcPkgPath + "/workflowrpc.watchWorkflows": "workflow stream; ignores notifications",
 }
 
 // reviewedAppendCallers are the concrete NotificationHistoryStore.Append* call
@@ -318,7 +319,7 @@ func TestSinkGuard_ShouldRequireAllowlistReason_WhenNotifierImplEventNotificatio
 // A package in notificationPackages has every Subscribe listed even though it
 // never names events.EventNotification.
 func TestSinkGuard_ShouldListSubscribe_WhenPackageIsDeclaredNotificationHandling(t *testing.T) {
-	for _, leaf := range []string{"/approvals", "/autonomysvc", "/notify", "/notifyactions", "/prs"} {
+	for _, leaf := range []string{"/approvals", "/autonomysvc", "/notify", "/notifyactions", "/prs", "/workflowrpc"} {
 		if !notificationPackages[svcPkgPath+leaf] {
 			t.Errorf("server/services%s must stay in notificationPackages", leaf)
 		}
