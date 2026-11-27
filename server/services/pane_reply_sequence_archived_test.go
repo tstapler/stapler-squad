@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -31,7 +32,7 @@ func TestSequence_should_writeNothingAndStartNoAttempt_When_theSessionIsAlreadyA
 	archiveNow(inst)
 
 	res, err := e.router.liveSequence(e.localCtx(), routedSession{inst: inst, phase: phaseLive},
-		QuestionAnswer{SessionID: inst.UUID, QuestionID: qid, OptionLabel: redisAndAB, ReplyID: "r-" + uuid.NewString()}, qs)
+		notifyactions.QuestionAnswer{SessionID: inst.UUID, QuestionID: qid, OptionLabel: redisAndAB, ReplyID: "r-" + uuid.NewString()}, qs)
 
 	require.NoError(t, err)
 	assert.Equal(t, outStale, res.Outcome)

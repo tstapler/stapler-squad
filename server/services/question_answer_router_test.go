@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -124,7 +125,7 @@ func (e *routerEnv) row(id string) *domain.GuidanceRequestData {
 
 func (e *routerEnv) answer(inst *instance.Instance, qid, label string) questionkit.ActionResult {
 	e.t.Helper()
-	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{SessionID: inst.UUID, QuestionID: qid, OptionLabel: label, ReplyID: "r-" + uuid.NewString()})
+	res, err := e.router.ReplyToQuestion(e.localCtx(), notifyactions.QuestionAnswer{SessionID: inst.UUID, QuestionID: qid, OptionLabel: label, ReplyID: "r-" + uuid.NewString()})
 	require.NoError(e.t, err)
 	return res
 }
@@ -295,7 +296,7 @@ func TestAnswerRouter_ShouldReportTheRouteOfEachSessionState(t *testing.T) {
 			}
 		})
 	}
-	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{SessionID: "nope", QuestionID: "q", OptionLabel: "x", ReplyID: "r"})
+	res, err := e.router.ReplyToQuestion(e.localCtx(), notifyactions.QuestionAnswer{SessionID: "nope", QuestionID: "q", OptionLabel: "x", ReplyID: "r"})
 	require.NoError(t, err)
 	assert.Equal(t, outStale, res.Outcome)
 	assert.Equal(t, "session_ended", res.StaleReason)
@@ -405,7 +406,7 @@ func TestAnswerRouter_ShouldReturnStaleAndWriteNothing_WhenTheRouteChangedAfterT
 	qid := e.hookRow(inst, d)
 	gated := flagsvc.RouteDurableRecord // the dispatcher gated this call as a Tier A record, then the session went live
 
-	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{
+	res, err := e.router.ReplyToQuestion(e.localCtx(), notifyactions.QuestionAnswer{
 		SessionID: inst.UUID, QuestionID: qid, OptionLabel: replyColorLabel, ReplyID: "r-flip", ExpectedRoute: &gated,
 	})
 
@@ -414,4 +415,22 @@ func TestAnswerRouter_ShouldReturnStaleAndWriteNothing_WhenTheRouteChangedAfterT
 	assert.Equal(t, "route_changed", res.StaleReason)
 	assert.Empty(t, pm.writes(), "no keystroke reached the pane")
 	assert.Empty(t, e.row(qid).Answer)
+}
+
+func TestMapReplyOutcome_ShouldCoverEveryReplyOutcome(t *testing.T) {
+	t.Parallel()
+	want := map[sessionv1.ReplyOutcome]sessionv1.ActionOutcome{
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT:               outApplied,
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE: sessionv1.ActionOutcome_ACTION_OUTCOME_SEND_INDETERMINATE,
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT:           sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT,
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING:         outStale,
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT:       outStale,
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED:       sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED,
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_DISABLED:           outFlagOff,
+	}
+	for r, o := range want {
+		assert.Equal(t, o, mapReplyOutcome(&sessionv1.ReplyToPendingQuestionResponse{Outcome: r}).Outcome, r.String())
+	}
+	assert.Equal(t, "dialog_gone", mapReplyOutcome(&sessionv1.ReplyToPendingQuestionResponse{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING}).StaleReason)
+	assert.Equal(t, "dialog_replaced", mapReplyOutcome(&sessionv1.ReplyToPendingQuestionResponse{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT}).StaleReason)
 }

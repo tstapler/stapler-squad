@@ -546,6 +546,34 @@ linters:
             - github.com/tstapler/stapler-squad/session/prpoller
             - github.com/tstapler/stapler-squad/session/queue
             - github.com/tstapler/stapler-squad/session/tmux
+        # server/services/notifyactions dispatches inline notification actions to the handlers that own them; it
+        # never imports the services hub (the hub wires it).
+        isolate_notifyactions:
+          list-mode: strict
+          files:
+            - "**/services/notifyactions/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - go.opentelemetry.io/otel/attribute
+            - go.opentelemetry.io/otel/metric
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/notifications
+            - github.com/tstapler/stapler-squad/server/services/access
+            - github.com/tstapler/stapler-squad/server/services/approvalkit
+            - github.com/tstapler/stapler-squad/server/services/approvals
+            - github.com/tstapler/stapler-squad/server/services/auditkit
+            - github.com/tstapler/stapler-squad/server/services/featureflags
+            - github.com/tstapler/stapler-squad/server/services/flagsvc
+            - github.com/tstapler/stapler-squad/server/services/guidance
+            - github.com/tstapler/stapler-squad/server/services/notify$
+            - github.com/tstapler/stapler-squad/server/services/questionkit
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/telemetry
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict

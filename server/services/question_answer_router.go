@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -107,7 +108,7 @@ func deliveryRouteFor(p answerPhase) domain.DeliveryRoute {
 }
 
 // ReplyToQuestion answers one question by the route its session allows.
-func (r *AnswerRouter) ReplyToQuestion(ctx context.Context, in QuestionAnswer) (questionkit.ActionResult, error) {
+func (r *AnswerRouter) ReplyToQuestion(ctx context.Context, in notifyactions.QuestionAnswer) (questionkit.ActionResult, error) {
 	s := r.sessions(in.SessionID)
 	route := deliveryRouteFor(s.phase)
 	if route == "" {
@@ -135,7 +136,7 @@ func (r *AnswerRouter) ReplyToQuestion(ctx context.Context, in QuestionAnswer) (
 }
 
 // liveKeystroke writes one digit into the on-screen dialog.
-func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in QuestionAnswer) (questionkit.ActionResult, error) {
+func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in notifyactions.QuestionAnswer) (questionkit.ActionResult, error) {
 	if qs, ok := r.sequenceQuestions(ctx, in.QuestionID); ok {
 		return r.liveSequence(ctx, s, in, qs)
 	}
@@ -178,7 +179,7 @@ func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in Qu
 
 // writeHidden goes through the existing hidden-session reply handler, which keeps
 // its own flag, idempotency and audit.
-func (r *AnswerRouter) writeHidden(ctx context.Context, in QuestionAnswer, digit string) (questionkit.ActionResult, error) {
+func (r *AnswerRouter) writeHidden(ctx context.Context, in notifyactions.QuestionAnswer, digit string) (questionkit.ActionResult, error) {
 	resp, err := r.hidden(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
 		SessionId: in.SessionID, QuestionId: in.QuestionID, ReplyText: digit, ReplyId: in.ReplyID,
 	}))
@@ -194,7 +195,7 @@ func (r *AnswerRouter) writeHidden(ctx context.Context, in QuestionAnswer, digit
 // writeVisible runs the shared PaneReplyCore against a visible session. The
 // dispatcher already ran the local-caller verdict on the real peer; the core's
 // audit line records the in-process peer as the hidden path does.
-func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance, in QuestionAnswer, digit byte) (questionkit.ActionResult, error) {
+func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance, in notifyactions.QuestionAnswer, digit byte) (questionkit.ActionResult, error) {
 	refusal, err := access.EvaluateLocalWrite(ctx, inProcessPeerAddr, access.LocalWriteLocalCaller)
 	if err != nil {
 		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
@@ -209,7 +210,7 @@ func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance
 }
 
 // storeAnswer records the answer on the durable row and pushes nothing.
-func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRoute, in QuestionAnswer) (questionkit.ActionResult, error) {
+func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRoute, in notifyactions.QuestionAnswer) (questionkit.ActionResult, error) {
 	if r.rows == nil {
 		return questionkit.NotWired(), nil
 	}

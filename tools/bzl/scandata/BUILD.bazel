@@ -150,6 +150,7 @@ filegroup(
         "//server/services/internal/streammetrics:go_sources",
         "//server/services/internal/svctest:go_sources",
         "//server/services/notify:go_sources",
+        "//server/services/notifyactions:go_sources",
         "//server/services/piextension:go_sources",
         "//server/services/questionkit:go_sources",
         "//server/services/quota:go_sources",

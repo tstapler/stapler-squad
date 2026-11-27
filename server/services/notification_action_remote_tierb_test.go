@@ -10,12 +10,13 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Story 2.8: a live-keystroke answer from the authenticated remote listener
 // (:8444) goes through the real AnswerRouter, DialogMatch included.
-func remoteTierBEnv(t *testing.T, tierB bool) (*routerEnv, *NotificationActionDispatcher) {
+func remoteTierBEnv(t *testing.T, tierB bool) (*routerEnv, *notifyactions.NotificationActionDispatcher) {
 	t.Helper()
 	e := newRouterEnv(t) // isolates the state dir, so flags are set after it
 	enableInline(t, "action:ANSWER_QUESTION", flagsvc.ScopeChannelRemote)
@@ -23,17 +24,16 @@ func remoteTierBEnv(t *testing.T, tierB bool) (*routerEnv, *NotificationActionDi
 		require.NoError(t, config.LoadConfig().SetFeatureFlagScope(flagsvc.NotificationInlineActionsFlagName, flagsvc.ScopeChannelTierB, true))
 	}
 	audit := &recordingAudit{}
-	d := NewNotificationActionDispatcher(ActionDelegates{Questions: e.router}, func() actionAudit { return audit }, testFlagRegistry())
-	d.flags = configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: flagsvc.FlagReader{Reg: testFlagRegistry()}}
+	d := notifyactions.NewNotificationActionDispatcher(notifyactions.ActionDelegates{Questions: e.router}, func() notifyactions.ActionAudit { return audit }, testFlagRegistry())
 	return e, d
 }
 
-func remoteAnswer(t *testing.T, e *routerEnv, d *NotificationActionDispatcher, sessionID, qid string) *sessionv1.InvokeNotificationActionResponse {
+func remoteAnswer(t *testing.T, e *routerEnv, d *notifyactions.NotificationActionDispatcher, sessionID, qid string) *sessionv1.InvokeNotificationActionResponse {
 	t.Helper()
 	req := answerReq("k-" + qid)
 	req.SessionId, req.TargetKey = sessionID, qid
 	req.Params = &sessionv1.NotificationActionParams{Answer: replyColorLabel}
-	resp, err := d.Invoke(e.requestCtx(access.ListenerRemote, true, "onyx:8444", nil), ActionCall{Msg: req, Peer: "192.0.2.7:50000"})
+	resp, err := d.Invoke(e.requestCtx(access.ListenerRemote, true, "onyx:8444", nil), notifyactions.ActionCall{Msg: req, Peer: "192.0.2.7:50000"})
 	require.NoError(t, err)
 	return resp
 }

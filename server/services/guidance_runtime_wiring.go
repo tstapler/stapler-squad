@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
@@ -47,7 +48,7 @@ func (s *SessionService) wireDialogCanary() *questionkit.DialogMatchCanary {
 func (s *SessionService) SetGuidanceMirror(m *questionkit.GuidanceHookMirror) {
 	if m != nil {
 		m.SetPaneCapture(s.PaneCapture)
-		m.SetCardRetirer(historyItemResolver{store: s.GetNotificationStore()}.ResolveGuidanceNotifications)
+		m.SetCardRetirer(notifyactions.NewNotificationResolver(s.GetNotificationStore()).ResolveGuidanceNotifications)
 	}
 	s.guidanceMirror.Store(m)
 }

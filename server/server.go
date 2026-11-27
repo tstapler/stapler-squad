@@ -44,6 +44,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
 	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/remote"
@@ -754,7 +755,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		guidanceRequestSvc = newGuidanceRequestService(deps)
 		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)
 		if deps.SessionService != nil {
-			var backlogTransitions services.BacklogTransitioner // stays nil unless set: a boxed nil *BacklogService would defeat the nil check
+			var backlogTransitions notifyactions.BacklogTransitioner // stays nil unless set: a boxed nil *BacklogService would defeat the nil check
 			if deps.BacklogService != nil {
 				backlogTransitions = deps.BacklogService
 			}

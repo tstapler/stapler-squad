@@ -16,6 +16,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
@@ -144,7 +145,7 @@ type SessionService struct {
 	backlogLinks BacklogLinkResolver
 
 	// actionDispatcher serves InvokeNotificationAction; nil reports FLAG_OFF.
-	actionDispatcher *NotificationActionDispatcher
+	actionDispatcher *notifyactions.NotificationActionDispatcher
 	// guidanceAcks tracks sent keystroke answers; ackCancel/ackDone stop its loop.
 	guidanceAcks *guidance.GuidanceAckDetector
 	hookReply    atomic.Pointer[hookReplyResolver]

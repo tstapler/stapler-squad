@@ -1,4 +1,4 @@
-package services
+package notifyactions
 
 import (
 	"context"
@@ -185,7 +185,7 @@ func newDispatchFixture() *dispatchFixture {
 	}
 	f.d = NewNotificationActionDispatcher(ActionDelegates{
 		Approvals: f.approvals, Questions: f.questions, Guidance: f.guidance, Backlog: f.backlog, Resolver: f.resolver,
-	}, func() actionAudit { return f.audit }, testFlagRegistry())
+	}, func() ActionAudit { return f.audit }, testFlagRegistry())
 	f.d.flags, f.d.metrics = f.flags, f.metrics
 	return f
 }
@@ -448,24 +448,6 @@ func TestGuidanceAnswerer_ShouldReportAlreadyResolved_WhenAnswerNotApplied(t *te
 	assert.Equal(t, outApplied, first.Outcome)
 	assert.Equal(t, outResolved, second.Outcome, "applied=false maps to ALREADY_RESOLVED")
 	assert.Equal(t, "prod", second.Detail, "the value that won")
-}
-
-func TestMapReplyOutcome_ShouldCoverEveryReplyOutcome(t *testing.T) {
-	t.Parallel()
-	want := map[sessionv1.ReplyOutcome]sessionv1.ActionOutcome{
-		sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT:               outApplied,
-		sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE: sessionv1.ActionOutcome_ACTION_OUTCOME_SEND_INDETERMINATE,
-		sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT:           sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT,
-		sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING:         outStale,
-		sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT:       outStale,
-		sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED:       sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED,
-		sessionv1.ReplyOutcome_REPLY_OUTCOME_DISABLED:           outFlagOff,
-	}
-	for r, o := range want {
-		assert.Equal(t, o, mapReplyOutcome(&sessionv1.ReplyToPendingQuestionResponse{Outcome: r}).Outcome, r.String())
-	}
-	assert.Equal(t, "dialog_gone", mapReplyOutcome(&sessionv1.ReplyToPendingQuestionResponse{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING}).StaleReason)
-	assert.Equal(t, "dialog_replaced", mapReplyOutcome(&sessionv1.ReplyToPendingQuestionResponse{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT}).StaleReason)
 }
 
 func TestInvokeNotificationAction_ShouldRetireTheDecidedCard_WhenAnswerOrApprovalApplied(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -52,7 +53,7 @@ type actionFakes struct {
 	approvals, guidance, backlog, wakes, peers atomic.Int32
 }
 
-func (f *actionFakes) ResolveApproval(context.Context, services.ApprovalChoice) (questionkit.ActionResult, error) {
+func (f *actionFakes) ResolveApproval(context.Context, notifyactions.ApprovalChoice) (questionkit.ActionResult, error) {
 	f.approvals.Add(1)
 	return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
 }
@@ -62,7 +63,7 @@ func (f *actionFakes) AnswerGuidance(context.Context, string, string) (questionk
 	return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
 }
 
-func (f *actionFakes) Decide(context.Context, services.BacklogDecision) (questionkit.ActionResult, error) {
+func (f *actionFakes) Decide(context.Context, notifyactions.BacklogDecision) (questionkit.ActionResult, error) {
 	f.backlog.Add(1)
 	return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
 }
@@ -120,7 +121,7 @@ func newRemoteActionEnv(t *testing.T) *remoteActionEnv {
 	svc.PendingQuestions().Register(q)
 
 	f := &actionFakes{}
-	svc.SetNotificationActionDispatcher(services.NewNotificationActionDispatcher(services.ActionDelegates{
+	svc.SetNotificationActionDispatcher(notifyactions.NewNotificationActionDispatcher(notifyactions.ActionDelegates{
 		Approvals: f, Questions: svc.WireAnswerRouter(services.AnswerRouterDeps{}), Guidance: f, Backlog: f, Cancels: f,
 	}, nil, svc.FeatureFlagRegistry()))
 

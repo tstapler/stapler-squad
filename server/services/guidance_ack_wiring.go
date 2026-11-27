@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -31,7 +32,7 @@ func (s *SessionService) wireGuidanceAcks(storage *session.Storage) *guidance.Gu
 	d := guidance.NewGuidanceAckDetector(storage, s.ackCapture, func(uuid string) bool {
 		return s.answerSessions()(uuid).phase != phaseLive
 	}, nil)
-	d.SetNotes(historyItemResolver{store: s.GetNotificationStore()})
+	d.SetNotes(notifyactions.NewNotificationResolver(s.GetNotificationStore()))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	s.ackCancel, s.ackDone, s.guidanceAcks = cancel, done, d
@@ -125,7 +126,7 @@ func (s *SessionService) wireHookReply(storage *session.Storage, acks *guidance.
 	if storage == nil {
 		return
 	}
-	r := &hookReplyResolver{rows: storage, flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: s.flagReader()}}
+	r := &hookReplyResolver{rows: storage, flags: notifyactions.NewConfigFlags(flagsvc.CompiledFlagEvidence, s.flagReader())}
 	if acks != nil {
 		r.acks = acks
 	}
