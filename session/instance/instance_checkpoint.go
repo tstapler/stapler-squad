@@ -59,7 +59,7 @@ func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64
 				// under configDir before use as a directory component: an
 				// unvalidated ".."-laden title could otherwise make cpDir resolve
 				// outside configDir entirely. Same baseDir-containment pattern as
-				// server/services/database_service.go.
+				// server/services/workspacedb/database_service.go.
 				cpDir := filepath.Join(configDir, i.Title, "checkpoints")
 				if rel, relErr := filepath.Rel(configDir, cpDir); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 					log.Warn("checkpoint: rejecting session title that escapes config dir", "session", i.Title)

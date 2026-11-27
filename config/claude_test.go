@@ -132,7 +132,7 @@ func TestGetConfig(t *testing.T) {
 // check: a filename crafted to escape claudeDir must be rejected by
 // GetConfig with an error, and must never read the file it points at outside
 // claudeDir. filename ultimately comes from RPC requests
-// (server/services/config_service.go), so untrusted "../" segments are the
+// (server/services/claudeconfig/config_service.go), so untrusted "../" segments are the
 // realistic attack shape.
 func TestGetConfig_RejectsPathTraversal(t *testing.T) {
 	claudeDir := t.TempDir()

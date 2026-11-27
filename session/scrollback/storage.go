@@ -117,7 +117,7 @@ func (s *FileScrollbackStorage) getFileLock(sessionID string) *sync.Mutex {
 // write scrollback files outside basePath, so this rejects any sessionID
 // whose joined path does not stay under basePath — the same
 // filepath.Rel-based containment check used in
-// server/services/database_service.go and session/backlog_review.go's
+// server/services/workspacedb/database_service.go and session/backlog_review.go's
 // readPlanFile.
 func (s *FileScrollbackStorage) getFilePath(sessionID string) (string, error) {
 	var filename string

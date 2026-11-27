@@ -730,6 +730,49 @@ linters:
             - github.com/tstapler/stapler-squad/session/instance$
             - github.com/tstapler/stapler-squad/session/steertext
             - github.com/tstapler/stapler-squad/session/unfinished$
+        # server/services/sessiondefaults, claudeconfig and workspacedb serve the configuration RPCs;
+        # none imports the services hub (the hub builds them).
+        isolate_sessiondefaults:
+          list-mode: strict
+          files:
+            - "**/services/sessiondefaults/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/config/clihelp
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/session/domain
+        isolate_claudeconfig:
+          list-mode: strict
+          files:
+            - "**/services/claudeconfig/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+        isolate_workspacedb:
+          list-mode: strict
+          files:
+            - "**/services/workspacedb/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - modernc.org/sqlite
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/internal/sqlitedsn
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/fsops$
+            - github.com/tstapler/stapler-squad/session/dbpool
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict

@@ -213,6 +213,7 @@ go_test(
         "//server/services/notifyactions",
         "//server/services/prs",
         "//server/services/quota",
+        "//server/services/sessiondefaults",
         "//server/workflows",
         "//session",
         "//session/autonomous",

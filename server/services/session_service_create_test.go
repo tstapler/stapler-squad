@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/sessiondefaults"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
@@ -740,7 +741,7 @@ func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 
 	ctx := context.Background()
-	_, err := NewDefaultsService().UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+	_, err := sessiondefaults.NewDefaultsService().UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
 		Program: &sessionv1.ProgramConfigProto{
 			Id: "netflix-model-gateway", Label: "Netflix Model Gateway",
 			Command: "bash", // a shell, so printenv can run in the pane; env injection is command-agnostic
