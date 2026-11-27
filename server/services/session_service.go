@@ -15,12 +15,15 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
+	"github.com/tstapler/stapler-squad/server/services/sessiondefaults"
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
+	"github.com/tstapler/stapler-squad/server/services/workspacedb"
 
 	"github.com/google/uuid"
 
@@ -201,7 +204,7 @@ type SessionService struct {
 	searchSvc       *searchrpc.SearchService
 	githubSvc       *GitHubService
 	workspaceSvc    *WorkspaceService
-	configSvc       *ConfigService
+	configSvc       *claudeconfig.ConfigService
 	notificationSvc *notify.NotificationService
 	approvalSvc     *approvals.ApprovalService
 	utilitySvc      *UtilityService
@@ -234,7 +237,7 @@ type SessionService struct {
 	deleteSessionCleanupTimeout time.Duration
 
 	// databaseSvc handles workspace/database switcher RPCs.
-	databaseSvc *DatabaseService
+	databaseSvc *workspacedb.DatabaseService
 
 	// tmuxStreamerManager caches ExternalTmuxStreamer instances per tmux session
 	// name (main sessions and shell siblings alike). Wired in so StopShell can
@@ -257,7 +260,7 @@ type SessionService struct {
 	slashCommandSvc *SlashCommandService
 
 	// defaultsSvc handles session defaults configuration RPCs.
-	defaultsSvc *DefaultsService
+	defaultsSvc *sessiondefaults.DefaultsService
 
 	// slackConfigSvc handles GetSlackConfig/UpdateSlackConfig/TestSlackWebhook RPCs.
 	slackConfigSvc *notify.SlackConfigService
@@ -288,7 +291,7 @@ type SessionService struct {
 	streamHubRolloutSvc *streamhubrollout.StreamHubRolloutService
 
 	// launcherPresetsSvc handles the GetLauncherPresets RPC.
-	launcherPresetsSvc *LauncherPresetsService
+	launcherPresetsSvc *sessiondefaults.LauncherPresetsService
 
 	// projectSvc handles Project CRUD RPCs.
 	projectSvc *ProjectService
@@ -999,7 +1002,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		searchSvc:                   searchrpc.NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
 		githubSvc:                   NewGitHubService(concStorage),
 		workspaceSvc:                workspaceSvc,
-		configSvc:                   NewConfigService(),
+		configSvc:                   claudeconfig.NewConfigService(),
 		notificationSvc:             notificationSvc,
 		approvalSvc:                 approvalSvc,
 		utilitySvc:                  utilitySvc,
@@ -1007,16 +1010,16 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		taggingRulesSvc:             taggingRulesSvc,
 		taggingEngine:               taggingEngine,
 		approvalStore:               approvalStore,
-		databaseSvc:                 NewDatabaseService(),
+		databaseSvc:                 workspacedb.NewDatabaseService(),
 		fileSvc:                     NewFileService(workspaceSvc),
 		pathCompletionSvc:           NewPathCompletionService(),
 		slashCommandSvc:             NewSlashCommandService(),
-		defaultsSvc:                 NewDefaultsService(),
+		defaultsSvc:                 sessiondefaults.NewDefaultsService(),
 		slackConfigSvc:              notify.NewSlackConfigService(notify.NewSlackNotifier()),
 		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
 		callbackConfigSvc:           webhooks.NewCallbackConfigService(),
 		streamHubRolloutSvc:         streamhubrollout.NewStreamHubRolloutService(nil),
-		launcherPresetsSvc:          NewLauncherPresetsService(),
+		launcherPresetsSvc:          sessiondefaults.NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
 		artifactSvc:                 &ArtifactService{},

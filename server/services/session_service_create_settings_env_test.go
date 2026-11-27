@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/sessiondefaults"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -63,7 +64,7 @@ func TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess(t *
 	wantEnv := map[string]string{baseURLKey: baseURLVal, hostileKey: hostileVal}
 
 	ctx := context.Background()
-	_, err := NewDefaultsService().UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+	_, err := sessiondefaults.NewDefaultsService().UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
 		Program: &sessionv1.ProgramConfigProto{
 			Id: "netflix-model-gateway", Label: "Netflix Model Gateway",
 			Command: fakeClaude,

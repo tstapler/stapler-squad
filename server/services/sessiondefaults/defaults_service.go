@@ -1,4 +1,6 @@
-package services
+// Package sessiondefaults serves the RPCs that configure how new sessions start: global
+// defaults, profiles, directory rules, aliases, programs and launcher presets.
+package sessiondefaults
 
 import (
 	"context"

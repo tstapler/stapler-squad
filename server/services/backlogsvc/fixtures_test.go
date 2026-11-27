@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/quota"
+	"github.com/tstapler/stapler-squad/server/services/sessiondefaults"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -39,10 +40,10 @@ func bkfFlagWriter(t *testing.T) func(name string, on bool) {
 }
 
 // newIsolatedDefaultsService creates a DefaultsService backed by a fresh temporary state dir.
-func newIsolatedDefaultsService(t *testing.T) *services.DefaultsService {
+func newIsolatedDefaultsService(t *testing.T) *sessiondefaults.DefaultsService {
 	t.Helper()
 	svctest.WithIsolatedStateDir(t)
-	return services.NewDefaultsService()
+	return sessiondefaults.NewDefaultsService()
 }
 
 func updateQuota(t testing.TB, s *sessionv1.QuotaSettings) (*sessionv1.UpdateQuotaConfigResponse, error) {
