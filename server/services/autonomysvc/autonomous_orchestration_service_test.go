@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 // Unit tests for AutonomousOrchestrationService: driver registry, lifecycle context
 // binding, and completion callback deregistration behavior.
@@ -10,10 +10,9 @@ import (
 	"testing"
 	"time"
 
-	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
@@ -70,23 +69,22 @@ func TestNewAutonomousOrchestrationService(t *testing.T) {
 }
 
 // TestAutonomousOrchestrationService_SetLifecycleContext verifies that SetLifecycleContext
-// stores the provided context and that driverCtx() returns it (observable via cancellation).
+// stores the provided context and that DriverContext() returns it (observable via cancellation).
 func TestAutonomousOrchestrationService_SetLifecycleContext(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
-	// Without SetLifecycleContext, driverCtx() should fall back to Background.
-	assert.NoError(t, svc.AutonomousSvc.driverCtx().Err(), "driverCtx() should return non-cancelled ctx before SetLifecycleContext")
+	// Without SetLifecycleContext, DriverContext() should fall back to Background.
+	assert.NoError(t, svc.DriverContext().Err(), "DriverContext() should return non-cancelled ctx before SetLifecycleContext")
 
-	// After wiring a cancelled context, driverCtx() should reflect it.
+	// After wiring a cancelled context, DriverContext() should reflect it.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 	svc.SetLifecycleContext(ctx)
 
-	assert.Error(t, svc.AutonomousSvc.driverCtx().Err(), "driverCtx() should return the cancelled lifecycle context after SetLifecycleContext")
+	assert.Error(t, svc.DriverContext().Err(), "DriverContext() should return the cancelled lifecycle context after SetLifecycleContext")
 }
 
 // TestAutonomousOrchestrationService_DriverRegistry_RegisterAndDeregister verifies that
@@ -95,8 +93,7 @@ func TestAutonomousOrchestrationService_DriverRegistry_RegisterAndDeregister(t *
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	inst := &instance.Instance{
 		Title: "reg-test",
@@ -106,42 +103,13 @@ func TestAutonomousOrchestrationService_DriverRegistry_RegisterAndDeregister(t *
 	driver := autonomous.NewAutonomousDriver(inst, pool, "fix it", 1)
 
 	// Register the driver without starting it (Start() would require a controller).
-	svc.AutonomousSvc.registerDriver("reg-test", driver)
+	svc.RegisterDriver("reg-test", driver)
 
 	// Deregister and stop — should not panic.
-	svc.AutonomousSvc.stopAndDeregisterDriver("reg-test")
+	svc.stopAndDeregisterDriver("reg-test")
 
 	// Second deregister is a no-op — should also not panic.
-	svc.AutonomousSvc.stopAndDeregisterDriver("reg-test")
-}
-
-// TestAutonomousOrchestrationService_DeleteSession_StopsRegisteredDriver verifies that
-// DeleteSession calls stopAndDeregisterDriver for the deleted session's title.
-func TestAutonomousOrchestrationService_DeleteSession_StopsRegisteredDriver(t *testing.T) {
-	t.Parallel()
-	storage := svctest.CreateTestStorage(t)
-	eventBus := events.NewEventBus(100)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
-
-	const title = "delete-driver-test"
-	addPausedAutonomousInstance(t, storage, title)
-
-	inst := &instance.Instance{
-		Title: title,
-		UUID:  title + "-uuid-1234",
-	}
-	pool := &instantDonePool{}
-	driver := autonomous.NewAutonomousDriver(inst, pool, "fix it", 1)
-	svc.AutonomousSvc.registerDriver(title, driver)
-
-	req := connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: title})
-	resp, err := svc.DeleteSession(context.Background(), req)
-	require.NoError(t, err, "DeleteSession should succeed")
-	assert.True(t, resp.Msg.Success)
-
-	// The registry entry must have been removed — subsequent stop is a no-op.
-	svc.AutonomousSvc.stopAndDeregisterDriver(title) // no panic = driver already deregistered
+	svc.stopAndDeregisterDriver("reg-test")
 }
 
 // TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DeregistersDriver verifies
@@ -150,8 +118,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DeregistersDr
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "complete-driver-test"
 
@@ -161,15 +128,15 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DeregistersDr
 	}
 	pool := &instantDonePool{}
 	driver := autonomous.NewAutonomousDriver(inst, pool, "fix it", 1)
-	svc.AutonomousSvc.registerDriver(title, driver)
+	svc.RegisterDriver(title, driver)
 
 	// Fire the completion callback (simulates driver goroutine finishing).
 	// instanceFinder returns nil here — expected when the session exited before callback fires.
 	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	// The driver must have been removed from the registry.
-	svc.AutonomousSvc.stopAndDeregisterDriver(title) // no panic = already deregistered
+	svc.stopAndDeregisterDriver(title) // no panic = already deregistered
 }
 
 // TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatusUpdateFailure
@@ -182,8 +149,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "notif-race-test"
 	inst := &instance.Instance{
@@ -199,7 +165,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	require.NoError(t, storage.AddInstance(inst))
 	// Bypass the real ReviewQueuePoller (not wired in this unit test) and resolve the
 	// instance directly, matching what FindLiveInstance would return once wired.
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	// Item is already at 'review' — the triage-role transition below expects 'idea', so its
 	// precondition will fail and TransitionBacklogItemStatus must return an error.
@@ -221,7 +187,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	ch, _ := eventBus.Subscribe(subCtx)
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	// onAutonomousDriverComplete also publishes a session.updated event before the
 	// notification (badge update for autonomous_mode/autonomous_outcome) — skip past it.
@@ -255,8 +221,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "autonomous-stuck-test"
 	inst := &instance.Instance{
@@ -270,7 +235,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck test item",
@@ -286,7 +251,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 	require.NoError(t, err)
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -304,8 +269,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "autonomous-done-test"
 	inst := &instance.Instance{
@@ -319,7 +283,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous done test item",
@@ -335,7 +299,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 	require.NoError(t, err)
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "task complete", Turns: 5}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -372,15 +336,14 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	trigger := &fakeReviewGateTrigger{}
 	svc.SetReviewGateTrigger(trigger)
 
 	const title = "premature-review-trigger-test"
 	inst := addPausedAutonomousInstance(t, storage, title)
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Mid-SDD-workflow work session, never called request_review",
@@ -398,7 +361,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 	// Simulate the orchestrator's premature DONE verdict — the exact signal that forced
 	// the live bug's in_progress→review transition.
 	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "looks complete from the terminal tail", Turns: 1}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -419,8 +382,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 	// the assertions below.
 	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "not-linked-test"
 	inst := &instance.Instance{
@@ -429,10 +391,10 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	buf := svctest.CaptureLogs(t)
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
+	svc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
 
 	assert.Contains(t, buf.String(), "no linked backlog item session")
 	assert.NotContains(t, buf.String(), "level=WARN", "the expected not-linked case must not escalate to Warn")
@@ -449,8 +411,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "dangling-item-session-test"
 	inst := &instance.Instance{
@@ -459,7 +420,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	// Create a real backlog item + item session (FK-valid), then delete the backlog item —
 	// simulating an operator deleting an item while its autonomous session is still running.
@@ -483,7 +444,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	}
 
 	buf := svctest.CaptureLogs(t)
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
+	svc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
 
 	assert.Contains(t, buf.String(), "failed to load linked backlog item")
 	assert.Contains(t, buf.String(), "level=WARN", "a genuine lookup failure must be diagnosable, not silent")
@@ -501,8 +462,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "unrecognized-role-test"
 	inst := &instance.Instance{
@@ -511,7 +471,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Unrecognized role test item",
@@ -530,7 +490,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
+	svc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
 
 	assert.Contains(t, buf.String(), "unrecognized session role")
 	assert.Contains(t, buf.String(), "level=WARN", "an unrecognized role must be diagnosable, not silent")
@@ -567,8 +527,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "autonomous-stuck-resolves-test"
 	inst := &instance.Instance{
@@ -582,7 +541,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck resolves test item",
@@ -608,7 +567,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 
 	// The item resumes and this time the work driver actually finishes.
 	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "task complete", Turns: 3}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err = storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -626,8 +585,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "autonomous-stuck-review-resolves-test"
 	inst := &instance.Instance{
@@ -641,7 +599,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck review resolves test item",
@@ -665,7 +623,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	require.Len(t, open, 1, "precondition: the stuck row must be open before the success run")
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "review complete", Turns: 2}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err = storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -684,8 +642,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "autonomous-stuck-still-stuck-test"
 	inst := &instance.Instance{
@@ -699,7 +656,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous still-stuck test item",
@@ -715,7 +672,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 	require.NoError(t, err)
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -736,8 +693,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "review-stuck-already-moved-on-test"
 	inst := &instance.Instance{
@@ -751,7 +707,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	// Item has already been reopened to in_progress by the time this stuck
 	// review exit is processed (simulates bouncing's autoReopenWithBackoffGate
@@ -770,7 +726,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 	require.NoError(t, err)
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -797,8 +753,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "review-stuck-still-stuck-test"
 	inst := &instance.Instance{
@@ -812,7 +767,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Review stuck, still stuck test item",
@@ -829,7 +784,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	require.Nil(t, is.EndedAt, "precondition: the review ItemSession is still active (autonomous driver never ended it)")
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	// The autonomous_stuck row must survive — the item is genuinely still stuck.
 	open, err := storage.FindOpenStuckStates(ctx)
@@ -861,8 +816,7 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "triage-stuck-metadata-test"
 	inst := &instance.Instance{
@@ -871,7 +825,7 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Triage stuck metadata test item",
@@ -891,7 +845,7 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 	ch, _ := eventBus.Subscribe(subCtx)
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 5, Stuck: true}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	var notif *events.Event
 	for i := 0; i < 5; i++ {
@@ -921,8 +875,7 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "hidden-generic-notif-test"
 	inst := &instance.Instance{
@@ -937,7 +890,7 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: title, Hidden: true, Kind: deliverygate.KindOther})
 
@@ -946,7 +899,7 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 	ch, _ := eventBus.Subscribe(subCtx)
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	// The session.updated badge event still fires (unrelated to the Hidden gate); only the
 	// notification event must be absent. Drain briefly and assert no notification arrives.
@@ -971,8 +924,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 
 	const title = "generic-notif-metadata-test"
 	inst := &instance.Instance{
@@ -987,7 +939,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Generic notif metadata test item",
@@ -1007,7 +959,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 	ch, _ := eventBus.Subscribe(subCtx)
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	var notif *events.Event
 	for i := 0; i < 5; i++ {
@@ -1147,8 +1099,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	ctx, lifecycleCancel := context.WithCancel(context.Background())
 	t.Cleanup(lifecycleCancel)
 	eventBus := events.NewEventBus(4)
-	svc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, eventBus)
 	svc.SetLifecycleContext(ctx)
 
 	respawnErr := fmt.Errorf("headless pool exhausted")
@@ -1161,7 +1112,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous respawn failure test item",
@@ -1180,7 +1131,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	ch, _ := eventBus.Subscribe(subCtx)
 
 	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
+	svc.OnAutonomousDriverComplete(title, outcome)
 
 	var notif *events.Event
 	for i := 0; i < 10; i++ {

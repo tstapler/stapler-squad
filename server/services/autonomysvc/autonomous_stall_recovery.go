@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 import (
 	"context"
@@ -75,7 +75,7 @@ func (a *AutonomousOrchestrationService) nudgeFlagsOn() (diagnose, stall bool) {
 // beginRecovery returns a ctx that stopAndDeregisterDriver (user stop, delete, pause or
 // toggle-off) cancels, so an in-flight nudge never outlives a requested stop.
 func (a *AutonomousOrchestrationService) beginRecovery(title string) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(a.driverCtx())
+	ctx, cancel := context.WithCancel(a.DriverContext())
 	self := &stallRecovery{cancel: cancel}
 	a.mu.Lock()
 	a.installRecoveryLocked(title, self)
@@ -86,7 +86,7 @@ func (a *AutonomousOrchestrationService) beginRecovery(title string) (context.Co
 // tryBeginRecovery is beginRecovery that refuses (ok=false) when a recovery is already
 // live for title, checking and registering under one lock hold.
 func (a *AutonomousOrchestrationService) tryBeginRecovery(title string) (ctx context.Context, release func(), ok bool) {
-	ctx, cancel := context.WithCancel(a.driverCtx())
+	ctx, cancel := context.WithCancel(a.DriverContext())
 	self := &stallRecovery{cancel: cancel}
 	a.mu.Lock()
 	if _, live := a.recoveries[title]; live {

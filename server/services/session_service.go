@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
@@ -368,7 +369,7 @@ type SessionService struct {
 	headlessClient headless.PoolClient
 
 	// autonomousSvc manages the lifecycle of AutonomousDriver instances.
-	AutonomousSvc *AutonomousOrchestrationService
+	AutonomousSvc *autonomysvc.AutonomousOrchestrationService
 
 	// workflowSvc handles workflow CRUD and RunWorkflow RPC delegation.
 	// Injected after construction via SetWorkflowService to avoid bootstrapping cycle.
@@ -1078,7 +1079,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	svc.streamHubRolloutSvc = streamhubrollout.NewStreamHubRolloutService(svc.findInstance)
 
 	// Wire the autonomous orchestration service with a storage getter closure.
-	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)
+	autonomousSvc := autonomysvc.NewAutonomousOrchestrationService(nil, eventBus)
 	autonomousSvc.SetStorageGetter(func() *session.Storage {
 		if cs, ok := storage.(*session.Storage); ok {
 			return cs

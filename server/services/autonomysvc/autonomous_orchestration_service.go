@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 import (
 	"context"
@@ -156,16 +156,16 @@ func (a *AutonomousOrchestrationService) SetStorageGetter(fn func() *session.Sto
 	a.storageGetter = fn
 }
 
-// driverCtx returns the lifecycle context, falling back to Background() if not set.
-func (a *AutonomousOrchestrationService) driverCtx() context.Context {
+// DriverContext returns the lifecycle context, falling back to Background() if not set.
+func (a *AutonomousOrchestrationService) DriverContext() context.Context {
 	if a.lifecycleCtx != nil {
 		return a.lifecycleCtx
 	}
 	return context.Background()
 }
 
-// registerDriver records a running AutonomousDriver in the registry so it can be stopped later.
-func (a *AutonomousOrchestrationService) registerDriver(sessionTitle string, d *autonomous.AutonomousDriver) {
+// RegisterDriver records a running AutonomousDriver in the registry so it can be stopped later.
+func (a *AutonomousOrchestrationService) RegisterDriver(sessionTitle string, d *autonomous.AutonomousDriver) {
 	a.mu.Lock()
 	old := a.drivers[sessionTitle]
 	a.drivers[sessionTitle] = d
@@ -173,6 +173,17 @@ func (a *AutonomousOrchestrationService) registerDriver(sessionTitle string, d *
 	if old != nil && old != d {
 		old.Stop() // never leave two drivers typing into one pane
 	}
+}
+
+// DriverRunID reports the run id of the driver registered for sessionTitle, if any.
+func (a *AutonomousOrchestrationService) DriverRunID(sessionTitle string) (uint64, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	d, ok := a.drivers[sessionTitle]
+	if !ok {
+		return 0, false
+	}
+	return d.RunID(), true
 }
 
 // stopAndDeregisterDriver stops the driver for sessionTitle (if any) and removes it from the registry.
@@ -275,11 +286,11 @@ func (a *AutonomousOrchestrationService) StartAutonomousDriverForInstance(inst *
 	driver := autonomous.NewAutonomousDriver(inst, a.pool, inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), a.withCostSink(inst))
 	driver.RegisterCompletionCallback(a.OnAutonomousDriverComplete)
 	driver.RegisterTurnCallback(a.buildTurnCallback(inst))
-	if err := driver.Start(a.driverCtx()); err != nil {
+	if err := driver.Start(a.DriverContext()); err != nil {
 		log.Warn("[AutonomousOrchestrationService] failed to start autonomous driver for backlog session", "session", inst.Title, "err", err)
 		return
 	}
-	a.registerDriver(inst.Title, driver)
+	a.RegisterDriver(inst.Title, driver)
 }
 
 // StartAutonomousDriverWithTimeout is like StartAutonomousDriverForInstance but uses a
@@ -303,10 +314,10 @@ func (a *AutonomousOrchestrationService) startDriver(inst *instance.Instance, st
 	driver := autonomous.NewAutonomousDriver(inst, a.pool, inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), autonomous.WithStartupTimeout(startupTimeout), a.withCostSink(inst))
 	driver.RegisterCompletionCallback(a.OnAutonomousDriverComplete)
 	driver.RegisterTurnCallback(a.buildTurnCallback(inst))
-	if err := driver.Start(a.driverCtx()); err != nil {
+	if err := driver.Start(a.DriverContext()); err != nil {
 		return err
 	}
-	a.registerDriver(inst.Title, driver)
+	a.RegisterDriver(inst.Title, driver)
 	return nil
 }
 

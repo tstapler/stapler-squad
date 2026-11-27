@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 // Cancelled-class stops (an operator's stop or a server shutdown) must never be
 // handled as stalls, in any role arm or on the unlinked path (Story 3.1.3).
@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/autonomous"
@@ -23,7 +24,7 @@ func cancelledOutcome(reason domain.StopReason) autonomous.AutonomousDriverOutco
 }
 
 func (f *charFixture) setReadoption(on bool) {
-	f.svc.AutonomousSvc.SetReadoptionEnabled(func() bool { return on })
+	f.svc.SetReadoptionEnabled(func() bool { return on })
 }
 
 // assertNoRowOrRecovery asserts the item has no open stuck row, its ItemSession is

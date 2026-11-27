@@ -16,7 +16,7 @@
 // docs/bugs/fixed/), plus three more instances fixed alongside this
 // analyzer's introduction (server/services/backlog_service_triage.go's
 // spawnSessionAfterGates and TriggerReReview,
-// server/services/autonomous_orchestration_service.go's
+// server/services/autonomysvc/autonomous_orchestration_service.go's
 // onAutonomousDriverComplete) — see docs/tasks/backlog-feature-improvement.md's
 // 2026-07-27 update.
 //

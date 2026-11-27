@@ -144,7 +144,7 @@ var bypassInventory = []bypassSite{
 
 	// Gated, Story 1.5.6 (system writers in server/services, the two operator triage writers,
 	// the rollbacks and the debug handler).
-	gated("server/services/autonomous_orchestration_service.go", "AutonomousOrchestrationService.advanceItemOnDriverComplete", 1, "GatedTransition as autonomous_complete"),
+	gated("server/services/autonomysvc/autonomous_orchestration_service.go", "AutonomousOrchestrationService.advanceItemOnDriverComplete", 1, "GatedTransition as autonomous_complete"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.TransitionWithGuard", 1, "GatedTransition; caller derived from target and actor (queue, claim, Jules dispatch)"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.AutoReopenAfterFailedReview", 1, "GatedTransition as auto_reopen_after_failed_review"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.rollbackFailedReopen", 1, "gate.Rollback (exempt, counted)"),
@@ -478,7 +478,7 @@ func anyDeclaresTarget(specs []domain.TransitionCallerSpec, to string) bool {
 // The autonomous_complete registry entry pins the set {ready}: toStatus is
 // assigned exactly once in onAutonomousDriverComplete, to BacklogStatusReady.
 func TestWorkflowBypassInventory_AutonomousCompleteTargetSetIsExactlyReady(t *testing.T) {
-	const file = "server/services/autonomous_orchestration_service.go"
+	const file = "server/services/autonomysvc/autonomous_orchestration_service.go"
 	var assigned []string
 	walkModuleFuncs(t, moduleRoot(t), func(rel string, fd *ast.FuncDecl) {
 		if rel != file {

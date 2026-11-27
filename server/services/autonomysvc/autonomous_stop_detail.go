@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 import (
 	"fmt"
@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/tstapler/stapler-squad/server/services/secretscan"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/autonomous"
@@ -45,7 +47,7 @@ func sanitizeStopTail(raw string) string {
 		return stopTailWithheldMarker
 	}
 
-	s = RedactErrorDetail(s)
+	s = secretscan.RedactErrorDetail(s)
 	return autonomous.TailBytes(foldToOneLine(s), stopTailSinkMaxBytes)
 }
 

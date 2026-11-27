@@ -13,8 +13,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/server/services/secretscan"
+
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -118,7 +121,7 @@ func truncateErrorDetail(err error, maxRunes int) string {
 	if err == nil {
 		return ""
 	}
-	s := services.RedactErrorDetail(strings.Join(strings.Fields(err.Error()), " ")) // one line: it is embedded in a one-line stuck context
+	s := secretscan.RedactErrorDetail(strings.Join(strings.Fields(err.Error()), " ")) // one line: it is embedded in a one-line stuck context
 	if utf8.RuneCountInString(s) <= maxRunes {
 		return s
 	}
