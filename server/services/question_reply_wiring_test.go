@@ -15,6 +15,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/qareply"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
@@ -171,4 +173,34 @@ func TestDeliveryProbes_ShouldClassifySessionsFromTheLivePoller(t *testing.T) {
 		assert.Equal(t, tc.archived, p.SessionArchived(tc.id), "archived %s", tc.id)
 	}
 	assert.True(t, p.Unconfirmed == nil)
+}
+
+// A hook-served answer is handed to the detector WireNotificationActions built.
+// The hook route is closed by compiled evidence, which this test opens.
+func TestReplyWiring_ShouldHandAHookServedAnswerToTheAckDetector(t *testing.T) {
+	e := newSteerEnv(t)
+	compiled := flagsvc.CompiledFlagEvidence
+	flagsvc.CompiledFlagEvidence.S1HookReplyPass = true
+	t.Cleanup(func() { flagsvc.CompiledFlagEvidence = compiled })
+	enableAnswerFlags(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlagScope(flagsvc.AskUserQuestionStructuredFlagName, flagsvc.ScopeStageHookReply, true))
+	rows := &routerEnv{replyEnv: &replyEnv{steerEnv: e}}
+	qid := rows.mirroredRow("hook-uuid", domain.Question{Text: "Which cache?", Header: "Cache", Options: options("Redis", "None")})
+	e.fix.svc.WireNotificationActions(NotificationActionWiring{Storage: e.fix.storage})
+	acks := e.fix.svc.GuidanceAcks()
+	require.NotNil(t, acks)
+	e.fix.svc.stopGuidanceAcks() // joins the loop, so only the hook path can start tracking the row
+	stored, err := e.fix.svc.hookReply.Load().PreAnswer(context.Background(), qid, "Redis")
+	require.NoError(t, err)
+	require.True(t, stored)
+
+	out := e.fix.svc.HookReplier().Reply(context.Background(), "hook-uuid", map[string]interface{}{"questions": []interface{}{map[string]interface{}{
+		"question": "Which cache?", "header": "Cache", "multiSelect": false,
+		"options": []interface{}{map[string]interface{}{"label": "Redis"}, map[string]interface{}{"label": "None"}},
+	}}})
+	require.NotNil(t, out, "the hook served the answer")
+	require.Equal(t, domain.DeliveryStateSent, rows.row(qid).DeliveryState)
+	acks.Receipt(context.Background(), "hook-uuid", guidance.AskUserQuestionTool)
+
+	assert.Equal(t, domain.DeliveryStateAcknowledged, rows.row(qid).DeliveryState, "only a tracked answer is acknowledged")
 }

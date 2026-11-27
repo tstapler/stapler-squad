@@ -10,31 +10,31 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // With no PeerAddr port the router installs the in-process peer: without it the
 // hidden reply handler would refuse the router's own request, which has no peer.
-func TestNewAnswerRouter_ShouldInstallTheInProcessPeerAndDefaultGuard_WhenNoneIsGiven(t *testing.T) {
+func TestNewAnswerRouter_ShouldInstallTheInProcessPeer_WhenNoPeerReaderIsGiven(t *testing.T) {
 	e := newBareEnv(t)
 	p := e.ports()
 	p.PeerAddr = nil
 	e.svc = New(p)
 	assert.Nil(t, e.svc.peerAddr)
 
-	router := e.svc.NewAnswerRouter(AnswerRouterDeps{Flags: fakeActionFlags{off: map[string]bool{}}})
+	e.svc.NewAnswerRouter(AnswerRouterDeps{}, fakeActionFlags{off: map[string]bool{}})
 
 	require.NotNil(t, e.svc.peerAddr)
 	assert.Equal(t, inProcessPeerAddr, e.svc.peerAddr(connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{})))
-	assert.NotNil(t, router.guard)
 }
 
 func TestNewAnswerRouter_ShouldKeepTheConfiguredPeerReader(t *testing.T) {
 	e := newBareEnv(t)
 	e.svc = New(e.ports())
 
-	e.svc.NewAnswerRouter(AnswerRouterDeps{Flags: fakeActionFlags{off: map[string]bool{}}})
+	e.svc.NewAnswerRouter(AnswerRouterDeps{}, fakeActionFlags{off: map[string]bool{}})
 
 	assert.Equal(t, replyLoopbackPeer, e.svc.peerAddr(nil))
 }
@@ -73,4 +73,20 @@ func TestReply_ShouldUseTheAfterPort(t *testing.T) {
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT, e.replyOK("1", "r-after").Outcome)
 
 	assert.Positive(t, timers.Load())
+}
+
+// The router's own guard, not a test's: input recorded for the pane on the
+// process-wide activity record refuses the write.
+func TestNewAnswerRouter_ShouldRefuseToType_WhileAHumanIsActiveInThePane(t *testing.T) {
+	e := newRouterEnv(t)
+	e.router = e.svc.NewAnswerRouter(AnswerRouterDeps{Rows: e.storage}, e.flags)
+	inst, pm := e.addVisible("default-guard")
+	qid := e.hookRow(inst, colorDialog)
+	access.DefaultHumanActivity().Record("ssq_default-guard")
+
+	res := e.answer(inst, qid, replyColorLabel)
+
+	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, res.Outcome)
+	assert.Equal(t, detailHumanActive, res.Detail)
+	assert.Empty(t, pm.writes())
 }

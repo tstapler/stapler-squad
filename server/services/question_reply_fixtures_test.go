@@ -14,9 +14,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
-	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -26,7 +26,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
-	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // Reply fixtures duplicated from server/services/qareply's tests, for the tests
@@ -176,13 +175,18 @@ func (e *replyEnv) replyLines() []auditkit.AuditLine {
 	return steerLines(e.auditLines(), auditkit.AuditKindReply)
 }
 
-// openFlags resolves every inline action and answer route on.
-type openFlags struct{}
+// enableAnswerFlags turns on, in the env's isolated config, what an operator
+// answer to a live question needs.
+func enableAnswerFlags(t *testing.T) {
+	t.Helper()
+	cfg := config.LoadConfig()
+	require.NoError(t, cfg.SetFeatureFlagScope(flagsvc.NotificationInlineActionsFlagName, flagsvc.ScopePrefixAction+flagsvc.ActionKindAnswerQuestion, true))
+	for _, st := range []string{flagsvc.ScopeStageRender, flagsvc.ScopeStageAnswer} {
+		require.NoError(t, cfg.SetFeatureFlagScope(flagsvc.AskUserQuestionStructuredFlagName, st, true))
+	}
+}
 
-func (openFlags) Inline(string) bool              { return true }
-func (openFlags) Answer(flagsvc.AnswerRoute) bool { return true }
-
-// routerEnv is a reply env plus the answer router over real storage.
+// routerEnv is a reply env plus the production answer router over real storage.
 type routerEnv struct {
 	*replyEnv
 	router *qareply.AnswerRouter
@@ -191,9 +195,8 @@ type routerEnv struct {
 func newRouterEnv(t *testing.T) *routerEnv {
 	t.Helper()
 	e := &routerEnv{replyEnv: newReplyEnv(t)}
-	// A fake guard: the default one asks tmux for client activity.
-	guard := access.NewHumanActiveGuard(access.NewHumanActivity(e.clock.Now), func(context.Context, string) ([]tmux.ClientActivity, error) { return nil, nil })
-	e.router = e.fix.svc.replyService().NewAnswerRouter(qareply.AnswerRouterDeps{Rows: e.fix.storage, Flags: openFlags{}, Guard: guard})
+	enableAnswerFlags(t)
+	e.router = e.fix.svc.WireAnswerRouter(qareply.AnswerRouterDeps{Rows: e.fix.storage})
 	return e
 }
 
@@ -202,7 +205,11 @@ func (e *routerEnv) addVisible(title string) (*instance.Instance, *replyPM) {
 	e.t.Helper()
 	dialog := strings.ReplaceAll(replyDialogFixture(e.t, "question_single_select_3opts.txt"), "2. Green", "2. "+replyColorLabel)
 	pm := &replyPM{dialog: dialog, after: "● User answered Claude's questions\n❯ \n"}
-	return e.addPane(title, namedPM{replyPM: pm, name: "ssq_" + title}), pm
+	inst := e.addPane(title, namedPM{replyPM: pm, name: "ssq_" + title}, func(i *instance.Instance) {
+		i.TmuxServerSocket = "ssq-hubtest-no-server"
+	})
+	require.Equal(e.t, "ssq-hubtest-no-server", inst.Snapshot().TmuxServerSocket, "the guard must not ask the default tmux server")
+	return inst, pm
 }
 
 // mirroredRow stores a hook-mirrored row for questions asked by sessionUUID.

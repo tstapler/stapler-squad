@@ -57,15 +57,11 @@ type AnswerFlags interface {
 
 // AnswerRouterDeps are the collaborators of the router. Nil members disable
 // what needs them: no Rows means no durable routes and no delivery state.
-// Flags is required.
 type AnswerRouterDeps struct {
 	Rows questionkit.AnswerRows
 	// Mirror re-registers an expired hook question; nil uses Ports.InstalledMirror.
 	Mirror *questionkit.GuidanceHookMirror
 	Acks   questionkit.DeliverySink
-	Flags  AnswerFlags
-	// Guard refuses to type while a person is typing; nil is the process-wide activity record.
-	Guard *access.HumanActiveGuard
 }
 
 // AnswerRouter implements QuestionReplier over the ADR-005 ladder.
@@ -119,18 +115,16 @@ func inProcessPeer(req connect.AnyRequest) string {
 
 // NewAnswerRouter installs the in-process peer the router needs to call the
 // reply handler (unless a peer reader is already set) and returns the
-// QuestionReplier over this service.
-func (s *Service) NewAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
+// QuestionReplier over this service. The router always refuses to type while a
+// person is active in the pane.
+func (s *Service) NewAnswerRouter(d AnswerRouterDeps, flags AnswerFlags) *AnswerRouter {
 	if s.peerAddr == nil {
 		s.peerAddr = inProcessPeer
 	}
-	if d.Guard == nil {
-		d.Guard = access.NewHumanActiveGuard(access.DefaultHumanActivity(), tmux.ListClientActivity)
-	}
 	return &AnswerRouter{
 		sessions: s.classify, questions: s.store, hidden: s.Reply,
-		visible: s.paneReplyCore, guard: d.Guard,
-		flags: d.Flags, rows: d.Rows, acks: d.Acks,
+		visible: s.paneReplyCore, guard: access.NewHumanActiveGuard(access.DefaultHumanActivity(), tmux.ListClientActivity),
+		flags: flags, rows: d.Rows, acks: d.Acks,
 		ensure: s.ensureRegistered(d.Mirror),
 		reopen: func(q questionkit.PendingQuestion) {
 			s.store.Forget(questionkit.QuestionKey{SessionUUID: q.SessionUUID, QuestionID: q.QuestionID})

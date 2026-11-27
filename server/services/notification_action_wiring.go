@@ -88,6 +88,5 @@ func (s *SessionService) SetNotificationActionDispatcher(d *notifyactions.Notifi
 
 // WireAnswerRouter returns the QuestionReplier over this service's live sessions.
 func (s *SessionService) WireAnswerRouter(d qareply.AnswerRouterDeps) *qareply.AnswerRouter {
-	d.Flags = notifyactions.NewConfigFlags(flagsvc.CompiledFlagEvidence, s.flagReader())
-	return s.replyService().NewAnswerRouter(d)
+	return s.replyService().NewAnswerRouter(d, notifyactions.NewConfigFlags(flagsvc.CompiledFlagEvidence, s.flagReader()))
 }

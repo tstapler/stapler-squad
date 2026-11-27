@@ -56,10 +56,10 @@ func newRouterEnv(t *testing.T) *routerEnv {
 	t.Helper()
 	e := &routerEnv{replyEnv: newReplyEnv(t), acks: &recordingAcks{}, flags: &fakeActionFlags{off: map[string]bool{}}}
 	e.activity = access.NewHumanActivity(e.clock.Now)
-	e.router = e.svc.NewAnswerRouter(AnswerRouterDeps{Rows: e.storage, Acks: e.acks, Flags: e.flags,
-		Guard: access.NewHumanActiveGuard(e.activity, func(context.Context, string) ([]tmux.ClientActivity, error) {
-			return e.clients, nil
-		})})
+	e.router = e.svc.NewAnswerRouter(AnswerRouterDeps{Rows: e.storage, Acks: e.acks}, e.flags)
+	e.router.guard = access.NewHumanActiveGuard(e.activity, func(context.Context, string) ([]tmux.ClientActivity, error) {
+		return e.clients, nil
+	})
 	return e
 }
 
