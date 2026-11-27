@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-ghostty-wasm test-ghostty-wasm verify-ghostty-wasm fetch-ghostty-wasm build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard checklocks ensure-otelc otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux build-ssq install-ssq install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-ghostty-wasm test-ghostty-wasm verify-ghostty-wasm fetch-ghostty-wasm build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard checklocks ensure-otelc otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -346,6 +346,13 @@ build-mux: ensure-tools ## Build the ssq-mux PTY multiplexer binary (Bazel: //cm
 
 install-mux: ensure-tools ## Build and install ssq-mux to ~/.local/bin
 	@./scripts/install-mux.sh
+
+build-ssq: ensure-tools proto-gen ## Build the ssq API CLI (commands come from the proto descriptors at runtime) (Bazel: //cmd/ssq)
+	go build -o ssq ./cmd/ssq
+	@echo "✅ ssq built to ./ssq"
+
+install-ssq: ensure-tools proto-gen ## Build and install the ssq API CLI to ~/.local/bin (Bazel: //cmd/ssq)
+	go build -o ~/.local/bin/ssq ./cmd/ssq
 
 # ── Pinned tmux binary (for test isolation) ────────────────────────────────
 # Builds tmux 3.8 from the third_party/tmux git submodule.
