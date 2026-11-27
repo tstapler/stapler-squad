@@ -1049,6 +1049,7 @@ linters:
             - "!**/server/services/error_registry_test.go"
             - "!**/server/services/escapecode/analytics_escape_service.go"
             - "!**/server/services/escapecode/analytics_escape_service_test.go"
+            - "!**/server/services/workflowrpc/workflow_golden_test.go"
             - "!**/server/services/workflowrpc/workflow_service_test.go"
             - "!**/server/services/workflowrpc/workflow_service.go"
             - "!**/server/services/backlogsvc/backlog_service_query.go"

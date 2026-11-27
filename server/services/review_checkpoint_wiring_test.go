@@ -60,7 +60,7 @@ func TestSessionService_ForwardsPollerToReviewCheckpointAndWorkflow(t *testing.T
 
 	_, err = sessSvc.AcknowledgeSession(ctx, connect.NewRequest(&sessionv1.AcknowledgeSessionRequest{Id: "polled"}))
 	require.NoError(t, err)
-	assert.False(t, inst.Snapshot().ReviewState.LastAcknowledged.IsZero(), "review queue poller")
+	assert.False(t, inst.Snapshot().LastAcknowledged.IsZero(), "review queue poller")
 
 	_, err = sessSvc.ArchiveWorkflowSessions(ctx, connect.NewRequest(&sessionv1.ArchiveWorkflowSessionsRequest{WorkflowId: inst.WorkflowID}))
 	require.NoError(t, err)
