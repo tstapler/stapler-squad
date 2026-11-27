@@ -23,7 +23,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type wiredFakes struct {
@@ -52,6 +54,7 @@ type wiredEnv struct {
 	fakes    *wiredFakes
 	gid      string
 	itemID   string
+	storage  *session.Storage
 	auditFS  *memfs.MemFS
 }
 
@@ -90,6 +93,7 @@ func newWiredEnv(t *testing.T) *wiredEnv {
 	require.NoError(t, err)
 	e.gid = created.Msg.GetRequest().GetId()
 	e.itemID = item.ID
+	e.storage = storage
 	e.auditFS = memfs.New()
 	sink := auditkit.NewAuditSink(func() (string, error) { return "/cfg", nil }, auditkit.WithAuditFS(e.auditFS))
 	t.Cleanup(sink.Close)
@@ -97,6 +101,17 @@ func newWiredEnv(t *testing.T) *wiredEnv {
 	e.seedCards(t)
 	e.svc.WireNotificationActions(NotificationActionWiring{Storage: storage, Guidance: e.guidance, Backlog: e.fakes, Cancels: e.fakes})
 	return e
+}
+
+// linkWorkSession gives the item a work session no instance backs, then confirms
+// a merge: the answer comes from the real merger, SessionService.MergePR.
+func (e *wiredEnv) linkWorkSession(t *testing.T, kind sessionv1.ActionKind) string {
+	t.Helper()
+	_, err := e.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
+		ItemID: e.itemID, SessionUUID: "gone-session", SessionRole: instance.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	return e.invoke(t, kind, e.itemID, "k-merge", "merge", true)
 }
 
 func (e *wiredEnv) seedCards(t *testing.T) {
@@ -148,8 +163,8 @@ func (e *wiredEnv) invoke(t *testing.T, kind sessionv1.ActionKind, key, idem, ch
 	}, "/")
 }
 
-// Every collaborator WireNotificationActions hands over must reach its action
-// kind and its descriptor lookup; a dropped one answers "not wired".
+// The collaborators WireNotificationActions hands the dispatcher must reach their
+// action kinds, and the non-question lookups their cards.
 func TestWireNotificationActions_ShouldReachEveryWiredCollaborator(t *testing.T) {
 	e := newWiredEnv(t)
 	assert.Equal(t, "n1 APPROVE,OPEN | n2 OPEN | n3 ANSWER_GUIDANCE,OPEN", e.cards(t))
@@ -167,6 +182,7 @@ func TestWireNotificationActions_ShouldReachEveryWiredCollaborator(t *testing.T)
 		e.invoke(t, decision, "missing", "k5", "accept", false),
 		e.invoke(t, decision, e.itemID, "k6", "merge", false),
 		e.invoke(t, decision, e.itemID, "k7", "merge", true),
+		e.linkWorkSession(t, decision),
 		e.invoke(t, decision, e.itemID, "k8", "accept", false),
 		e.invoke(t, sessionv1.ActionKind_ACTION_KIND_CANCEL_WAKE, "w1", "k9", "", false),
 		e.invoke(t, sessionv1.ActionKind_ACTION_KIND_CANCEL_PEER_HELP, "p1", "k10", "", false),
@@ -183,6 +199,7 @@ func TestWireNotificationActions_ShouldReachEveryWiredCollaborator(t *testing.T)
 		"BACKLOG_DECISION/STALE/item_gone/",
 		"BACKLOG_DECISION/INVALID//merge needs confirmation",
 		"BACKLOG_DECISION/INVALID//the item has no work session to merge",
+		"BACKLOG_DECISION/STALE/item_gone/", // MergePR: no such session
 		"BACKLOG_DECISION/APPLIED//",
 		"CANCEL_WAKE/APPLIED//",
 		"CANCEL_PEER_HELP/APPLIED//",

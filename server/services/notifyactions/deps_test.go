@@ -50,7 +50,9 @@ func TestNewDispatcher_ShouldWireOptionalDelegates_WhenTheirInputsArePresent(t *
 		Guidance:    guidance.NewGuidanceRequestService(storage, nil, nil),
 	})
 	assert.NotNil(t, d.guidance)
-	assert.NotNil(t, d.backlog)
+	backlog, ok := d.backlog.(backlogDecider)
+	assert.True(t, ok)
+	assert.Same(t, world, backlog.Merger)
 }
 
 // A nil *AuditSink must reach the dispatcher as a nil interface, so Tier B
