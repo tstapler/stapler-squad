@@ -1263,12 +1263,12 @@ FILES_VIEWER_RACE_BUDGET_PERCENT ?= 10
 FILES_VIEWER_JSCPD_THRESHOLD ?= 0.14
 FILES_VIEWER_JSCPD_MIN_HEADROOM ?= 0.02
 # Fixed list of test-name prefixes owned by the files viewer; extend as stories land.
-FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions|TestAnalyze|FuzzAnalyze|TestAnalysisCache|TestReadRange|TestFileOps|TestCapabilities|TestSessionServiceWriteFile|TestSessionService_ShouldServePathCompletions|TestWorkspaceService_ShouldEvictVcsStatusCache|TestNewGatedSessionService_ShouldInjectRegistryIntoFileService|TestRangeLimiter|TestFileService_SetFlagRegistry)
+FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions|TestAnalyze|FuzzAnalyze|TestAnalysisCache|TestReadRange|TestFileOps|TestCapabilities|TestSessionServiceWriteFile|TestSessionService_ShouldServePathCompletions|TestWorkspaceService_ShouldEvictVcsStatusCache|TestNewGatedSessionService_ShouldInjectRegistryIntoFileService|TestRangeLimiter|TestFileService_SetFlagRegistry|TestListPathCompletions|TestNewFileService|TestNewFileOps)
 
 .PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
 
 files-viewer-go-tests: ensure-tools proto-gen ## Iterate on the files-viewer Go tests only, with -race (fixed -run prefix list)
-	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/contentsearch ./server/services/fileops ./server/services/fsops
+	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/contentsearch ./server/services/fileops ./server/services/pathcomplete ./server/services/fsops
 
 files-viewer-perf: ensure-tools proto-gen ## Files-viewer benchmarks on full 50k-file fixtures (non-race, run in the background)
 	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services ./server/services/contentsearch

@@ -16,7 +16,7 @@ import (
 )
 
 // syncBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
-// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
+// executor/safeexec/safeexec_pg_test.go and server/services/internal/svctest.SyncLogBuffer.
 // A plain bytes.Buffer here would be a real -race hazard the moment a future test drives
 // concurrent writes through captureLogs (e.g. by calling Start()), even though today's
 // sole caller is synchronous.
