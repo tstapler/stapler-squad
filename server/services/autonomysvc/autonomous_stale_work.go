@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 import (
 	"context"
@@ -145,7 +145,7 @@ func (a *AutonomousOrchestrationService) RecordDeadPane(sessionUUID, title strin
 	if storage == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(a.driverCtx(), deadPaneRecordTimeout)
+	ctx, cancel := context.WithTimeout(a.DriverContext(), deadPaneRecordTimeout)
 	defer cancel()
 	is, err := storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 	if err != nil || is.Role != instance.SessionRoleWork || is.EndedAt != nil {

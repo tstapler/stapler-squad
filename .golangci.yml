@@ -698,6 +698,30 @@ linters:
             - github.com/tstapler/stapler-squad/session/instance$
             - github.com/tstapler/stapler-squad/session/steertext
             - github.com/tstapler/stapler-squad/session/unfinished$
+        # server/services/autonomysvc runs autonomous drivers, stall recovery and the lease-wedge warning; it never
+        # imports the services hub (the hub builds it, backlogsvc and server import it).
+        isolate_autonomysvc:
+          list-mode: strict
+          files:
+            - "**/services/autonomysvc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/events
+            - github.com/tstapler/stapler-squad/server/deliverygate
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/server/services/notify$
+            - github.com/tstapler/stapler-squad/server/services/secretscan
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/autonomous
+            - github.com/tstapler/stapler-squad/session/backlog/pipeline
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/headless
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/nudgeoutcomes
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict

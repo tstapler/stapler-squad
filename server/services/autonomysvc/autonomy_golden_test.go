@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 // Differential golden for the autonomous orchestration service: stop handling,
 // stall recovery, stale-work inspection and dead-pane recording over a scenario

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
@@ -245,13 +246,13 @@ func (s *SessionService) SetSessionSummaryGenerator(g *summaries.SessionSummaryG
 
 // SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
 // service so that completed work sessions immediately kick off headless review.
-func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
+func (s *SessionService) SetReviewGateTrigger(t autonomysvc.ReviewGateTrigger) {
 	s.AutonomousSvc.SetReviewGateTrigger(t)
 }
 
 // StaleWorkInspector exposes the autonomous service's inspect-and-nudge step
 // for BacklogService.SetStaleWorkInspector.
-func (s *SessionService) StaleWorkInspector() StaleWorkInspector { return s.AutonomousSvc }
+func (s *SessionService) StaleWorkInspector() autonomysvc.StaleWorkInspector { return s.AutonomousSvc }
 
 // DeadPaneRecorder is the health checker's sink for dead-pane stop snapshots.
 func (s *SessionService) DeadPaneRecorder() autonomous.DeadPaneRecorder {
@@ -261,7 +262,7 @@ func (s *SessionService) DeadPaneRecorder() autonomous.DeadPaneRecorder {
 // SetAutonomousStuckRespawner wires the respawner into the autonomous orchestration
 // service so a turn-cap-stopped work session gets a fresh turn budget instead of
 // being forced into review.
-func (s *SessionService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
+func (s *SessionService) SetAutonomousStuckRespawner(r autonomysvc.AutonomousStuckRespawner) {
 	s.AutonomousSvc.SetAutonomousStuckRespawner(r)
 }
 

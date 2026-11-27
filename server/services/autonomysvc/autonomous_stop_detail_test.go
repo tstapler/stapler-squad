@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 import (
 	"strings"
@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
+
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 )

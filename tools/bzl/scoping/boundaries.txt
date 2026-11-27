@@ -128,3 +128,4 @@ server/services/qareply !server/web
 server/services/rules !server/web
 server/services/contentsearch !server/web
 server/services/prs !server/web
+server/services/autonomysvc !server/web

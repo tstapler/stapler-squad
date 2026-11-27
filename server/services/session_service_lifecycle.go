@@ -66,7 +66,7 @@ func (s *SessionService) HibernateSession(
 
 	// Stop any running autonomous driver so it does not continue injecting prompts
 	// into a session whose process is about to be killed.
-	s.AutonomousSvc.stopAndDeregisterDriver(instance.Title)
+	s.AutonomousSvc.StopDriverForSession(instance.Title)
 
 	// Set reason before transitioning so the After hook can read it
 	reason := req.Msg.Reason
@@ -340,7 +340,7 @@ func (s *SessionService) DeleteSession(
 	// Stop any running autonomous driver before destroying resources.
 	// This prevents the driver goroutine from calling inst.Preview() or SendCommandImmediate
 	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
-	s.AutonomousSvc.stopAndDeregisterDriver(sessionTitle)
+	s.AutonomousSvc.StopDriverForSession(sessionTitle)
 
 	// Capture the live instance BEFORE removing from pollers. removeFromAllPollers
 	// (below) evicts this session from the ReviewQueuePoller's instance list — the

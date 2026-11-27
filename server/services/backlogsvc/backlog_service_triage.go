@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
@@ -2291,10 +2292,10 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	// BUG-064's ordering is unaffected; the deadline stops a hung pane from
 	// stalling the sweep (expiry falls through to the plain restart).
 	if s.staleWorkInspector != nil {
-		inspectCtx, cancel := context.WithTimeout(ctx, services.StaleWorkInspectTimeout)
+		inspectCtx, cancel := context.WithTimeout(ctx, autonomysvc.StaleWorkInspectTimeout)
 		disposition := s.staleWorkInspector.InspectStaleWork(inspectCtx, active.SessionUUID, item)
 		cancel()
-		if disposition != services.StaleWorkRespawn {
+		if disposition != autonomysvc.StaleWorkRespawn {
 			return nil
 		}
 	}
