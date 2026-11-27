@@ -35,6 +35,7 @@ go_test(
         "compactor_lease_test.go",
         "testmain_test.go",
     ],
+    data = glob(["testdata/**"]),
     embed = [":capacity"],
     deps = [
         "//config",

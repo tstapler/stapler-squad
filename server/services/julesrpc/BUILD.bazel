@@ -40,6 +40,7 @@ go_test(
         "jules_usage_counter_test.go",
         "testmain_test.go",
     ],
+    data = ["jules_dispatch_service.go"] + glob(["testdata/**"]),
     embed = [":julesrpc"],
     deps = [
         "//config",

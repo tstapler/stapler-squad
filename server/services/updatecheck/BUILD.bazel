@@ -28,6 +28,7 @@ go_test(
         "update_check_golden_test.go",
         "update_check_service_test.go",
     ],
+    data = glob(["testdata/**"]),
     embed = [":updatecheck"],
     deps = [
         "//server/services/internal/svctest",
