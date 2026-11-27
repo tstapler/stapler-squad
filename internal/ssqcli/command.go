@@ -6,7 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,7 +87,7 @@ func NewRootCommand(env Env) *cobra.Command {
 		byProcedure[m.Procedure] = m
 		grp := groups[m.Group]
 		if grp == nil {
-			grp = &cobra.Command{Use: m.Group, Short: "RPCs of the " + m.Group + " service"}
+			grp = groupCommand(m.Group, "RPCs of the "+m.Group+" service")
 			groups[m.Group] = grp
 			root.AddCommand(grp)
 		}
@@ -108,6 +112,14 @@ type request struct {
 	positional string
 }
 
+// groupCommand is a command that only holds subcommands; an unknown one is an error, not help text.
+func groupCommand(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use: use, Short: short, Args: cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error { return c.Help() },
+	}
+}
+
 func methodCommand(env Env, g *globals, m Method, spec cmdSpec) *cobra.Command {
 	maxArgs := 0
 	if spec.positional != "" {
@@ -120,7 +132,14 @@ func methodCommand(env Env, g *globals, m Method, spec cmdSpec) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		client := &Client{BaseURL: g.url, Token: resolveToken(env, g), Timeout: g.timeout}
+		if g.timeout <= 0 {
+			return fmt.Errorf("--timeout must be positive, got %s", g.timeout)
+		}
+		token, err := resolveToken(env, g)
+		if err != nil {
+			return err
+		}
+		client := &Client{BaseURL: g.url, Token: token, Timeout: g.timeout}
 		reply, err := client.Call(context.Background(), m.Procedure, body)
 		if err != nil {
 			return err
@@ -152,8 +171,11 @@ func bindFlag(cmd *cobra.Command, name string, fd protoreflect.FieldDescriptor) 
 	f := cmd.Flags()
 	if fd.IsList() {
 		switch fd.Kind() { //nolint:exhaustive // remaining kinds are reachable via --json only
-		case protoreflect.StringKind, protoreflect.EnumKind:
-			f.StringSlice(name, nil, usage)
+		case protoreflect.StringKind:
+			f.StringArray(name, nil, usage+" (repeatable)")
+			return true
+		case protoreflect.EnumKind:
+			f.StringSlice(name, nil, usage+" (repeatable or comma-separated)")
 			return true
 		}
 		return false
@@ -211,7 +233,13 @@ func buildBody(env Env, g *globals, c *cobra.Command, req request, args []string
 func setFromFlag(msg *dynamicpb.Message, fd protoreflect.FieldDescriptor, c *cobra.Command, name string) error {
 	f := c.Flags()
 	if fd.IsList() {
-		vals, err := f.GetStringSlice(name)
+		var vals []string
+		var err error
+		if fd.Kind() == protoreflect.StringKind {
+			vals, err = f.GetStringArray(name)
+		} else {
+			vals, err = f.GetStringSlice(name)
+		}
 		if err != nil {
 			return err
 		}
@@ -244,12 +272,18 @@ func setNumeric(msg *dynamicpb.Message, fd protoreflect.FieldDescriptor, c *cobr
 	switch fd.Kind() { //nolint:exhaustive // remaining kinds are reachable via --json only
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
 		v, _ := f.GetInt64(name)
+		if v < math.MinInt32 || v > math.MaxInt32 {
+			return fmt.Errorf("%d is out of range for a 32-bit integer", v)
+		}
 		msg.Set(fd, protoreflect.ValueOfInt32(int32(v)))
 	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		v, _ := f.GetInt64(name)
 		msg.Set(fd, protoreflect.ValueOfInt64(v))
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
 		v, _ := f.GetUint64(name)
+		if v > math.MaxUint32 {
+			return fmt.Errorf("%d is out of range for a 32-bit unsigned integer", v)
+		}
 		msg.Set(fd, protoreflect.ValueOfUint32(uint32(v)))
 	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
 		v, _ := f.GetUint64(name)
@@ -285,16 +319,29 @@ func parseScalar(fd protoreflect.FieldDescriptor, s string) (protoreflect.Value,
 		return protoreflect.Value{}, fmt.Errorf("unsupported field kind %s", fd.Kind())
 	}
 	values := fd.Enum().Values()
-	want := strings.ToUpper(s)
+	want := strings.ToUpper(strings.ReplaceAll(s, "-", "_"))
+	var suffixMatches []protoreflect.EnumValueDescriptor
 	for i := 0; i < values.Len(); i++ {
 		v := values.Get(i)
 		name := string(v.Name())
-		if name == want || strings.HasSuffix(name, "_"+want) {
+		if name == want {
 			return protoreflect.ValueOfEnum(v.Number()), nil
 		}
+		if strings.HasSuffix(name, "_"+want) {
+			suffixMatches = append(suffixMatches, v)
+		}
 	}
-	var n int32
-	if _, err := fmt.Sscanf(s, "%d", &n); err == nil {
+	if len(suffixMatches) == 1 {
+		return protoreflect.ValueOfEnum(suffixMatches[0].Number()), nil
+	}
+	if len(suffixMatches) > 1 {
+		names := make([]string, len(suffixMatches))
+		for i, v := range suffixMatches {
+			names[i] = string(v.Name())
+		}
+		return protoreflect.Value{}, fmt.Errorf("%q is ambiguous for %s: %s", s, fd.Enum().Name(), strings.Join(names, ", "))
+	}
+	if n, err := strconv.ParseInt(s, 10, 32); err == nil {
 		return protoreflect.ValueOfEnum(protoreflect.EnumNumber(n)), nil
 	}
 	return protoreflect.Value{}, fmt.Errorf("%q is not a value of %s", s, fd.Enum().Name())
@@ -312,21 +359,40 @@ func readJSONArg(env Env, arg string) ([]byte, error) {
 }
 
 // resolveToken: --token, then STAPLER_SQUAD_TOKEN, then the local token file.
-func resolveToken(env Env, g *globals) string {
-	if g.token != "" {
-		return g.token
+// The file token is a local credential, so it is only used for a loopback URL;
+// no token is ever sent in cleartext to a non-loopback host.
+func resolveToken(env Env, g *globals) (string, error) {
+	u, err := url.Parse(g.url)
+	if err != nil {
+		return "", fmt.Errorf("invalid --url: %w", err)
 	}
-	if t := env.Getenv("STAPLER_SQUAD_TOKEN"); t != "" {
-		return t
+	loopback := isLoopbackHost(u.Hostname())
+	explicit := g.token
+	if explicit == "" {
+		explicit = env.Getenv("STAPLER_SQUAD_TOKEN")
 	}
-	if env.ConfigDir == nil {
-		return ""
+	if explicit != "" {
+		if u.Scheme != "https" && !loopback {
+			return "", fmt.Errorf("refusing to send a token over plain http to non-loopback host %q; use https or a loopback URL", u.Hostname())
+		}
+		return explicit, nil
+	}
+	if !loopback || env.ConfigDir == nil {
+		return "", nil
 	}
 	dir, err := env.ConfigDir()
 	if err != nil {
-		return ""
+		return "", nil //nolint:nilerr // no config dir means no local token; the server decides if auth is required
 	}
-	return localtoken.FromConfigDir(dir)
+	return localtoken.FromConfigDir(dir), nil
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func printJSON(w io.Writer, raw []byte, compact bool) error {

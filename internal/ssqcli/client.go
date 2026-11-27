@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const maxResponseBytes = 64 << 20
+
 // Client posts Connect-protocol JSON unary requests.
 type Client struct {
 	BaseURL string
@@ -38,7 +40,8 @@ func (c *Client) Call(ctx context.Context, procedure string, body []byte) ([]byt
 	}
 	hc := c.HTTP
 	if hc == nil {
-		hc = http.DefaultClient
+		// Connect RPCs never redirect; following one could replay the token and body elsewhere.
+		hc = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
@@ -48,12 +51,15 @@ func (c *Client) Call(ctx context.Context, procedure string, body []byte) ([]byt
 		return nil, fmt.Errorf("cannot reach %s: %w (is stapler-squad running? set --url or STAPLER_SQUAD_URL)", c.BaseURL, err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return nil, fmt.Errorf("%s timed out after %s while reading the response", procedure, c.Timeout)
 		}
 		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(data) > maxResponseBytes {
+		return nil, fmt.Errorf("%s response exceeds %d MiB", procedure, maxResponseBytes>>20)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, decodeError(procedure, resp.StatusCode, data)

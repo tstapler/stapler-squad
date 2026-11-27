@@ -27,7 +27,7 @@ func sessionAliases() []alias {
 }
 
 func aliasGroup(env Env, g *globals, byProcedure map[string]Method) *cobra.Command {
-	grp := &cobra.Command{Use: "sessions", Short: "Friendly aliases for the most-used session RPCs"}
+	grp := groupCommand("sessions", "Friendly aliases for the most-used session RPCs")
 	for _, a := range sessionAliases() {
 		m, ok := byProcedure[a.procedure]
 		if !ok {

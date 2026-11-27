@@ -31,6 +31,6 @@ ssq session get-session --json '{"id":"my-session"}'        # raw body: JSON, @f
 | Token | `--token` | `STAPLER_SQUAD_TOKEN` | the local token file in the config dir |
 | Deadline | `--timeout` | | 15s |
 
-The local token file is the one `ssq-hooks` uses (`pkg/localtoken`); the config dir honors `STAPLER_SQUAD_INSTANCE`, so set it when you target an isolated instance. The token is sent as a Bearer header; it is only checked when `require_local_auth` is on. A hung RPC fails at `--timeout` with a message naming the RPC; the same budget goes to the server as `Connect-Timeout-Ms`.
+The local token file is the one `ssq-hooks` uses (`pkg/localtoken`); the config dir honors `STAPLER_SQUAD_INSTANCE`, so set it when you target an isolated instance. The token file is only used for a loopback `--url`; an explicit token over plain http to a non-loopback host is refused, and redirects are not followed. The token is sent as a Bearer header; it is only checked when `require_local_auth` is on. A hung RPC fails at `--timeout` with a message naming the RPC; the same budget goes to the server as `Connect-Timeout-Ms`.
 
 To try it against an isolated instance, follow the manual-instance recipe in `CLAUDE.md` and pass `--url http://localhost:62871`; never point state-changing commands at `:8543` by accident.

@@ -200,3 +200,78 @@ func TestJSONFlag_should_ReadBodyFromFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"id":"from-file"}`, rec.body)
 }
+
+func TestToken_should_NotSendLocalTokenFileToNonLoopbackURL(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	_, err := localtoken.LoadOrCreate(localtoken.Path(dir))
+	require.NoError(t, err)
+	tok, err := resolveToken(Env{Getenv: func(string) string { return "" }, ConfigDir: func() (string, error) { return dir, nil }},
+		&globals{url: "http://example.com:8543"})
+	require.NoError(t, err)
+	assert.Empty(t, tok)
+}
+
+func TestToken_should_RefuseExplicitTokenOverPlainHTTPToRemoteHost(t *testing.T) {
+	t.Parallel()
+	env := Env{Getenv: func(string) string { return "" }}
+	_, err := resolveToken(env, &globals{url: "http://example.com", token: "secret"})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "secret")
+	tok, err := resolveToken(env, &globals{url: "https://example.com", token: "secret"})
+	require.NoError(t, err)
+	assert.Equal(t, "secret", tok)
+}
+
+func TestCall_should_NotFollowRedirects(t *testing.T) {
+	t.Parallel()
+	target, rec := fakeServer(t, 200, `{}`)
+	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redir.Close)
+	_, err := run(t, nil, t.TempDir(), "--url", redir.URL, "--token", "tok", "sessions", "list")
+	require.Error(t, err)
+	assert.Empty(t, rec.path, "redirect target must not be contacted")
+}
+
+func TestTimeout_should_RejectNonPositive(t *testing.T) {
+	t.Parallel()
+	_, err := run(t, nil, t.TempDir(), "--url", "http://127.0.0.1:1", "--timeout", "0s", "sessions", "list")
+	assert.ErrorContains(t, err, "--timeout must be positive")
+}
+
+func TestEnumFlag_should_RejectTrailingGarbageNumber(t *testing.T) {
+	t.Parallel()
+	_, err := run(t, nil, t.TempDir(), "--url", "http://127.0.0.1:1", "session", "list-sessions", "--status", "1abc")
+	assert.ErrorContains(t, err, "is not a value of")
+}
+
+func TestEnumFlag_should_AcceptNameVariantsAndNumbers(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{"paused", "PAUSED", "SESSION_STATUS_PAUSED"} {
+		srv, rec := fakeServer(t, 200, `{}`)
+		_, err := run(t, nil, t.TempDir(), "--url", srv.URL, "session", "list-sessions", "--status", v)
+		require.NoError(t, err, v)
+		assert.Contains(t, rec.body, "SESSION_STATUS_PAUSED", v)
+	}
+}
+
+func TestJSONFlag_should_ReadBodyFromStdinAndLetFlagOverrideFalse(t *testing.T) {
+	t.Parallel()
+	srv, rec := fakeServer(t, 200, `{}`)
+	var out bytes.Buffer
+	root := NewRootCommand(Env{
+		Getenv: func(string) string { return "" }, Stdin: strings.NewReader(`{"id":"x","force":true}`),
+		Stdout: &out, Stderr: &out,
+	})
+	root.SetArgs([]string{"--url", srv.URL, "--json", "-", "session", "delete-session", "--force=false"})
+	require.NoError(t, root.Execute())
+	assert.JSONEq(t, `{"id":"x"}`, rec.body)
+}
+
+func TestGroup_should_RejectUnknownSubcommand(t *testing.T) {
+	t.Parallel()
+	_, err := run(t, nil, t.TempDir(), "session", "lst")
+	assert.Error(t, err)
+}
