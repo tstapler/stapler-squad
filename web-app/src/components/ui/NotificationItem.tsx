@@ -15,9 +15,10 @@ import { ActionRow } from "./notification-actions/ActionRow";
 import { INLINE_ACTIONS_FLAG, STRUCTURED_QUESTION_FLAG, STRUCTURED_RENDER_SCOPE, approvalDisplay, isLocalListener } from "./notification-actions/inlineActions";
 import { replyAvailability } from "@/lib/reply/replyQuestion";
 import { BackgroundChip } from "./BackgroundChip";
-import { GroupedNotification, groupNotifications } from "@/lib/utils/notificationGrouping";
+import type { GroupedNotification} from "@/lib/utils/notificationGrouping";
+import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { formatRelativeTime } from "@/lib/utils/datetime";
-import { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
+import type { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
 import { visuallyHidden } from "@/styles/a11y.css";
 import {
   notificationTypeIcon,
@@ -96,7 +97,20 @@ function getContextString(notification: NotificationData): string {
   return parts.join(" ");
 }
 
-export interface NotificationItemProps {
+interface NotificationItemActionHooks {
+  /** Refetches the history page, so INVALID can re-read descriptors. */
+  onRefreshActions?: () => void;
+  /** An inline action was applied: mark these records read and close their toasts. */
+  onActionApplied?: (ids: string[], summary: string) => void;
+  /** Rows still shown in Needs you whose live record no longer waits on the operator. */
+  retiredIds?: ReadonlySet<string>;
+  /** Records another tab resolved, id to result: the row shows "Answered elsewhere". */
+  answeredElsewhere?: Readonly<Record<string, string>>;
+  /** Opens the rule builder for the Create rule confirm (desktop More menu). */
+  onCreateRule?: (notification: NotificationData) => void;
+}
+
+export interface NotificationItemProps extends NotificationItemActionHooks {
   group: GroupedNotification;
   resolvedApprovals: Record<string, "allow" | "deny" | "expired">;
   pendingApprovals: Record<string, boolean>;
@@ -137,14 +151,6 @@ export interface NotificationItemProps {
    * check then never asks the server, so a page load does not fan out GetSession calls.
    */
   lookupHidden?: boolean;
-  /** Refetches the history page, so INVALID can re-read descriptors. */
-  onRefreshActions?: () => void;
-  /** An inline action was applied: mark these records read and close their toasts. */
-  onActionApplied?: (ids: string[], summary: string) => void;
-  /** Records another tab resolved, id to result: the row shows "Answered elsewhere". */
-  answeredElsewhere?: Readonly<Record<string, string>>;
-  /** Opens the rule builder for the Create rule confirm (desktop More menu). */
-  onCreateRule?: (notification: NotificationData) => void;
 }
 
 /** Delivery rows after which the card has left Needs you: acknowledged, handled in the terminal, replaced, session ended. */
@@ -184,6 +190,7 @@ export function NotificationItem({
   lookupHidden = true,
   onRefreshActions,
   onActionApplied,
+  retiredIds,
   answeredElsewhere,
   onCreateRule,
 }: NotificationItemProps) {
@@ -249,7 +256,7 @@ export function NotificationItem({
   const approval = rowOn && approvalKey ? approvalDisplay(notification) : undefined;
 
   const focusControl = hasSourceApp && notification.onFocusWindow && !sessionHidden && (
-    <button className={focusButton} onClick={notification.onFocusWindow} title="Focus the source application window">
+    <button className={focusButton} onClick={notification.onFocusWindow} title="Focus the source application window">{/* analytics-exempt */}
       🔗 Focus
     </button>
   );
@@ -298,7 +305,7 @@ export function NotificationItem({
           {notification.notificationType === "approval_needed" &&
             notification.metadata?.approval_id &&
             (() => {
-              const approvalId = notification.metadata!.approval_id;
+              const approvalId = notification.metadata?.approval_id as string;
               const resolved = resolvedApprovals[approvalId];
               const isPending = !!pendingApprovals[approvalId];
               const blockedMessage = blockedApprovals[approvalId];
@@ -345,11 +352,11 @@ export function NotificationItem({
                       {/* No CI-checks URL (e.g. a reconciliation-race message) means there is
                           nothing left to "approve anyway" against — only Deny still applies. */}
                       {checksUrl && (
-                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", decidedIds, true)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve despite failing CI"}>
+                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", decidedIds, true)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve despite failing CI"}>{/* analytics-exempt */}
                           {isPending ? "…" : "Approve anyway"}
                         </button>
                       )}
-                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
+                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>{/* analytics-exempt */}
                         {isPending ? "…" : "✗ Deny"}
                       </button>
                     </div>
@@ -364,10 +371,10 @@ export function NotificationItem({
                       {failedMessage}
                     </span>
                   )}
-                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>
+                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>{/* analytics-exempt */}
                     {isPending ? "…" : "✓ Approve"}
                   </button>
-                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
+                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>{/* analytics-exempt */}
                     {isPending ? "…" : "✗ Deny"}
                   </button>
                 </>
@@ -406,7 +413,7 @@ export function NotificationItem({
             aria-label="Remove notification"
             aria-disabled={offlineReason ? true : undefined}
             title={offlineReason}
-          >
+          >{/* analytics-exempt */}
             ✕
           </button>
         )}
@@ -449,6 +456,9 @@ export function NotificationItem({
       </div>
       {rowOn && (
         <ActionRow
+          // The record outlives its target (the next approval of a session reuses it): nothing carries over.
+          key={`${notification.metadata?.["approval_id"] ?? ""}:${guidanceId ?? ""}`}
+          needsYou={notification.isPendingDecision === true && !retiredIds?.has(notification.id)}
           rowId={notification.id}
           descriptors={descriptors}
           approval={approval}
@@ -493,7 +503,7 @@ export function AutoHandledSection({ notifications, isOpen, onToggle }: AutoHand
         onClick={onToggle}
         aria-expanded={isOpen}
         aria-controls="auto-handled-list"
-      >
+      >{/* analytics-exempt */}
         <span className={autoHandledHeaderLeft}>
           Auto-handled
           <span className={autoHandledBadge}>{notifications.length}</span>
@@ -611,7 +621,7 @@ export function NeedsDecisionSection({
       {staleness && (
         <span className={stalenessIndicator} role="status" data-testid="needs-decision-staleness">
           Last updated {staleness.label} ago ·{" "}
-          <button type="button" className={stalenessRetry} onClick={staleness.onRetry}>
+          <button type="button" className={stalenessRetry} onClick={staleness.onRetry}>{/* analytics-exempt */}
             Retry
           </button>
         </span>
@@ -642,7 +652,7 @@ export function NeedsDecisionSection({
                 ? "1 item needs a decision, but is hidden by your filter"
                 : `${totalActionableCount} items need a decision, but are hidden by your filter`}
             </p>
-            <button type="button" className={needsDecisionClearFilterButton} onClick={onClearFilter}>
+            <button type="button" className={needsDecisionClearFilterButton} onClick={onClearFilter}>{/* analytics-exempt */}
               Clear filter
             </button>
           </div>
