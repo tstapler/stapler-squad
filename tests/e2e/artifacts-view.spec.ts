@@ -56,8 +56,10 @@ test.describe("artifacts-view", () => {
   });
 
   test.afterEach(async () => {
+    // Assert before deleting: a terminal handshake still in flight finds its session gone and logs an error.
+    // Soft, so the deletes still run; the page stays open, or an error found here would leave no screenshot.
+    expect.soft(consoleErrors, "no console or page errors").toEqual([]);
     for (const id of created.splice(0)) await client.deleteSession(id, true).catch(() => undefined);
-    expect(consoleErrors, "no console or page errors").toEqual([]);
   });
 
   test("page should list only acme/app PR records with session link and chip", async ({ page }) => {
@@ -198,11 +200,12 @@ test.describe("artifacts-view", () => {
 
   test("result count and loading should be announced via one role=status region", async ({ page }) => {
     await artifacts.mockBrowse((req) => browseResponse(serverFilter(req)));
+    // The announcer clears each message after 1s, so record what the regions say instead of polling for it.
+    const regionsThatSaid = await artifacts.recordStatusRegions("Showing 4 of 4");
     await artifacts.goto();
     await expect(artifacts.rows).toHaveCount(4);
     await expect(artifacts.root.locator("[role=status]")).toHaveCount(0);
-    await expect(page.getByTestId("announcer-polite")).toHaveText(/Showing 4 of 4/);
-    await expect(page.locator("[role=status]").filter({ hasText: "Showing 4 of 4" })).toHaveCount(1);
+    await expect.poll(regionsThatSaid).toEqual(["announcer-polite"]);
   });
 
   test("unscanned sessions should show the incomplete-results notice", async () => {
