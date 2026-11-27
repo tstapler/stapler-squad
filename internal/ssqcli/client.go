@@ -34,7 +34,7 @@ func (c *Client) Call(ctx context.Context, procedure string, body []byte) ([]byt
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Connect-Protocol-Version", "1")
-	req.Header.Set("Connect-Timeout-Ms", strconv.FormatInt(c.Timeout.Milliseconds(), 10))
+	req.Header.Set("Connect-Timeout-Ms", strconv.FormatInt(max(c.Timeout.Milliseconds(), 1), 10))
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}

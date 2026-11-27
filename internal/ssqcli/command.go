@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -364,7 +365,10 @@ func readJSONArg(env Env, arg string) ([]byte, error) {
 func resolveToken(env Env, g *globals) (string, error) {
 	u, err := url.Parse(g.url)
 	if err != nil {
-		return "", fmt.Errorf("invalid --url: %w", err)
+		return "", fmt.Errorf("invalid --url (%s)", urlErrReason(err))
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("--url must start with http:// or https://")
 	}
 	loopback := isLoopbackHost(u.Hostname())
 	explicit := g.token
@@ -388,7 +392,7 @@ func resolveToken(env Env, g *globals) (string, error) {
 }
 
 func isLoopbackHost(host string) bool {
-	if host == "localhost" {
+	if strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
@@ -415,4 +419,13 @@ func indentJSON(buf *bytes.Buffer, raw []byte, indent string) error {
 		return json.Compact(buf, raw)
 	}
 	return json.Indent(buf, raw, "", indent)
+}
+
+// urlErrReason drops the URL from a parse error so userinfo is never echoed.
+func urlErrReason(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err.Error()
+	}
+	return "unparsable"
 }

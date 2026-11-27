@@ -275,3 +275,9 @@ func TestGroup_should_RejectUnknownSubcommand(t *testing.T) {
 	_, err := run(t, nil, t.TempDir(), "session", "lst")
 	assert.Error(t, err)
 }
+
+func TestURL_should_RequireHTTPScheme(t *testing.T) {
+	t.Parallel()
+	_, err := run(t, nil, t.TempDir(), "--url", "localhost:8543", "sessions", "list")
+	assert.ErrorContains(t, err, "http:// or https://")
+}
