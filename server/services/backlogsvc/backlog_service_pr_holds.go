@@ -8,7 +8,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -22,13 +22,13 @@ func (s *BacklogService) attachPRSet(ctx context.Context, p *sessionv1.BacklogIt
 	if !s.cleanup.scopeOn() {
 		return
 	}
-	prs, err := s.storage.ItemPRs(ctx, item.ID)
+	views, err := s.storage.ItemPRs(ctx, item.ID)
 	if err != nil {
 		log.WarningLog().Printf("[GetBacklogItem] item PR set unreadable for %s: %v", item.ID, err)
 		return
 	}
-	p.PullRequests = adapters.SessionPullRequests(prs, "")
-	p.PrHolds = s.prHolds(ctx, item, prs)
+	p.PullRequests = adapters.SessionPullRequests(views, "")
+	p.PrHolds = s.prHolds(ctx, item, views)
 }
 
 // populatePRCounts fills each stuck row's pr_count / pr_merged_count from the
@@ -39,18 +39,18 @@ func (s *BacklogService) populatePRCounts(ctx context.Context, items []*sessionv
 		return
 	}
 	for _, it := range items {
-		prs, err := s.storage.ItemPRs(ctx, it.ItemId)
+		views, err := s.storage.ItemPRs(ctx, it.ItemId)
 		if err != nil {
 			log.WarningLog().Printf("[ListStuckBacklogItems] item PR set unreadable for %s: %v", it.ItemId, err)
 			continue
 		}
-		it.PrCount, it.PrMergedCount = countItemPRs(prs)
+		it.PrCount, it.PrMergedCount = countItemPRs(views)
 	}
 }
 
 // countItemPRs returns the set size and how many of its PRs are merged.
-func countItemPRs(prs []domain.PRView) (total, merged int32) {
-	for _, v := range prs {
+func countItemPRs(views []domain.PRView) (total, merged int32) {
+	for _, v := range views {
 		total++
 		if v.State == domain.PRStateMerged {
 			merged++
@@ -62,10 +62,10 @@ func countItemPRs(prs []domain.PRView) (total, merged int32) {
 // prHolds derives the held lines from the same facts the gate reads: non-terminal PRs
 // of the derived set, superseded rounds' non-terminal PRs, a live work session, and a
 // live session past the max hold. The client never recomputes a hold.
-func (s *BacklogService) prHolds(ctx context.Context, item *backlogdto.BacklogItemData, prs []domain.PRView) []*sessionv1.PrHold {
-	holds := services.NonTerminalPRHolds(prs, "")
+func (s *BacklogService) prHolds(ctx context.Context, item *backlogdto.BacklogItemData, views []domain.PRView) []*sessionv1.PrHold {
+	holds := prs.NonTerminalPRHolds(views, "")
 	inSet := map[domain.PRRef]bool{}
-	for _, v := range prs {
+	for _, v := range views {
 		inSet[v.Ref] = true
 	}
 	sessions, err := s.storage.ListItemSessions(ctx, item.ID)
@@ -73,7 +73,7 @@ func (s *BacklogService) prHolds(ctx context.Context, item *backlogdto.BacklogIt
 		return holds
 	}
 	holds = append(holds, s.supersededRoundHolds(ctx, sessions, inSet)...)
-	return append(holds, s.liveWorkHolds(ctx, sessions, prs)...)
+	return append(holds, s.liveWorkHolds(ctx, sessions, views)...)
 }
 
 // supersededRoundHolds names non-terminal PRs only an earlier round's session links:
@@ -93,7 +93,7 @@ func (s *BacklogService) supersededRoundHolds(ctx context.Context, sessions []ba
 	for _, id := range uuids {
 		for _, v := range views[id] {
 			if !inSet[v.Ref] && !v.Terminal() {
-				holds = append(holds, &sessionv1.PrHold{Kind: sessionv1.PrHold_KIND_SUPERSEDED_ROUND, Pr: services.PRRefToProto(v.Ref), OwnerSessionId: id})
+				holds = append(holds, &sessionv1.PrHold{Kind: sessionv1.PrHold_KIND_SUPERSEDED_ROUND, Pr: prs.PRRefToProto(v.Ref), OwnerSessionId: id})
 			}
 		}
 	}
@@ -103,7 +103,7 @@ func (s *BacklogService) supersededRoundHolds(ctx context.Context, sessions []ba
 
 // liveWorkHolds reports SESSION_ACTIVE while the newest work session is live, and
 // MAX_HOLD instead once the first merge is older than the max hold.
-func (s *BacklogService) liveWorkHolds(ctx context.Context, sessions []backlogdto.ItemSessionSummary, prs []domain.PRView) []*sessionv1.PrHold {
+func (s *BacklogService) liveWorkHolds(ctx context.Context, sessions []backlogdto.ItemSessionSummary, views []domain.PRView) []*sessionv1.PrHold {
 	probe := s.cleanup.ruleLProbe()
 	if probe == nil {
 		return nil
@@ -115,7 +115,7 @@ func (s *BacklogService) liveWorkHolds(ctx context.Context, sessions []backlogdt
 			continue
 		}
 		kind := sessionv1.PrHold_KIND_SESSION_ACTIVE
-		if start := instance.LiveWorkHoldStart(prs, time.Time{}); instance.LiveWorkHoldExpired(now, start, instance.LiveWorkMaxHold) {
+		if start := instance.LiveWorkHoldStart(views, time.Time{}); instance.LiveWorkHoldExpired(now, start, instance.LiveWorkMaxHold) {
 			kind = sessionv1.PrHold_KIND_MAX_HOLD
 		}
 		return []*sessionv1.PrHold{{Kind: kind, OwnerSessionId: is.SessionUUID, IdleWindowSeconds: int32(instance.LiveWorkIdleWindow / time.Second)}}

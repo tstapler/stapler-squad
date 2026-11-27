@@ -9,6 +9,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 )
 
 // Adapters from the server/prwatch ports onto the services they stand in for.
@@ -40,7 +41,7 @@ func (s prwatchSteerer) Steer(ctx context.Context, req prwatch.SteerRequest) (pr
 	if err != nil {
 		return prwatch.OutcomeFailed, err
 	}
-	kinds := make([]services.PRWatchKind, 0, len(req.Kinds))
+	kinds := make([]prs.PRWatchKind, 0, len(req.Kinds))
 	for _, k := range req.Kinds {
 		sk, err := prwatchKindToServices(k)
 		if err != nil {
@@ -48,22 +49,22 @@ func (s prwatchSteerer) Steer(ctx context.Context, req prwatch.SteerRequest) (pr
 		}
 		kinds = append(kinds, sk)
 	}
-	sig := services.PRWatchGuardSignature(ref.PRKey(req.PR), kinds...)
+	sig := prs.PRWatchGuardSignature(ref.PRKey(req.PR), kinds...)
 	out, err := s.svc.SteerSessionGuarded(ctx, req.SessionUUID, sig, req.Text)
 	return prwatchOutcome(out), err
 }
 
 // prwatchKindToServices refuses an unknown kind rather than defaulting.
-func prwatchKindToServices(k prwatch.Kind) (services.PRWatchKind, error) {
+func prwatchKindToServices(k prwatch.Kind) (prs.PRWatchKind, error) {
 	switch k {
 	case prwatch.KindCI:
-		return services.PRWatchKindCI, nil
+		return prs.PRWatchKindCI, nil
 	case prwatch.KindComment, prwatch.KindReviewComment:
-		return services.PRWatchKindComment, nil
+		return prs.PRWatchKindComment, nil
 	case prwatch.KindReview:
-		return services.PRWatchKindReview, nil
+		return prs.PRWatchKindReview, nil
 	}
-	return services.PRWatchKindUnspecified, fmt.Errorf("prwatch: unknown kind %q", k)
+	return prs.PRWatchKindUnspecified, fmt.Errorf("prwatch: unknown kind %q", k)
 }
 
 func prwatchOutcome(o services.SteerOutcome) prwatch.Outcome {

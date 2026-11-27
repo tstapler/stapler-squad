@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -185,7 +186,7 @@ func (s *SessionService) AttachSessionPullRequest(
 	}
 	if instanceHasPR(inst, ref) {
 		return connect.NewResponse(&sessionv1.AttachSessionPullRequestResponse{
-			PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ALREADY_TRACKED, Pr: PRRefToProto(ref),
+			PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ALREADY_TRACKED, Pr: prs.PRRefToProto(ref),
 		}), nil
 	}
 	repoRef, err := github.NewRepoRefWithHost(parsed.Owner, parsed.Repo, parsed.Host)
@@ -201,7 +202,7 @@ func (s *SessionService) AttachSessionPullRequest(
 	}
 	log.Info("session PR attached by user", "session", inst.Snapshot().Title, "pr", ref.String())
 	return connect.NewResponse(&sessionv1.AttachSessionPullRequestResponse{
-		PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ATTACHED, Pr: PRRefToProto(ref),
+		PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ATTACHED, Pr: prs.PRRefToProto(ref),
 	}), nil
 }
 
@@ -342,7 +343,7 @@ func (s *SessionService) AskSessionToFixPullRequest(
 	if err != nil {
 		return nil, err
 	}
-	out := &sessionv1.AskSessionToFixPullRequestResponse{Pr: PRRefToProto(*target)}
+	out := &sessionv1.AskSessionToFixPullRequestResponse{Pr: prs.PRRefToProto(*target)}
 	ctx, cancel := context.WithTimeout(ctx, nudgeRPCTimeout)
 	defer cancel()
 	stop, err := s.askFixDeliver(ctx, req.Msg.GetId(), *target, out)
@@ -429,7 +430,7 @@ func (s *SessionService) askFixPrompt(ctx context.Context, ref domain.PRRef) (st
 		log.Warn("ask_to_fix_fetch_failed", "pr", ref.String(), "kind", string(kind), "err", fetchErr)
 		return "", nil, nil, cerr
 	}
-	prompt, reasons := BuildPRNudgePrompt(detail)
+	prompt, reasons := prs.BuildPRNudgePrompt(detail)
 	if prompt == "" || len(reasons) == 0 {
 		return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOTHING_TO_FIX, nudgeNothingToFixDetail}, nil
 	}

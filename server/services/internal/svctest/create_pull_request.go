@@ -3,6 +3,7 @@ package svctest
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,4 +24,17 @@ func RunGitOutput(t *testing.T, dir string, args ...string) string {
 	out, err := cmd.CombinedOutput()
 	require.NoErrorf(t, err, "git %v failed: %s", args, out)
 	return string(out)
+}
+
+// NewDraftPRTestRepo creates a temp git repo with "main" as the initial branch and one
+// commit, so GoGitVCSReader.ResolveDefaultBranch resolves it deterministically via the
+// "refs/heads/main" fallback (there is no origin remote in these tests).
+func NewDraftPRTestRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	RunGit(t, dir, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test repo\n"), 0o644))
+	RunGit(t, dir, "add", ".")
+	RunGit(t, dir, "commit", "-q", "-m", "initial commit")
+	return dir
 }

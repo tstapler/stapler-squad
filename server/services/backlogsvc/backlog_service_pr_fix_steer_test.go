@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -904,7 +905,7 @@ func TestReasonSignatureKey_ChangesRequestedWithThreads_MatchesManualNudgeKey(t 
 	prk, err := githubpkg.NewPRKey("github.com", "o", "r", 1)
 	require.NoError(t, err)
 	pr := prk.Key()
-	manual := access.GuardSignature(pr, access.ReasonSetSignature(services.ReasonNameUnresolvedThreads))
+	manual := access.GuardSignature(pr, access.ReasonSetSignature(prs.ReasonNameUnresolvedThreads))
 	cr := "## Review: changes requested by @a"
 	for _, headers := range [][]string{{cr, "## Reviewer comments"}, {"## Reviewer comments", cr}} {
 		require.Equal(t, manual, reasonSignature{headers: headers}.key(pr))
@@ -915,6 +916,6 @@ func TestReasonSignatureKey_ChangesRequestedOnly_DoesNotMatchManualThreadKey(t *
 	prk, err := githubpkg.NewPRKey("github.com", "o", "r", 1)
 	require.NoError(t, err)
 	pr := prk.Key()
-	manual := access.GuardSignature(pr, access.ReasonSetSignature(services.ReasonNameUnresolvedThreads))
+	manual := access.GuardSignature(pr, access.ReasonSetSignature(prs.ReasonNameUnresolvedThreads))
 	require.NotEqual(t, manual, reasonSignature{headers: []string{"## Review: changes requested by @a"}}.key(pr))
 }

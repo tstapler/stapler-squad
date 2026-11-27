@@ -110,29 +110,6 @@ func TransitionActorFromContext(ctx context.Context) string {
 	return instance.TriggeredByUser
 }
 
-// dropSubsumedChangesRequested removes CHANGES_REQUESTED when UNRESOLVED_THREADS
-// is also present: the manual nudge has no changes-requested reason and its
-// thread prompt carries the same actionable content, so keeping the name would
-// key the same fix differently on the two paths and send it twice.
-func DropSubsumedChangesRequested(names []string) []string {
-	hasThreads := false
-	for _, n := range names {
-		if n == ReasonNameUnresolvedThreads {
-			hasThreads = true
-		}
-	}
-	if !hasThreads {
-		return names
-	}
-	out := make([]string, 0, len(names))
-	for _, n := range names {
-		if n != ReasonNameChangesRequested {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-
 // fromProtoStuckReason maps a proto StuckReason enum value back to the domain
 // type for repository calls. STUCK_REASON_UNSPECIFIED and any unrecognized
 // value map to the empty StuckReason (""), which fails IsValid() — callers
@@ -270,11 +247,3 @@ func FindMostRecentSessions(sessions []backlogdto.ItemSessionSummary) (reviewSes
 	}
 	return
 }
-
-const ReasonNameFailingChecks = "FAILING_CHECKS"
-
-const ReasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
-
-// reasonNameChangesRequested has no manual-nudge counterpart, so a
-// changes-requested-only steer never suppresses a thread nudge.
-const ReasonNameChangesRequested = "CHANGES_REQUESTED"

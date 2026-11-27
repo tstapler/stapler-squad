@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -73,19 +74,19 @@ func (r reasonSignature) key(pr githubpkg.LinkKey) string {
 	for _, h := range r.headers {
 		names = append(names, canonicalReasonForHeader(h))
 	}
-	return access.GuardSignature(pr, access.ReasonSetSignature(services.DropSubsumedChangesRequested(names)...))
+	return access.GuardSignature(pr, access.ReasonSetSignature(prs.DropSubsumedChangesRequested(names)...))
 }
 
 func canonicalReasonForHeader(h string) string {
 	switch {
 	case h == conflictHeader:
-		return services.ReasonNameMergeConflict
+		return prs.ReasonNameMergeConflict
 	case h == "## Failing CI checks":
-		return services.ReasonNameFailingChecks
+		return prs.ReasonNameFailingChecks
 	case strings.HasPrefix(h, "## Review: changes requested"):
-		return services.ReasonNameChangesRequested
+		return prs.ReasonNameChangesRequested
 	case h == "## Reviewer comments", h == "## PR comments":
-		return services.ReasonNameUnresolvedThreads
+		return prs.ReasonNameUnresolvedThreads
 	default:
 		return "other:" + h
 	}

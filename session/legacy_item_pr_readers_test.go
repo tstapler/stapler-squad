@@ -43,7 +43,7 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"server/services/backlogsvc/backlog_service_ship_status.go":   {itemScalarOK, "reports the tracked PR URL in the ship status"},
 	"server/services/backlogsvc/backlog_service_stuck.go":         {itemScalarOK, "maps stored rows onto the stuck-item proto"},
 	"server/services/backlogsvc/backlog_service_triage.go":        {itemScalarOK, "PR-fix prompt text names the tracked PR"},
-	"server/services/pr_creation_service.go":                      {itemScalarOK, "fills the CreatePullRequest response proto, not an item"},
+	"server/services/prs/pr_creation_service.go":                  {itemScalarOK, "fills the CreatePullRequest response proto, not an item"},
 	"session/backlog_item_pr_mirror.go":                           {itemScalarOK, "writes the scalar mirror from ActivePR of the set; the set never reads it back"},
 	"session/backlog_item_prs.go":                                 {itemPRsSeam, "the seam itself: the scalar is only the unrepresented-legacy fallback input"},
 	"session/backlog/backlog_lifecycle.go":                        {itemScalarOK, "merge check on the item's tracked PR number"},

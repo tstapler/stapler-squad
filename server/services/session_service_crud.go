@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
@@ -250,7 +251,7 @@ func (s *SessionService) GetSession(
 		wfNames := s.workflowNames()
 		if inst := s.ReviewQueuePoller.FindInstance(req.Msg.Id); inst != nil {
 			return connect.NewResponse(&sessionv1.GetSessionResponse{
-				Session: withSessionPRHolds(adapters.InstanceToProto(inst, wfNames), inst),
+				Session: prs.WithSessionPRHolds(adapters.InstanceToProto(inst, wfNames), inst),
 			}), nil
 		}
 		// Not in poller — also check external sessions
@@ -274,7 +275,7 @@ func (s *SessionService) GetSession(
 	wfNames := s.workflowNames()
 	if inst := findInstanceByID(instances, req.Msg.Id); inst != nil {
 		return connect.NewResponse(&sessionv1.GetSessionResponse{
-			Session: withSessionPRHolds(adapters.InstanceToProto(inst, wfNames), inst),
+			Session: prs.WithSessionPRHolds(adapters.InstanceToProto(inst, wfNames), inst),
 		}), nil
 	}
 

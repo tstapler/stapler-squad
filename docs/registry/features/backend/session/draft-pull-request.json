@@ -5,7 +5,7 @@
   "method": "DraftPullRequest",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/pr_creation_service.go",
+  "handlerFile": "server/services/prs/pr_creation_service.go",
   "tested": true,
   "testIds": [
     "TestDraftPullRequest_should_ReturnNotFound_When_SessionInstanceMissing",
@@ -16,5 +16,5 @@
     "TestDraftPullRequest_should_UseFallbackBody_When_HeadlessPoolNil",
     "TestDraftPullRequest_should_UseFallbackBody_When_DiffIsEmpty"
   ],
-  "lastModified": "2026-08-21T00:00:00-07:00"
+  "lastModified": "2026-11-27T04:49:09.352776627-08:00"
 }

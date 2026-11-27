@@ -658,6 +658,30 @@ linters:
             - github.com/tstapler/stapler-squad/server/services/secretscan
             - github.com/tstapler/stapler-squad/session$
             - github.com/tstapler/stapler-squad/session/domain
+        # server/services/prs owns PR creation, the PR nudge prompt and signatures and the PR hold
+        # derivation; it never imports the services hub (the hub, backlogsvc and server import it).
+        isolate_prs:
+          list-mode: strict
+          files:
+            - "**/services/prs/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/github$
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/server/services/access
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/backlog$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/git$
+            - github.com/tstapler/stapler-squad/session/headless
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/steertext
+            - github.com/tstapler/stapler-squad/session/unfinished$
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict

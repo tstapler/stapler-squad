@@ -681,7 +681,7 @@ func (i *Instance) UpdateDiffStats() error {
 			// pushAndCreatePR's own HasCommitsAheadOfMain call
 			// (session/backlog_lifecycle_pr.go:564). Resolving the actual default
 			// branch the way DraftPullRequest does
-			// (unfinished.GoGitVCSReader.ResolveDefaultBranch, server/services/pr_creation_service.go:139)
+			// (unfinished.GoGitVCSReader.ResolveDefaultBranch, server/services/prs/pr_creation_service.go)
 			// isn't available from this package: session/unfinished imports
 			// pkg/events, which imports session — an import cycle back into this
 			// file (documented in session/worktree_pr_poller.go). Fails open

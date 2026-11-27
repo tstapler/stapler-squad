@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
@@ -299,7 +300,7 @@ type SessionService struct {
 	artifactSvc *ArtifactService
 
 	// prCreationSvc handles DraftPullRequest/CreatePullRequest RPCs.
-	prCreationSvc *PRCreationService
+	prCreationSvc *prs.PRCreationService
 
 	// featureFlagSvc handles GetFeatureFlags/UpdateFeatureFlag RPCs.
 	featureFlagSvc *flagsvc.FeatureFlagService
@@ -1070,7 +1071,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// backlogLifecycleListener are wired onto SessionService after construction
 	// (see the Set* wiring doc comment above NewSessionService), so they are nil
 	// here at construction time.
-	svc.prCreationSvc = NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
+	svc.prCreationSvc = prs.NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
 	svc.streamHubRolloutSvc = streamhubrollout.NewStreamHubRolloutService(svc.findInstance)
 
 	// Wire the autonomous orchestration service with a storage getter closure.
