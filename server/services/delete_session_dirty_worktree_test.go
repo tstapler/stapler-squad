@@ -20,7 +20,7 @@ import (
 // file's path.
 func attachDirtyWorktree(t *testing.T, inst *instance.Instance, name string) string {
 	t.Helper()
-	wt, _, err := git.NewGitWorktree(newDraftPRTestRepo(t), name)
+	wt, _, err := git.NewGitWorktree(svctest.NewDraftPRTestRepo(t), name)
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 	inst.SetGitWorktree(wt)

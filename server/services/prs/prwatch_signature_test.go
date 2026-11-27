@@ -1,11 +1,9 @@
-package services
+package prs
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/access"
@@ -29,24 +27,4 @@ func TestPRWatchGuardSignature_should_BeOrderIndependentAndPerPR(t *testing.T) {
 	a := PRWatchGuardSignature(prWatchTestPR, PRWatchKindCI, PRWatchKindComment)
 	assert.Equal(t, a, PRWatchGuardSignature(prWatchTestPR, PRWatchKindComment, PRWatchKindCI, PRWatchKindCI))
 	assert.NotEqual(t, a, PRWatchGuardSignature(githubpkg.LinkKey("github.com/o/r#8"), PRWatchKindCI, PRWatchKindComment))
-}
-
-func TestSteerSessionGuarded_should_ReturnDuplicate_When_PRWatchSignatureRepeatsWithinWindow(t *testing.T) {
-	svc, inst, rec, _ := newGuardedSteerFixture(t, notReadyNone)
-	sig := PRWatchGuardSignature(prWatchTestPR, PRWatchKindCI)
-
-	out, err := svc.SteerSessionGuarded(context.Background(), inst.GetStableID(), sig, "msg")
-	require.NoError(t, err)
-	assert.Equal(t, SteerDelivered, out)
-
-	out, err = svc.SteerSessionGuarded(context.Background(), inst.GetStableID(), sig, "msg")
-	require.NoError(t, err)
-	assert.Equal(t, SteerDuplicate, out)
-	assert.Equal(t, 1, rec.writes)
-
-	// A manual-nudge style signature for the same PR and reason also dedupes.
-	out, err = svc.SteerSessionGuarded(context.Background(), inst.GetStableID(),
-		access.GuardSignature(prWatchTestPR, access.ReasonSetSignature("FAILING_CHECKS")), "msg")
-	require.NoError(t, err)
-	assert.Equal(t, SteerDuplicate, out)
 }

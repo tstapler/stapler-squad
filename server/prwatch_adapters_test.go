@@ -10,6 +10,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 )
 
 type prwatchSpy struct {
@@ -83,15 +84,15 @@ func TestPRWatchSteerer_should_PassStablePerPRPerKindSignature_When_Steering(t *
 
 	ref, err := githubpkg.NewRepoRef("o", "r")
 	require.NoError(t, err)
-	assert.Equal(t, services.PRWatchGuardSignature(ref.PRKey(3), services.PRWatchKindCI), spy.sigs[0])
+	assert.Equal(t, prs.PRWatchGuardSignature(ref.PRKey(3), prs.PRWatchKindCI), spy.sigs[0])
 }
 
 func TestPRWatchKindMapping_should_MapEveryPrwatchKindToServicesKind_When_Converted(t *testing.T) {
-	want := map[prwatch.Kind]services.PRWatchKind{
-		prwatch.KindCI:            services.PRWatchKindCI,
-		prwatch.KindComment:       services.PRWatchKindComment,
-		prwatch.KindReviewComment: services.PRWatchKindComment,
-		prwatch.KindReview:        services.PRWatchKindReview,
+	want := map[prwatch.Kind]prs.PRWatchKind{
+		prwatch.KindCI:            prs.PRWatchKindCI,
+		prwatch.KindComment:       prs.PRWatchKindComment,
+		prwatch.KindReviewComment: prs.PRWatchKindComment,
+		prwatch.KindReview:        prs.PRWatchKindReview,
 	}
 	for k, w := range want {
 		got, err := prwatchKindToServices(k)

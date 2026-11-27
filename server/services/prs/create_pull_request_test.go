@@ -1,4 +1,4 @@
-package services
+package prs
 
 import (
 	"context"
@@ -49,23 +49,10 @@ func firstCallJSONPR(t *testing.T, sessionID, result string) string {
 	return string(payload)
 }
 
-// newDraftPRTestRepo creates a temp git repo with "main" as the initial branch and one
-// commit, so GoGitVCSReader.ResolveDefaultBranch resolves it deterministically via the
-// "refs/heads/main" fallback (there is no origin remote in these tests).
-func newDraftPRTestRepo(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	svctest.RunGit(t, dir, "init", "-q", "-b", "main")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test repo\n"), 0o644))
-	svctest.RunGit(t, dir, "add", ".")
-	svctest.RunGit(t, dir, "commit", "-q", "-m", "initial commit")
-	return dir
-}
-
-// newDraftPRTestRepoWithOrigin creates a temp git repo like newDraftPRTestRepo, but
+// newDraftPRTestRepoWithOrigin creates a temp git repo like svctest.NewDraftPRTestRepo, but
 // additionally wires up a local (no-network) "origin" remote with
 // refs/remotes/origin/HEAD pointed at "main" — the BLOCKER regression fixture.
-// newDraftPRTestRepo deliberately has NO origin remote, which is exactly why
+// svctest.NewDraftPRTestRepo deliberately has NO origin remote, which is exactly why
 // GoGitVCSReader.ResolveDefaultBranch's remote-qualified "origin/main" return value
 // (taken only when refs/remotes/origin/HEAD resolves) was never exercised by any
 // existing test.
@@ -74,7 +61,7 @@ func newDraftPRTestRepoWithOrigin(t *testing.T) string {
 	originDir := t.TempDir()
 	svctest.RunGit(t, originDir, "init", "-q", "--bare", "-b", "main")
 
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	svctest.RunGit(t, dir, "remote", "add", "origin", originDir)
 	svctest.RunGit(t, dir, "push", "-q", "-u", "origin", "main")
 	// "git remote set-head origin main" (non -a) writes refs/remotes/origin/HEAD
@@ -119,7 +106,7 @@ func TestDraftPullRequest_should_ReturnNotFound_When_SessionInstanceMissing(t *t
 
 func TestDraftPullRequest_should_PrefillTitleBodyBaseBranch_When_SessionHasCommitsAhead(t *testing.T) {
 	t.Parallel()
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/rate-limit-toggle")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n"), 0o644))
 	svctest.RunGit(t, dir, "add", ".")
@@ -182,7 +169,7 @@ func TestDraftPullRequest_should_StripRemotePrefix_When_OriginHEADResolvesToRemo
 
 func TestDraftPullRequest_should_ReturnExistingPR_When_SessionAlreadyHasOne(t *testing.T) {
 	t.Parallel()
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/already-has-pr")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n"), 0o644))
 	svctest.RunGit(t, dir, "add", ".")
@@ -213,7 +200,7 @@ func TestDraftPullRequest_should_ReturnExistingPR_When_SessionAlreadyHasOne(t *t
 
 func TestDraftPullRequest_should_ReportHasCommitsAhead_False_When_BranchIsUpToDate(t *testing.T) {
 	t.Parallel()
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/up-to-date")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-9c21", "feature/up-to-date", "")
@@ -237,7 +224,7 @@ func TestDraftPullRequest_should_ReportHasCommitsAhead_False_When_BranchIsUpToDa
 // and it must never commit anything itself.
 func TestDraftPullRequest_should_PreviewWorkingTreeDiff_When_UncommittedChangesPresent(t *testing.T) {
 	t.Parallel()
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/uncommitted-work")
 	// Zero commits ahead of main — the only change is an uncommitted, untracked file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "uncommitted.txt"), []byte("hello from an uncommitted file"), 0o644))
@@ -276,7 +263,7 @@ func TestDraftPullRequest_should_PreviewWorkingTreeDiff_When_UncommittedChangesP
 
 func TestDraftPullRequest_should_UseFallbackBody_When_HeadlessPoolNil(t *testing.T) {
 	t.Parallel()
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/no-pool")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "change.txt"), []byte("data"), 0o644))
 	svctest.RunGit(t, dir, "add", ".")
@@ -298,7 +285,7 @@ func TestDraftPullRequest_should_UseFallbackBody_When_HeadlessPoolNil(t *testing
 
 func TestDraftPullRequest_should_UseFallbackBody_When_DiffIsEmpty(t *testing.T) {
 	t.Parallel()
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/empty-diff")
 	// No commits, no uncommitted changes — diff is empty.
 
@@ -326,7 +313,7 @@ func TestDraftPullRequest_should_UseFallbackBody_When_DiffIsEmpty(t *testing.T) 
 // fallbackPRBody rather than surfacing the error as an RPC failure.
 func TestDraftPullRequest_should_UseFallbackBody_When_DraftPRDescriptionErrors(t *testing.T) {
 	t.Parallel()
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/draft-error")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "change.txt"), []byte("data"), 0o644))
 	svctest.RunGit(t, dir, "add", ".")
@@ -450,14 +437,14 @@ func (e *fakePRGitExecutor) calledWith(sub string) bool {
 }
 
 // newFakePRWorktree builds a *git.GitWorktree backed by a fakePRGitExecutor and
-// a real, disposable temp git repo (newDraftPRTestRepo) — CommitChanges' go-git
+// a real, disposable temp git repo (svctest.NewDraftPRTestRepo) — CommitChanges' go-git
 // steps need a real repository to open; only PushBranch/CreatePR/checkGHCLI are
 // intercepted by mock (see fakePRGitExecutor's doc comment). The repo is
 // freshly committed and clean, so IsDirty() is false and CommitChanges skips
 // straight past the commit step for every test that doesn't dirty it itself.
 func newFakePRWorktree(t *testing.T, sessionID, branchName string, mock *fakePRGitExecutor) *git.GitWorktree {
 	t.Helper()
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	return git.NewGitWorktreeFromStorageWithExecutor(dir, dir, sessionID, branchName, "", git.WithCommandRunner(mock))
 }
 
@@ -623,7 +610,7 @@ func TestCreatePullRequest_should_SurfaceSpecificError_When_GHNotAuthenticated(t
 // non-parallel test in this file always finishes before any parallel sibling
 // starts, so this can't race them.
 func TestCreatePullRequest_should_SurfaceError_When_CommitFails(t *testing.T) {
-	dir := newDraftPRTestRepo(t)
+	dir := svctest.NewDraftPRTestRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("data"), 0o644))
 
 	t.Setenv("GIT_AUTHOR_NAME", "")
