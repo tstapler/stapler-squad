@@ -73,7 +73,7 @@ type piExtensionHealthEntry struct {
 }
 
 // PiExtensionHealthTracker records pi approval-extension health pings
-// (server/services/approval_handler.go's HandlePiExtensionLoaded) and answers
+// (server/services/approvals/approval_handler.go's HandlePiExtensionLoaded) and answers
 // "is enforcement actually active for this session right now?" via HealthFor —
 // pi-support Epic 4.2, closing PITFALL-1's "installed != enforcing" gap.
 //

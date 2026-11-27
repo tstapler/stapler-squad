@@ -44,7 +44,7 @@ func postHookCommand(t *testing.T, h *approvals.ApprovalHandler, sessionID, tool
 		"tool_input": map[string]interface{}{"command": command},
 		"cwd":        "/tmp",
 	})
-	require.NoError(t, err)
+	assert.NoError(t, err) // may run off the test goroutine
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	req := httptest.NewRequest(http.MethodPost, "/api/hooks/permission-request", bytes.NewReader(body)).WithContext(ctx)

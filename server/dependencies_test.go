@@ -54,7 +54,7 @@ import (
 // BuildDependencies, which never constructs ApprovalHandler -- that only
 // happens inside wireDepsIntoServer). ApprovalHandler.SlackNotifierForTest and
 // SessionService.SlackNotifierForTest are minimal test-only accessors added
-// for exactly this assertion (server/services/approval_handler.go,
+// for exactly this assertion (server/services/approvals/approval_handler.go,
 // server/services/session_service.go) -- ReactiveQueueManager needs no such
 // accessor since it lives in this same package and its unexported
 // slackNotifier field is reachable directly from a same-package test.

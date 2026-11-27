@@ -53,7 +53,7 @@ func (ClassificationAnalytics) Fields() []ent.Field {
 			Optional(),
 		// source identifies which agent's hook produced this permission request
 		// ("claude" or "pi"). Defaulted to "claude" at the recording boundary
-		// (server/services/approval_handler.go) for rows from before this field
+		// (server/services/approvals/approval_handler.go) for rows from before this field
 		// existed and for Claude's unmodified curl hook, which never sends the
 		// field at all. See pi-support Epic 4.3.
 		field.String("source").

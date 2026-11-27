@@ -43,7 +43,7 @@ type DecisionRecord struct {
 	NotificationType int32
 	// ApprovalDecision is the record's Metadata["approval_decision"] value
 	// ("allow"/"deny"/"" for unresolved/other outcomes) — the same key
-	// server/services/approval_handler.go and
+	// server/services/approvals/approval_handler.go and
 	// server/notifications.AppendAutoApproved stamp.
 	ApprovalDecision string
 }
