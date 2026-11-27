@@ -66,6 +66,9 @@ export const roleMenu = style({
   padding: vars.space["1"],
   display: "flex",
   flexDirection: "column",
+  // Scrolls inside the menu when the viewport is shorter than the menu.
+  maxHeight: "calc(100% - 16px)",
+  overflowY: "auto",
 });
 
 export const roleMenuItem = style({

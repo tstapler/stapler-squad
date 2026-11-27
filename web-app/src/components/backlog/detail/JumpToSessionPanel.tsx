@@ -11,6 +11,7 @@ import { SessionPeekModal } from "@/components/sessions/SessionPeekModal";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { useAnalytics } from "@/lib/analytics";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
+import { useAnchoredMenuPosition } from "@/lib/hooks/useAnchoredMenuPosition";
 import { formatDate } from "@/lib/backlog/formatDate";
 import {
   getMostRecentJumpableSession,
@@ -54,7 +55,6 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
   const isOpen = expanded || modalOpen;
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +68,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
   const fetchSeqRef = useRef(0);
 
   useFocusTrap(menuRef, menuOpen, menuTriggerRef);
+  const menuPos = useAnchoredMenuPosition(menuTriggerRef, menuRef, menuOpen);
 
   const target = selectedRole
     ? getMostRecentJumpableSessionForRole(linkedSessions, selectedRole) ?? defaultTarget
@@ -118,12 +119,6 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
   }, []);
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
-
-  const openMenu = useCallback(() => {
-    const rect = menuTriggerRef.current?.getBoundingClientRect();
-    if (rect) setMenuPos({ top: rect.bottom + 4, left: rect.left });
-    setMenuOpen(true);
-  }, []);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -177,7 +172,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
             // Opens/closes a disclosure menu, not an action — mirrors
             // MoveToMenu.tsx's identical untracked trigger.
             // analytics-exempt
-            onClick={() => (menuOpen ? closeMenu() : openMenu())}
+            onClick={() => setMenuOpen((open) => !open)}
           >
             <ChevronDown size={16} aria-hidden="true" />
           </button>
@@ -191,7 +186,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
             role="menu"
             aria-label="Session roles"
             className={styles.roleMenu}
-            style={{ top: menuPos.top, left: menuPos.left }}
+            style={menuPos}
             data-testid="jump-to-session-role-menu"
             onKeyDown={(e) => {
               if (e.key === "Escape") closeMenu();
