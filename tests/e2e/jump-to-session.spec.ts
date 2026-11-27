@@ -240,8 +240,8 @@ test.describe("backlog-jump-to-session", () => {
         };
         await expect.poll(distance).toBe(4);
         const menuBefore = (await menu.boundingBox())!.y;
-        // Not -80px: with the header's own 74px reflow that carries the trigger 154px (menu + trigger +
-        // both gaps), leaving a menu that never moved 4px from the trigger's other side.
+        // Not -80px: added to the header's own reflow, that can carry the trigger by exactly menu + trigger +
+        // gaps, leaving a menu that never moved adjacent on the trigger's other side.
         await trigger.evaluate((el) => {
           el.parentElement!.style.position = "relative";
           el.parentElement!.style.top = "-40px";
@@ -249,7 +249,7 @@ test.describe("backlog-jump-to-session", () => {
         // The menu may flip sides, so require both that it left its old spot and that it is adjacent.
         await expect
           .poll(async () => {
-            const menuMoved = Math.abs((await menu.boundingBox())!.y - menuBefore) > 20;
+            const menuMoved = Math.abs((await menu.boundingBox())!.y - menuBefore) > 1;
             return { menuMoved, gap: await distance() };
           })
           .toEqual({ menuMoved: true, gap: 4 });

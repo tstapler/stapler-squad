@@ -39,7 +39,7 @@ describe("useAnchoredMenuPosition", () => {
       },
       { initialProps: { open: true } }
     );
-    return { ...hook, renderCount: () => renders };
+    return { ...hook, anchor: anchorRef.current, renderCount: () => renders };
   }
 
   it("stops measuring once the menu closes", () => {
@@ -53,6 +53,7 @@ describe("useAnchoredMenuPosition", () => {
 
   it("stops measuring on unmount", () => {
     const { unmount } = renderOpenMenu();
+    expect(frames.size).toBe(1);
 
     unmount();
 
@@ -64,10 +65,28 @@ describe("useAnchoredMenuPosition", () => {
     // React may render once more before it settles on an unchanged state.
     runFrame();
     runFrame();
+    expect(frames.size).toBe(1);
     const settled = renderCount();
 
     for (let i = 0; i < 5; i++) runFrame();
 
     expect(renderCount()).toBe(settled);
+  });
+
+  it("follows an anchor that only moves sideways", () => {
+    // jsdom has no layout: without a viewport size every left clamps to the margin.
+    jest.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1000);
+    jest.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(800);
+    const { anchor, result } = renderOpenMenu();
+    const anchorAt = (left: number) => {
+      anchor.getBoundingClientRect = () => ({ top: 100, bottom: 120, left }) as DOMRect;
+      runFrame();
+    };
+
+    anchorAt(50);
+    expect(result.current).toEqual({ top: 124, left: 50 });
+    anchorAt(90);
+
+    expect(result.current).toEqual({ top: 124, left: 90 });
   });
 });
