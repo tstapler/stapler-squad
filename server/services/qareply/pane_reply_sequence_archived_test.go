@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"fmt"
@@ -46,7 +46,7 @@ func TestSequence_should_writeNothing_When_theSessionIsArchivedBeforeTheFirstKey
 	e := newRouterEnv(t)
 	inst, pm := e.addTabbed("seq-archived-first", tabbedFrames(t))
 	qid := e.twoQuestionRow(inst, false)
-	e.fix.svc.replyControllerActive = func(i *instance.Instance) bool {
+	e.controllerActive = func(i *instance.Instance) bool {
 		archiveNow(i)
 		return true
 	}

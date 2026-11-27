@@ -666,14 +666,14 @@ func TestFilesFlags_ShouldRejectScopedUpdate_When_ScopeSupplied(t *testing.T) {
 // GetFeatureFlagWithDefault for a registered flag. The literal agrees with the
 // registry today; the list is a ratchet, so a new literal fails the test.
 var dfltKnownLiteralSites = map[string]bool{
-	"server/changelog_handler.go|" + featureflags.ChangelogFlagName:                       true,
-	"server/changelog_handler.go|" + featureflags.UpdateCheckFlagName:                     true,
-	"server/services/guards_flag.go|" + featureflags.HiddenSessionReadonlyGuardsFlagName:  true,
-	"server/services/hidden_question_reply.go|" + featureflags.HiddenSessionReplyFlagName: true,
-	"server/services/lease_flag.go|" + featureflags.TerminalWriteLeaseFlagName:            true,
-	"github/client.go|" + flagsvc.GithubGraphQLMigrationFlagName:                          true,
-	"github/http_client.go|" + flagsvc.GithubPriorityAdmissionFlagName:                    true,
-	"session/gitwt/manager.go|" + flagsvc.WorktreeChangeDetectionFlagName:                 true,
+	"server/changelog_handler.go|" + featureflags.ChangelogFlagName:                               true,
+	"server/changelog_handler.go|" + featureflags.UpdateCheckFlagName:                             true,
+	"server/services/guards_flag.go|" + featureflags.HiddenSessionReadonlyGuardsFlagName:          true,
+	"server/services/qareply/hidden_question_reply.go|" + featureflags.HiddenSessionReplyFlagName: true,
+	"server/services/lease_flag.go|" + featureflags.TerminalWriteLeaseFlagName:                    true,
+	"github/client.go|" + flagsvc.GithubGraphQLMigrationFlagName:                                  true,
+	"github/http_client.go|" + flagsvc.GithubPriorityAdmissionFlagName:                            true,
+	"session/gitwt/manager.go|" + flagsvc.WorktreeChangeDetectionFlagName:                         true,
 }
 
 // dfltKnownPlainReadDisagreements are plain GetFeatureFlag reads of a flag whose

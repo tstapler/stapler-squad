@@ -19,9 +19,9 @@ func TestUiExceptionEntryPoints_ShouldEachRequireTheirCapabilityParam_WhenReflec
 		{"hidden_review_steer.go", "", "newBacklogSteerWriter", "BacklogReviewLink"},
 		{"hidden_review_steer.go", "SessionService", "steerHiddenReviewViaBacklogLink", "BacklogReviewLink"},
 		{"steer_authorization.go", "SessionService", "steerBacklogLinked", "BacklogReviewLink"},
-		{"pane_reply_core.go", "", "newQuestionReplyWriter", "TerminalAccess"},
-		{"pane_reply_core.go", "", "newQuestionReplyWriter", "PendingQuestionClaim"},
-		{"pane_reply_core.go", "PaneReplyCore", "writeUnderLease", "PendingQuestionClaim"},
+		{"qareply/pane_reply_core.go", "", "newQuestionReplyWriter", "TerminalAccess"},
+		{"qareply/pane_reply_core.go", "", "newQuestionReplyWriter", "PendingQuestionClaim"},
+		{"qareply/pane_reply_core.go", "PaneReplyCore", "writeUnderLease", "PendingQuestionClaim"},
 	}
 	for _, ep := range entryPoints {
 		f, err := parser.ParseFile(token.NewFileSet(), ep.file, nil, 0)

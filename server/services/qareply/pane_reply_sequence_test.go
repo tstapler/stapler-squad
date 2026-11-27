@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"context"
@@ -89,7 +89,7 @@ func (e *routerEnv) twoQuestionRow(inst *instance.Instance, q1MultiSelect bool) 
 		DeliveryRoute: domain.DeliveryRouteLiveKeystroke,
 	})
 	require.NoError(e.t, err)
-	row, err := e.fix.storage.CreateMirroredGuidanceRequest(context.Background(), gr, 0)
+	row, err := e.storage.CreateMirroredGuidanceRequest(context.Background(), gr, 0)
 	require.NoError(e.t, err)
 	return row.ID
 }

@@ -19,7 +19,7 @@ Both have costs:
 - A hook that blocks while it waits for an answer removes the terminal as an answer path.
 
 So the design tries the safest route that can work and falls through on a typed failure
-(`server/services/question_answer_router.go`).
+(`server/services/qareply/question_answer_router.go`).
 
 ## The ladder
 
@@ -62,7 +62,7 @@ answer path.
 
 One digit selects the option. No Enter. The router looks up the pending question, maps
 the chosen label to its digit (`optionDigit`), then writes through the shared pane writer
-(`PaneReplyCore`, `server/services/pane_reply_core.go`) under the terminal write lease. A
+(`PaneReplyCore`, `server/services/qareply/pane_reply_core.go`) under the terminal write lease. A
 `DialogMatch` check against a fresh capture runs under that lease, so a dialog that
 changed between the click and the write yields `stale` with zero bytes written, not a
 wrong answer.
@@ -92,7 +92,7 @@ satisfy the single-question matcher, which is why the tabbed layout has its own 
 
 When some keys landed and the sequence then stopped, the outcome is `stale` with reason
 `answer_aborted_partial` and detail "N of M keys sent"
-(`server/services/question_answer_sequence.go`). Neither Retry nor a second Submit is safe,
+(`server/services/qareply/question_answer_sequence.go`). Neither Retry nor a second Submit is safe,
 because the dialog is in a half-answered state. The card offers Open session. The delivery
 state is `aborted_partial`.
 

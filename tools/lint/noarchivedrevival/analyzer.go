@@ -45,7 +45,7 @@ var lifecycleFiles = []string{
 	"server/dependencies.go",
 	"server/dependencies_instances.go",
 	"server/wakes/revive.go",
-	"server/services/question_answer_router.go",
+	"server/services/qareply/question_answer_router.go",
 	"server/services/session_service_clear_terminal.go",
 	"server/services/federation/session_federation.go",
 	"server/services/federation/session_federation_terminal.go",

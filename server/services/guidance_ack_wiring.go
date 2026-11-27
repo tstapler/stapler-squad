@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
+	"github.com/tstapler/stapler-squad/server/services/qareply"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -29,9 +30,7 @@ func (s *SessionService) wireGuidanceAcks(storage *session.Storage) *guidance.Gu
 		return nil
 	}
 	s.stopGuidanceAcks()
-	d := guidance.NewGuidanceAckDetector(storage, s.ackCapture, func(uuid string) bool {
-		return s.answerSessions()(uuid).phase != phaseLive
-	}, nil)
+	d := guidance.NewGuidanceAckDetector(storage, s.ackCapture, s.replyService().SessionEnded, nil)
 	d.SetNotes(notifyactions.NewNotificationResolver(s.GetNotificationStore()))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -72,15 +71,21 @@ func (s *SessionService) ackCapture(_ context.Context, sessionUUID string, under
 
 // answerRouterDeps maps the wiring inputs onto the router's. A nil storage or
 // detector stays a nil interface so the router sees "not wired".
-func answerRouterDeps(w NotificationActionWiring, acks *guidance.GuidanceAckDetector) AnswerRouterDeps {
-	d := AnswerRouterDeps{Mirror: w.Mirror}
+func answerRouterDeps(w NotificationActionWiring, acks *guidance.GuidanceAckDetector) qareply.AnswerRouterDeps {
+	d := qareply.AnswerRouterDeps{Mirror: w.Mirror}
 	if w.Storage != nil {
 		d.Rows = w.Storage
 	}
-	if acks != nil {
-		d.Acks = acks
-	}
+	d.Acks = ackSink(acks)
 	return d
+}
+
+// ackSink keeps a nil detector a nil interface, never a boxed nil pointer.
+func ackSink(acks *guidance.GuidanceAckDetector) questionkit.DeliverySink {
+	if acks == nil {
+		return nil
+	}
+	return acks
 }
 
 // ObservePostToolUse routes a PostToolUse receipt to the detector. sessionID is
@@ -126,11 +131,8 @@ func (s *SessionService) wireHookReply(storage *session.Storage, acks *guidance.
 	if storage == nil {
 		return
 	}
-	r := &hookReplyResolver{rows: storage, flags: notifyactions.NewConfigFlags(flagsvc.CompiledFlagEvidence, s.flagReader())}
-	if acks != nil {
-		r.acks = acks
-	}
-	s.hookReply.Store(r)
+	flags := notifyactions.NewConfigFlags(flagsvc.CompiledFlagEvidence, s.flagReader())
+	s.hookReply.Store(qareply.NewHookReplyResolver(storage, flags, ackSink(acks)))
 }
 
 // HookReplier is the AskUserQuestion hook answerer for the hook IPC server. It

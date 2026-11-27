@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/qareply"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
@@ -56,18 +57,18 @@ func TestAskUserQuestionRenderGate_ShouldStayClosed_WhenOnlyTheAnswerStageIsSet(
 
 func TestWireAnswerRouter_ShouldUseServiceRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	assert.True(t, newGatedSessionService(svctest.CreateTestStorage(t), inlineOnRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.(interface{ Inline(string) bool }).Inline(inlineApprove))
-	assert.False(t, newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.(interface{ Inline(string) bool }).Inline(inlineApprove))
+	assert.True(t, newGatedSessionService(svctest.CreateTestStorage(t), inlineOnRegistry()).WireAnswerRouter(qareply.AnswerRouterDeps{}).InlineActionEnabledForTest(inlineApprove))
+	assert.False(t, newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry()).WireAnswerRouter(qareply.AnswerRouterDeps{}).InlineActionEnabledForTest(inlineApprove))
 }
 
 func TestWireHookReply_ShouldUseServiceRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	injected := newGatedSessionService(svctest.CreateTestStorage(t), inlineOnRegistry())
 	injected.wireHookReply(svctest.CreateTestStorage(t), nil)
-	assert.True(t, injected.hookReply.Load().flags.(interface{ Inline(string) bool }).Inline(inlineApprove))
+	assert.True(t, injected.hookReply.Load().InlineActionEnabledForTest(inlineApprove))
 	global := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 	global.wireHookReply(svctest.CreateTestStorage(t), nil)
-	assert.False(t, global.hookReply.Load().flags.(interface{ Inline(string) bool }).Inline(inlineApprove))
+	assert.False(t, global.hookReply.Load().InlineActionEnabledForTest(inlineApprove))
 }
 
 func TestSessionService_ShouldNotTouchProcessRegistry_WhenNoneInjected(t *testing.T) {

@@ -8,6 +8,7 @@ filegroup(
     visibility = [
         "//server/services:__pkg__",
         "//server/services/guidance:__pkg__",
+        "//server/services/qareply:__pkg__",
         "//server/services/questionkit:__pkg__",
         "//server/wakes:__pkg__",
         "//session:__pkg__",

@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"testing"
@@ -46,11 +46,11 @@ func TestPaneReplyCore_ShouldRefuseWithZeroWritesAndKeepTheQuestion_WhenTargetIs
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newReplyEnv(t)
-			tgt := e.addSession("core-target", tt.sessionHide, "")
+			tgt := e.addSession("core-target", tt.sessionHide)
 			qid := e.register(tgt.inst, colorDialog)
 			in := replyInput{sessionID: tgt.inst.UUID, sessionUUID: tgt.inst.GetStableID(), questionID: qid, replyID: "core-1", digit: '2'}
 
-			res, cache := e.fix.svc.paneReplyCore().Run(e.localCtx(), tt.target, in, tgt.inst, access.SteerRequestFacts{})
+			res, cache := e.svc.paneReplyCore().Run(e.localCtx(), tt.target, in, tgt.inst, access.SteerRequestFacts{})
 
 			require.NoError(t, res.Err)
 			assert.Equal(t, tt.wantOutcome, res.Outcome)
@@ -59,7 +59,7 @@ func TestPaneReplyCore_ShouldRefuseWithZeroWritesAndKeepTheQuestion_WhenTargetIs
 			lines := replyLines(e.auditLines())
 			require.Len(t, lines, 2)
 			assert.Equal(t, tt.wantStage, lines[1].Stage)
-			_, still := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: tgt.inst.GetStableID(), QuestionID: qid})
+			_, still := e.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: tgt.inst.GetStableID(), QuestionID: qid})
 			assert.True(t, still, "the released claim leaves the question pending")
 		})
 	}

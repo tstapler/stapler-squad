@@ -1,4 +1,4 @@
-package services
+package qareply
 
 import (
 	"context"
@@ -222,13 +222,12 @@ type PaneReplyCore struct {
 	canary           *questionkit.DialogMatchCanary
 }
 
-// paneReplyCore builds the core from the service's current seams.
-func (s *SessionService) paneReplyCore() *PaneReplyCore {
-	st := s.replyState()
+// paneReplyCore builds the core from the service's current ports.
+func (s *Service) paneReplyCore() *PaneReplyCore {
 	return &PaneReplyCore{
-		store: st.store, limiters: st.limiters,
-		auditSink: s.auditSink, count: s.countReply,
-		after: s.replyAfter, controllerActive: s.controllerActiveFor, canary: s.dialogCanary.Load(),
+		store: s.store, limiters: s.limiters,
+		auditSink: s.ports.AuditSink, count: s.ports.Count,
+		after: s.ports.After, controllerActive: s.controllerActiveFor, canary: s.ports.Canary(),
 	}
 }
 

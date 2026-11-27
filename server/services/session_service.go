@@ -21,7 +21,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
 
-	"connectrpc.com/connect"
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -43,6 +42,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/qareply"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/taggingrules"
@@ -128,18 +128,9 @@ type SessionService struct {
 	guards *access.UnaryGuardsFlag
 	// guardBypass counts and rate-limits the guards-off bypass writes.
 	guardBypass guardBypassState
-	// reply is the Reply machinery (pending questions, idempotency, limiters,
-	// flag), built on first use; replyNow injects the clock in tests.
+	// reply is the Reply path and answer router, built on first use (replyService).
 	replyOnce sync.Once
-	reply     *replyState
-	replyNow  func() time.Time
-	// replyPeerAddr and replyControllerActive are test seams; nil means
-	// req.Peer().Addr and "the instance has a started status controller".
-	replyPeerAddr         func(connect.AnyRequest) string
-	replyControllerActive func(*instance.Instance) bool
-	// replyAfter injects the timer behind the send timeout and the closed-check
-	// polls (nil is time.After).
-	replyAfter func(time.Duration) <-chan time.Time
+	reply     *qareply.Service
 	// backlogLinks decides whether a hidden session is a live backlog review
 	// session (the O7 steer exemption).
 	backlogLinks BacklogLinkResolver
@@ -148,7 +139,7 @@ type SessionService struct {
 	actionDispatcher *notifyactions.NotificationActionDispatcher
 	// guidanceAcks tracks sent keystroke answers; ackCancel/ackDone stop its loop.
 	guidanceAcks *guidance.GuidanceAckDetector
-	hookReply    atomic.Pointer[hookReplyResolver]
+	hookReply    atomic.Pointer[qareply.HookReplyResolver]
 	// dialogCanary and guidanceMirror are installed after construction (Story 3.3).
 	dialogCanary   atomic.Pointer[questionkit.DialogMatchCanary]
 	guidanceMirror atomic.Pointer[questionkit.GuidanceHookMirror]
@@ -1204,7 +1195,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		config.HiddenSessionGateFeatureFlag:              {}, // every gate flip takes the non-blocking path
 		featureflags.TerminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
 		featureflags.HiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
-		featureflags.HiddenSessionReplyFlagName:          replyFlagAuditPolicy,
+		featureflags.HiddenSessionReplyFlagName:          qareply.FlagAuditPolicy,
 	})
 	ff.MergeAuditPolicies(flagsvc.NotificationActionsFlagAuditPolicies())
 	ff.MergeAuditPolicies(flagsvc.SessionMultiPRFlagAuditPolicies())
