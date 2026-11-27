@@ -721,6 +721,15 @@ func publishClaudeSettingsNotification(eventBus *events.EventBus, content claude
 	))
 }
 
+// startSharedRulesReload hot-reloads the user's shared_rules.yaml, except in test mode so
+// tests never read the developer's real home directory. Call it after SetApprovalService: its
+// first load reconciles pending approvals.
+func startSharedRulesReload(testMode bool, userHomeDir func() (string, error), start func(context.Context, string, time.Duration)) {
+	if home, err := userHomeDir(); err == nil && !testMode {
+		start(context.Background(), classifier.ConfigFileRulesPath(home), rules.ConfigFileRulesPollInterval)
+	}
+}
+
 // loadClaudeSettingsRulesAtStartup parses ~/.claude/settings.json (and project-level
 // equivalents under cwd) and merges the resulting rules into classifierObj, publishing a
 // one-time notification if any were found. Extracted from NewSessionServiceWithSearchEngine
@@ -922,11 +931,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	rulesSvc.SetApprovalService(approvalSvc)
 	// Started after SetApprovalService: the first load reconciles pending approvals, which reads
 	// rs.approvalSvc unsynchronised.
-	// Hot-reload shared_rules.yaml (gated on IsTestMode like the claude-settings load above, so
-	// tests never read the developer's real home directory).
-	if home, homeErr := os.UserHomeDir(); homeErr == nil && !config.IsTestMode() {
-		rulesSvc.StartConfigFileRulesReload(context.Background(), classifier.ConfigFileRulesPath(home), rules.ConfigFileRulesPollInterval)
-	}
+	startSharedRulesReload(config.IsTestMode(), os.UserHomeDir, rulesSvc.StartConfigFileRulesReload)
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig

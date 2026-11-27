@@ -8,6 +8,13 @@ import (
 )
 
 // TestMain gives this binary the hermetic setup server/services' own tests run under.
+// The temp HOME keeps rule upserts and deletes from exporting into the developer's.
 func TestMain(m *testing.M) {
-	os.Exit(svctest.Main(m, func() {}))
+	cleanup, err := svctest.UseTempHome()
+	if err != nil {
+		panic(err)
+	}
+	code := svctest.Main(m, func() {})
+	cleanup()
+	os.Exit(code)
 }

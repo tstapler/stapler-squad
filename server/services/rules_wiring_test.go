@@ -2,12 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -121,21 +123,55 @@ func TestNewSessionService_should_EnableRuleGeneration_When_AnAIClientIsAvailabl
 	assert.NotEqual(t, connect.CodeUnimplemented, connect.CodeOf(err))
 }
 
-// The shared_rules.yaml reload is skipped under `go test` (config.IsTestMode), so the
-// call is pinned in the source.
-func TestNewSessionService_should_StartTheSharedRulesReload(t *testing.T) {
+func TestStartSharedRulesReload_should_StartOnlyOutsideTestModeWithAHome(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		testMode bool
+		homeErr  error
+		want     []string
+	}{
+		"server":    {want: []string{"/h/.config/stapler-squad/shared_rules.yaml 3s"}},
+		"test mode": {testMode: true},
+		"no home":   {homeErr: errors.New("no home")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var started []string
+			startSharedRulesReload(tc.testMode,
+				func() (string, error) { return "/h", tc.homeErr },
+				func(_ context.Context, path string, interval time.Duration) {
+					started = append(started, path+" "+interval.String())
+				})
+			assert.Equal(t, tc.want, started)
+		})
+	}
+}
+
+// NewSessionService runs in test mode here, and the order only matters to a reconcile
+// goroutine, so neither the arguments nor the order are observable: pin them in the source.
+func TestNewSessionService_should_StartTheSharedRulesReloadAfterTheApprovalServiceIsSet(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile("session_service.go")
 	require.NoError(t, err)
 	file, err := parser.ParseFile(token.NewFileSet(), "session_service.go", src, 0)
 	require.NoError(t, err)
-	var calls []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			calls = append(calls, types.ExprString(call))
+	var statements []string // unconditional statements of the constructor, in order
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "NewSessionServiceWithSearchEngine" {
+			continue
 		}
-		return true
-	})
-	assert.Contains(t, calls,
-		"rulesSvc.StartConfigFileRulesReload(context.Background(), classifier.ConfigFileRulesPath(home), rules.ConfigFileRulesPollInterval)")
+		for _, stmt := range fn.Body.List {
+			if expr, ok := stmt.(*ast.ExprStmt); ok {
+				statements = append(statements, types.ExprString(expr.X))
+			}
+		}
+	}
+
+	set := slices.Index(statements, "rulesSvc.SetApprovalService(approvalSvc)")
+	start := slices.Index(statements,
+		"startSharedRulesReload(config.IsTestMode(), os.UserHomeDir, rulesSvc.StartConfigFileRulesReload)")
+
+	require.GreaterOrEqual(t, set, 0)
+	assert.Greater(t, start, set)
 }
