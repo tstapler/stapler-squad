@@ -40,8 +40,3 @@ func (f *fakeInstanceStore) DeleteInstance(_ string) error { return nil }
 func (f *fakeInstanceStore) UpdateInstanceLastUserResponse(_ string, _ time.Time) error { return nil }
 
 func (f *fakeInstanceStore) UpdateInstanceMetadata(_ string, _, _, _, _ *string) error { return nil }
-
-// pngMagic returns a minimal byte slice that looks like a PNG.
-func pngMagic() []byte {
-	return append([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, make([]byte, 504)...)
-}

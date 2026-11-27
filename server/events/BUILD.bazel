@@ -1,11 +1,18 @@
 load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "events",
-    srcs = ["forward.go"],
+    srcs = [
+        "deploy_id.go",
+        "forward.go",
+    ],
     importpath = "github.com/tstapler/stapler-squad/server/events",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/events"],
+    deps = [
+        "//pkg/events",
+        "@com_github_google_uuid//:uuid",
+    ],
 )
 
 alias(
@@ -19,4 +26,10 @@ filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
     visibility = ["//tools/bzl/scandata:__pkg__"],
+)
+
+go_test(
+    name = "events_test",
+    srcs = ["deploy_id_test.go"],
+    embed = [":events"],
 )

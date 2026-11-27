@@ -220,3 +220,9 @@ func checkpointToProto(cp *domain.Checkpoint) *sessionv1.CheckpointProto {
 		Timestamp:      timestamppb.New(cp.Timestamp),
 	}
 }
+
+// ScrollbackSequencer is the minimal interface checkpoint creation needs from ScrollbackManager.
+// Exported so server/dependencies.go can use warren.Set to validate this wiring at startup.
+type ScrollbackSequencer interface {
+	CurrentSequence(sessionID string) uint64
+}

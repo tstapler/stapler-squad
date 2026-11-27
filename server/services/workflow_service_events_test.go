@@ -228,3 +228,9 @@ func TestWatchWorkflows_should_returnUnavailable_When_EventBusNotWired(t *testin
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 }
+
+func TestDeployID_StampedOnWorkflowEvents(t *testing.T) {
+	t.Parallel()
+	got := convertEventToWorkflowEvent(&events.Event{Timestamp: time.Now()})
+	assert.Equal(t, events.DeployID(), got.GetDeployId())
+}

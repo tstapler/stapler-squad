@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/instance"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 
@@ -378,4 +379,12 @@ func convertProtoReasons(protoReasons []sessionv1.AttentionReason) []queuepkg.At
 		}
 	}
 	return result
+}
+
+// ReactiveQueueManager is an interface to avoid circular dependencies.
+// The actual implementation is in server/reviewqueue/review_queue_manager.go
+type ReactiveQueueManager interface {
+	AddStreamClient(ctx context.Context, filters interface{}) (<-chan *sessionv1.ReviewQueueEvent, string)
+	RemoveStreamClient(clientID string)
+	OnControllerStatusChange(inst *instance.Instance, newStatus detection.DetectedStatus)
 }

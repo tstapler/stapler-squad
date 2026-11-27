@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
 	"github.com/tstapler/stapler-squad/session"
@@ -55,27 +54,19 @@ func createTestEntClient(t *testing.T) *session.EntRepository {
 	return session.NewTestEntRepository(t)
 }
 
-// createTestWorkflowService wires up a SessionService + WorkflowService with
-// an in-memory SQLite ent client.
-func createTestWorkflowService(t *testing.T) (*SessionService, *WorkflowService) {
+// createTestWorkflowService builds a WorkflowService over an in-memory SQLite ent client.
+func createTestWorkflowService(t *testing.T) *WorkflowService {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
-	eventBus := events.NewEventBus(100)
-	sessSvc := NewSessionService(storage, eventBus)
-	t.Cleanup(func() { sessSvc.Shutdown() })
-
 	repo := createTestEntClient(t)
 	workflowRepo := stagecfg.NewEntWorkflowRepository(repo.GetEntClient())
-	workflowSvc := NewWorkflowService(workflowRepo, nil /* scheduler nil OK for CRUD tests */, storage)
-	sessSvc.SetWorkflowService(workflowSvc)
-
-	return sessSvc, workflowSvc
+	return NewWorkflowService(workflowRepo, nil /* scheduler nil OK for CRUD tests */, storage)
 }
 
 // TestCreateWorkflow_HappyPath checks that a valid workflow is persisted.
 func TestCreateWorkflow_HappyPath(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	req := connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -98,7 +89,7 @@ func TestCreateWorkflow_HappyPath(t *testing.T) {
 // of cron_enabled, which is left at its own zero-value default (false) here.
 func TestCreateWorkflow_Enabled_DefaultsTrueAndRoundTrips(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	defaulted, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -121,7 +112,7 @@ func TestCreateWorkflow_Enabled_DefaultsTrueAndRoundTrips(t *testing.T) {
 // coupled at the RPC layer (webhook-triggers verify follow-ups AC0-3).
 func TestUpdateWorkflow_Enabled_IndependentOfCronEnabled(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	created, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -144,7 +135,7 @@ func TestUpdateWorkflow_Enabled_IndependentOfCronEnabled(t *testing.T) {
 // TestCreateWorkflow_InvalidSlug verifies that a slug with uppercase is rejected.
 func TestCreateWorkflow_InvalidSlug(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	req := connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -161,7 +152,7 @@ func TestCreateWorkflow_InvalidSlug(t *testing.T) {
 // TestCreateWorkflow_DuplicateSlug verifies AlreadyExists is returned.
 func TestCreateWorkflow_DuplicateSlug(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	req := connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -187,7 +178,7 @@ func TestCreateWorkflow_DuplicateSlug(t *testing.T) {
 // TestListWorkflows verifies workflows are listed after creation.
 func TestListWorkflows(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	// Create two workflows.
@@ -209,7 +200,7 @@ func TestListWorkflows(t *testing.T) {
 // TestDeleteWorkflow verifies a workflow is removed.
 func TestDeleteWorkflow(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -232,7 +223,7 @@ func TestDeleteWorkflow(t *testing.T) {
 // TestUpdateWorkflow verifies that a workflow's name is updated.
 func TestUpdateWorkflow(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -261,7 +252,7 @@ func TestUpdateWorkflow(t *testing.T) {
 // change.
 func TestUpdateWorkflow_ConcurrentWrites_SecondCallerGetsConflict(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	created, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -295,7 +286,7 @@ func TestUpdateWorkflow_ConcurrentWrites_SecondCallerGetsConflict(t *testing.T) 
 // same original snapshot.
 func TestUpdateWorkflow_NoExpectedUpdatedAt_AlwaysWrites_LikeBeforeCAS(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	created, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -319,7 +310,7 @@ func TestUpdateWorkflow_NoExpectedUpdatedAt_AlwaysWrites_LikeBeforeCAS(t *testin
 // TestCreateWorkflow_MissingCommand verifies validation catches empty command.
 func TestCreateWorkflow_MissingCommand(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	req := connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -337,7 +328,7 @@ func TestCreateWorkflow_MissingCommand(t *testing.T) {
 // rejected at save time rather than silently accepted to fail later at fire time.
 func TestCreateWorkflow_MalformedModel(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	req := connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -355,7 +346,7 @@ func TestCreateWorkflow_MalformedModel(t *testing.T) {
 // TestCreateWorkflow_ValidFamilyModel verifies a namespaced family alias is accepted.
 func TestCreateWorkflow_ValidFamilyModel(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	req := connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -374,7 +365,7 @@ func TestCreateWorkflow_ValidFamilyModel(t *testing.T) {
 // save-time model validation as CreateWorkflow.
 func TestUpdateWorkflow_MalformedModel(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -393,31 +384,11 @@ func TestUpdateWorkflow_MalformedModel(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
-// TestSessionService_DelegatesListWorkflows verifies the delegation from SessionService.
-func TestSessionService_DelegatesListWorkflows(t *testing.T) {
-	t.Parallel()
-	sessSvc, workflowSvc := createTestWorkflowService(t)
-	ctx := context.Background()
-
-	// Create a workflow first so the list is non-empty.
-	_, err := workflowSvc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
-		Slug:            "delegate-wf",
-		Name:            "Delegate Workflow",
-		Command:         "cmd",
-		TargetDirectory: "/tmp/test",
-	}))
-	require.NoError(t, err)
-
-	resp, err := sessSvc.ListWorkflows(ctx, connect.NewRequest(&sessionv1.ListWorkflowsRequest{}))
-	require.NoError(t, err)
-	assert.Len(t, resp.Msg.Workflows, 1)
-}
-
 // TestCreateWorkflow_WithCronEnabled_CallsReload verifies that creating a cron-enabled
 // workflow invokes Reload on the scheduler.
 func TestCreateWorkflow_WithCronEnabled_CallsReload(t *testing.T) {
 	t.Parallel()
-	_, workflowSvc := createTestWorkflowService(t)
+	workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	mock := &mockScheduler{}
@@ -439,7 +410,7 @@ func TestCreateWorkflow_WithCronEnabled_CallsReload(t *testing.T) {
 // invokes Remove on the scheduler.
 func TestDeleteWorkflow_CallsSchedulerRemove(t *testing.T) {
 	t.Parallel()
-	_, workflowSvc := createTestWorkflowService(t)
+	workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	mock := &mockScheduler{}
@@ -462,7 +433,7 @@ func TestDeleteWorkflow_CallsSchedulerRemove(t *testing.T) {
 // TestRunWorkflow_HappyPath verifies that RunWorkflow returns the session ID from FireNow.
 func TestRunWorkflow_HappyPath(t *testing.T) {
 	t.Parallel()
-	_, workflowSvc := createTestWorkflowService(t)
+	workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	mock := &mockScheduler{}
@@ -489,7 +460,7 @@ func TestRunWorkflow_HappyPath(t *testing.T) {
 // TestRunWorkflow_NotFound verifies that RunWorkflow returns CodeNotFound for unknown IDs.
 func TestRunWorkflow_NotFound(t *testing.T) {
 	t.Parallel()
-	_, workflowSvc := createTestWorkflowService(t)
+	workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	mock := &mockScheduler{}
@@ -541,7 +512,7 @@ func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, svc := createTestWorkflowService(t)
+			svc := createTestWorkflowService(t)
 			ctx := context.Background()
 
 			_, err := svc.CreateWorkflow(ctx, connect.NewRequest(tt.req))
@@ -564,7 +535,7 @@ func TestCreateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 // independently requires trigger_type=="cron" too.
 func TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	resp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -586,7 +557,7 @@ func TestCreateWorkflow_WebhookTriggerType_CronEnabledTrue_Accepted(t *testing.T
 // webhook_slug is retrievable via GetByWebhookSlug.
 func TestCreateWorkflow_WebhookTrigger_RoundTripsByWebhookSlug(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	resp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -614,7 +585,7 @@ func TestCreateWorkflow_WebhookTrigger_RoundTripsByWebhookSlug(t *testing.T) {
 // request) state — not just the request's own fields in isolation.
 func TestUpdateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -649,7 +620,7 @@ func TestUpdateWorkflow_TriggerTypeMismatch_Rejected(t *testing.T) {
 // Enabled), but validateTriggerTypeFieldConsistency must still accept the combination.
 func TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -678,7 +649,7 @@ func TestUpdateWorkflow_CronEnabledTrue_AcceptedForNonCronTriggerType(t *testing
 // rejected by the trigger-type consistency check.
 func TestUpdateWorkflow_UnrelatedFieldChange_NotSpuriouslyRejected(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -702,64 +673,11 @@ func TestUpdateWorkflow_UnrelatedFieldChange_NotSpuriouslyRejected(t *testing.T)
 	assert.Equal(t, "updated description", updateResp.Msg.Workflow.Description)
 }
 
-// TestListTriggerFireEvents_ReturnsEventsForWorkflow verifies Task 1.2.1d's minimal
-// query-only RPC round-trips TriggerFireEvent rows recorded against a workflow.
-func TestListTriggerFireEvents_ReturnsEventsForWorkflow(t *testing.T) {
-	t.Parallel()
-	sessSvc, workflowSvc := createTestWorkflowService(t)
-	ctx := context.Background()
-
-	createResp, err := workflowSvc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
-		Slug:            "fire-events-wf",
-		Name:            "Fire Events",
-		Command:         "cmd",
-		TargetDirectory: "/tmp/test",
-	}))
-	require.NoError(t, err)
-	id := createResp.Msg.Workflow.Id
-	workflowID, err := uuid.Parse(id)
-	require.NoError(t, err)
-
-	// Fire events are tracked in their own repository (no FK to Workflow), so a
-	// separate ent client is fine here — only workflow_id needs to match by value.
-	entRepo := createTestEntClient(t)
-	fireEventRepo := session.NewEntTriggerFireEventRepository(entRepo.GetEntClient())
-	require.NoError(t, fireEventRepo.Create(ctx, session.TriggerFireEventInput{
-		WorkflowID:   &workflowID,
-		Outcome:      "fired_failed",
-		ErrorMessage: "WIP limit reached",
-	}))
-	workflowSvc.SetTriggerFireEventRepo(fireEventRepo)
-
-	resp, err := sessSvc.ListTriggerFireEvents(ctx, connect.NewRequest(&sessionv1.ListTriggerFireEventsRequest{
-		WorkflowId: id,
-	}))
-	require.NoError(t, err)
-	require.Len(t, resp.Msg.Events, 1)
-	assert.Equal(t, "fired_failed", resp.Msg.Events[0].Outcome)
-	assert.Equal(t, "WIP limit reached", resp.Msg.Events[0].ErrorMessage)
-	assert.Equal(t, id, resp.Msg.Events[0].WorkflowId)
-}
-
-// TestListTriggerFireEvents_NilRepo_ReturnsEmptyList verifies the nil-degradation
-// convention matching this file's other RPCs (e.g. ListWorkflows with a nil repo).
-func TestListTriggerFireEvents_NilRepo_ReturnsEmptyList(t *testing.T) {
-	t.Parallel()
-	sessSvc, _ := createTestWorkflowService(t)
-	ctx := context.Background()
-
-	resp, err := sessSvc.ListTriggerFireEvents(ctx, connect.NewRequest(&sessionv1.ListTriggerFireEventsRequest{
-		WorkflowId: uuid.New().String(),
-	}))
-	require.NoError(t, err)
-	assert.Empty(t, resp.Msg.Events)
-}
-
 // TestUpdateWorkflow_MultipleFields verifies that multiple fields can be updated
 // simultaneously and that unaffected fields remain unchanged.
 func TestUpdateWorkflow_MultipleFields(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -793,7 +711,7 @@ func TestUpdateWorkflow_MultipleFields(t *testing.T) {
 // syntactically invalid prompt_template is rejected at save time with
 // CodeInvalidArgument rather than only surfacing at fire time.
 func TestCreateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	_, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -811,7 +729,7 @@ func TestCreateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 // valid prompt_template is accepted and persisted.
 func TestCreateWorkflow_ValidPromptTemplate_Accepted(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	resp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -828,7 +746,7 @@ func TestCreateWorkflow_ValidPromptTemplate_Accepted(t *testing.T) {
 // TestUpdateWorkflow_MalformedPromptTemplate_Rejected is UpdateWorkflow's sibling of
 // TestCreateWorkflow_MalformedPromptTemplate_Rejected.
 func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -1041,7 +959,7 @@ func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
 // snapshot read distinguishes fixed from broken.
 func TestArchiveWorkflowSessions_should_PublishSnapshotSoIsArchivedIsTrue_When_ArchivingInMemoryInstance(t *testing.T) {
 	t.Parallel()
-	_, svc := createTestWorkflowService(t)
+	svc := createTestWorkflowService(t)
 	ctx := context.Background()
 
 	workflowID := uuid.New().String()
@@ -1066,7 +984,7 @@ func TestArchiveWorkflowSessions_should_PublishSnapshotSoIsArchivedIsTrue_When_A
 
 func TestRunWorkflow_Attachments_ValidatedAndPassedToScheduler(t *testing.T) {
 	t.Parallel()
-	_, workflowSvc := createTestWorkflowService(t)
+	workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
 	mock := &mockScheduler{}
 	workflowSvc.scheduler = mock

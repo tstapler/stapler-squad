@@ -54,7 +54,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/taggingrules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
-	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/external"
@@ -104,14 +103,6 @@ var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 // unique tmux -L socket suffix (combined with os.Getpid() for cross-process uniqueness), so
 // concurrent tests never contend on the same isolated socket. See SessionService.testTmuxServerSocket.
 var testTmuxServerSocketCounter uint64
-
-// ReactiveQueueManager is an interface to avoid circular dependencies.
-// The actual implementation is in server/review_queue_manager.go
-type ReactiveQueueManager interface {
-	AddStreamClient(ctx context.Context, filters interface{}) (<-chan *sessionv1.ReviewQueueEvent, string)
-	RemoveStreamClient(clientID string)
-	OnControllerStatusChange(inst *instance.Instance, newStatus detection.DetectedStatus)
-}
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
 type SessionService struct {
@@ -604,12 +595,6 @@ func waitForDestroyLoggingSlowCleanup(destroy func() error, timeout time.Duratio
 type workflowMeta struct {
 	name              string
 	archiveAfterHours int
-}
-
-// ScrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
-// Exported so server/dependencies.go can use warren.Set to validate this wiring at startup.
-type ScrollbackSequencer interface {
-	CurrentSequence(sessionID string) uint64
 }
 
 // Dependency-injection audit (ADR-001, Story 1.3):
