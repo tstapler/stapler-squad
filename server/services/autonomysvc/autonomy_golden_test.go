@@ -370,9 +370,6 @@ func runAutonomyScenario(t *testing.T, sc autonomyScenario, idx int) string {
 	snap := inst.Snapshot()
 	fmt.Fprintf(&out, "instance mode=%v outcome=%q stop=%q nudges=%d restarts=%d\n",
 		snap.Autonomous.AutonomousMode, snap.Autonomous.AutonomousOutcome, snap.Autonomous.AutonomousStopReason, nudger.calls, restarts)
-	// The respawn goroutine publishes its failure concurrently with the synchronous
-	// events, so that one line is always recorded last.
-	var respawnFailed string
 	for done := false; !done; {
 		select {
 		case ev := <-ch:
@@ -381,19 +378,13 @@ func runAutonomyScenario(t *testing.T, sc autonomyScenario, idx int) string {
 				keys = append(keys, k+"="+ev.NotificationMetadata[k])
 			}
 			slices.Sort(keys)
-			line := fmt.Sprintf("event %s session=%q fields=%v id=%q type=%d prio=%d title=%q msg=%q meta=%v\n",
+			fmt.Fprintf(&out, "event %s session=%q fields=%v id=%q type=%d prio=%d title=%q msg=%q meta=%v\n",
 				ev.Type, ev.SessionID, ev.UpdatedFields, ev.NotificationID, ev.NotificationType, ev.NotificationPriority,
 				ev.NotificationTitle, ev.NotificationMessage, keys)
-			if strings.HasPrefix(ev.NotificationID, "stuck-autonomous-respawn-failed-") {
-				respawnFailed += line
-				continue
-			}
-			out.WriteString(line)
 		default:
 			done = true
 		}
 	}
-	out.WriteString(respawnFailed)
 	text := out.String()
 	if itemID != "" {
 		text = strings.ReplaceAll(text, itemID, "<item>")

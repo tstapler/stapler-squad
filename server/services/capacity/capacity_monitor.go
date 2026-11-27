@@ -142,7 +142,7 @@ func (m *CapacityMonitor) SessionPortsForTest() (InstancePoller, SessionSwitcher
 	return m.poller, m.sessionSwitcher
 }
 
-// SetTokenStoreReader wires the parsed token store evaluate reads usage from.
+// SetTokenStoreReader wires the parsed token store evaluate reads usage from; the write is unsynchronized, so call it before Start.
 func (m *CapacityMonitor) SetTokenStoreReader(store tokens.TokenStoreReader) {
 	m.tokenStore = store
 }
