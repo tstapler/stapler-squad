@@ -220,6 +220,7 @@ go_test(
         "session_activity_test.go",
         "session_driver_internal_test.go",
         "session_goal_test.go",
+        "shell_session_name_test.go",
         "state_machine_test.go",
         "status_mapping_test.go",
         "stop_by_user_test.go",

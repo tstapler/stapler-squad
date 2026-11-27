@@ -218,41 +218,20 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// nested Claude Code sessions are not blocked by the "nested session" guard.
 	historyPath := fmt.Sprintf("%s/.stapler_squad_history", workDir)
 	programWithHistory := fmt.Sprintf("env HISTFILE=%s %s", historyPath, t.program)
-	newSessionArgs := []string{"new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE="}
-	for _, kv := range t.ExtraEnv {
-		newSessionArgs = append(newSessionArgs, "-e", kv)
-	}
-	for _, kv := range t.extraEnv {
-		newSessionArgs = append(newSessionArgs, "-e", kv)
-	}
-	newSessionArgs = append(newSessionArgs, "-c", workDir, programWithHistory)
-	cmd := t.buildTmuxCommand(newSessionArgs...)
+	// The existence checks above can fail open (timeout), so ask again before claiming ownership.
+	wasAbsent := sessionKnownAbsent(t.cmdExec, t.buildTmuxCommand("has-session", "-t", "="+t.sanitizedName))
+	cmd := t.buildTmuxCommand(t.newSessionArgs(workDir, programWithHistory)...)
 
 	// Use cmdExec.Run() instead of pty.Start() for detached session creation
 	// since detached sessions don't need PTY attachment during creation.
-	//
-	// stderr goes to a scratch FILE, not a pipe/buffer: `tmux new-session -d`
-	// forks a detached server that inherits these fds, so a buffer-based
-	// capture (CombinedOutput, bytes.Buffer) blocks forever waiting for EOF
-	// that the still-running server never sends. A file has no such wait.
-	var stderrOutput string
-	stderrFile, tmpErr := os.CreateTemp("", "tmux-new-session-stderr-*")
-	if tmpErr == nil {
-		cmd.Stderr = stderrFile
-		defer os.Remove(stderrFile.Name())
-		defer stderrFile.Close()
-	}
-	err := runGatedErr(context.Background(), t.serverSocket, func() error {
-		return t.cmdExec.Run(cmd)
+	stderrOutput, err := runCapturingStderr(cmd, func() error {
+		return runGatedErr(context.Background(), t.serverSocket, func() error {
+			return t.cmdExec.Run(cmd)
+		})
 	})
-	if stderrFile != nil {
-		if data, readErr := os.ReadFile(stderrFile.Name()); readErr == nil {
-			stderrOutput = strings.TrimSpace(string(data))
-		}
-	}
 	if err != nil {
 		// Cleanup any partially created session if any exists.
-		if t.DoesSessionExist() {
+		if wasAbsent && !isDuplicateSession(stderrOutput) && t.DoesSessionExist() {
 			cleanupCmd := t.buildTmuxCommand("kill-session", "-t", t.sanitizedName)
 			cleanupErr := runGatedErr(context.Background(), t.serverSocket, func() error {
 				return t.cmdExec.Run(cleanupCmd)
@@ -635,40 +614,41 @@ func (t *TmuxSession) recreateMissingSession(workDir string) error {
 // the child environment so a nested Claude Code session isn't blocked by the
 // "nested session" guard.
 func (t *TmuxSession) newSessionArgs(workDir, program string) []string {
-	args := make([]string, 0, 6+2*len(t.ExtraEnv)+2*len(t.extraEnv)+3)
-	args = append(args, "new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=")
+	flags := make([]string, 0, 2+2*len(t.ExtraEnv)+2*len(t.extraEnv))
+	flags = append(flags, "-e", "CLAUDECODE=")
 	for _, kv := range t.ExtraEnv {
-		args = append(args, "-e", kv)
+		flags = append(flags, "-e", kv)
 	}
 	for _, kv := range t.extraEnv {
-		args = append(args, "-e", kv)
+		flags = append(flags, "-e", kv)
 	}
-	return append(args, "-c", workDir, program)
+	return sizedNewSessionArgs(t.sanitizedName, workDir, flags, program)
 }
 
 // runNewSessionCommand executes cmd (built by newSessionArgs) and interprets
-// the result: a failure is tolerated when a concurrent creator already won
-// (the session now exists) since DoesSessionExist may have timed out and
-// returned false incorrectly rather than the create genuinely failing.
+// the result: a failure is tolerated when the session exists, either because a
+// concurrent creator already won (DoesSessionExist may have timed out earlier)
+// or because only the sizing step after new-session failed; the program runs.
 func (t *TmuxSession) runNewSessionCommand(cmd *exec.Cmd, workDir, program string) error {
-	err := runGatedErr(context.Background(), t.serverSocket, func() error {
-		return t.cmdExec.Run(cmd)
+	stderrOutput, err := runCapturingStderr(cmd, func() error {
+		return runGatedErr(context.Background(), t.serverSocket, func() error {
+			return t.cmdExec.Run(cmd)
+		})
 	})
 	if err != nil {
 		// Session creation failed - but it might be because the session already exists
 		// (DoesSessionExist may have timed out and returned false incorrectly)
 		// Invalidate cache and re-check before returning error
 		t.invalidateExistsCache()
-		if t.DoesSessionExist() {
-			// Session actually exists - the initial check was wrong (likely timeout)
-			// Continue with restore instead of returning error
-			log.Info("tmux session already exists (initial check was incorrect), continuing with restore", "session", t.sanitizedName)
-			return nil
+		if !t.DoesSessionExist() {
+			return fmt.Errorf("failed to create tmux session '%s': %s (%w)", t.sanitizedName, stderrOutput, err)
 		}
-		return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
+		// Session actually exists: continue with restore instead of returning error
+		log.Warn("tmux new-session reported an error but the session exists, continuing with restore", "session", t.sanitizedName, "error", err, "stderr", stderrOutput)
+	} else {
+		log.Info("created new tmux session", "session", t.sanitizedName, "dir", workDir, "program", program)
 	}
 
-	log.Info("created new tmux session", "session", t.sanitizedName, "dir", workDir, "program", program)
 	t.invalidateExistsCache() // Session was created, invalidate cache
 	// new-session started the tmux server; reset this session's circuit breakers
 	// so subsequent DoesSessionExist() calls can verify the session is running.
