@@ -62,7 +62,8 @@ export const roleMenu = style({
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.lg,
   boxShadow: vars.shadow.md,
-  zIndex: zIndex.dropdown,
+  // Above the mobile bottom nav (zIndex.bottomNav), which the menu can open over.
+  zIndex: zIndex.mobilePickerSheet,
   padding: vars.space["1"],
   display: "flex",
   flexDirection: "column",

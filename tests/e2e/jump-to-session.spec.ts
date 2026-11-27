@@ -246,6 +246,21 @@ test.describe("backlog-jump-to-session", () => {
         expect((await trigger.boundingBox())!.y).toBeLessThan(before);
         await expect.poll(distance).toBe(4);
         await expect(menu).toBeInViewport({ ratio: 1 });
+
+        if (viewport.width < 640) {
+          // Low enough that the menu opens over the bottom nav, which it must paint above.
+          // Retried as a unit because the detail header can still reflow and move the trigger.
+          await expect(async () => {
+            await trigger.evaluate((el, targetY) => {
+              const parent = el.parentElement!;
+              parent.style.top = `${parseFloat(parent.style.top) + targetY - el.getBoundingClientRect().top}px`;
+            }, viewport.height - 170);
+            await expect.poll(distance, { timeout: 1000 }).toBe(4);
+            expect((await menu.boundingBox())!.y).toBeGreaterThan(viewport.height - 130);
+            // A trial click runs the hit test: it fails if anything covers the item.
+            await page.getByTestId("jump-to-session-role-item-work").click({ trial: true, timeout: 1000 });
+          }).toPass();
+        }
       } finally {
         if (itemId) await archiveItem(request, itemId);
       }
