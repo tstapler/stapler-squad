@@ -207,6 +207,51 @@ test.describe("backlog-jump-to-session", () => {
     }
   });
 
+  for (const viewport of [
+    { width: 1280, height: 720 },
+    { width: 320, height: 568 },
+  ]) {
+    test(`keeps the role menu on screen and beside its trigger at ${viewport.width}px`, async ({ page, request }) => {
+      const itemTitle = `jump-to-session-menu-${viewport.width}-${Date.now()}`;
+      let itemId: string | undefined;
+
+      try {
+        itemId = await createInProgressItem(request, itemTitle);
+        // The menu never fetches these sessions, so they need not exist.
+        await injectItemSessions(page, itemId, [
+          { id: "e2e-work-session-entity", sessionUuid: "e2e-menu-work", sessionRole: "work" },
+          { id: "e2e-review-session-entity", sessionUuid: "e2e-menu-review", sessionRole: "review" },
+        ]);
+        await page.setViewportSize(viewport);
+        await openDetail(page, itemTitle);
+
+        const trigger = page.getByTestId("jump-to-session-role-menu-trigger");
+        const menu = page.getByTestId("jump-to-session-role-menu");
+        // Trigger on the pane's bottom edge: there is no room for the menu below it.
+        await trigger.evaluate((el) => el.scrollIntoView({ block: "end" }));
+        await trigger.click();
+        await expect(menu).toBeInViewport({ ratio: 1 });
+
+        // Move the trigger with no scroll or resize event, as a header reflow above it does.
+        const distance = async () => {
+          const t = (await trigger.boundingBox())!;
+          const m = (await menu.boundingBox())!;
+          return Math.round(Math.min(Math.abs(m.y - (t.y + t.height)), Math.abs(t.y - (m.y + m.height))));
+        };
+        const before = (await trigger.boundingBox())!.y;
+        await trigger.evaluate((el) => {
+          el.parentElement!.style.position = "relative";
+          el.parentElement!.style.top = "-80px";
+        });
+        expect((await trigger.boundingBox())!.y).toBeLessThan(before);
+        await expect.poll(distance).toBe(4);
+        await expect(menu).toBeInViewport({ ratio: 1 });
+      } finally {
+        if (itemId) await archiveItem(request, itemId);
+      }
+    });
+  }
+
   test("renders a touch-sized jump button at mobile width", async ({ page, request }) => {
     const itemTitle = `jump-to-session-mobile-${Date.now()}`;
     let itemId: string | undefined;

@@ -179,6 +179,58 @@ describe("JumpToSessionPanel", () => {
     await waitFor(() => expect(getSession).toHaveBeenCalledWith("r1"));
   });
 
+  describe("role menu position", () => {
+    // jsdom has no layout, so the trigger, menu and viewport boxes are stubbed.
+    const box = (top: number, left: number, width: number, height: number) =>
+      ({ top, left, width, height, bottom: top + height, right: left + width }) as DOMRect;
+    let trigger: DOMRect;
+
+    beforeEach(() => {
+      jest.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+        return this.getAttribute("role") === "menu" ? box(0, 0, 200, 100) : trigger;
+      });
+      Object.defineProperty(document.documentElement, "clientWidth", { configurable: true, value: 320 });
+      Object.defineProperty(document.documentElement, "clientHeight", { configurable: true, value: 568 });
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      delete (document.documentElement as { clientWidth?: number }).clientWidth;
+      delete (document.documentElement as { clientHeight?: number }).clientHeight;
+    });
+
+    async function openRoleMenu() {
+      const user = userEvent.setup();
+      render(
+        <JumpToSessionPanel
+          linkedSessions={[
+            makeLinkedSession({ sessionId: "w1", role: "work" }),
+            makeLinkedSession({ sessionId: "r1", role: "review" }),
+          ]}
+          backlogItemId="item1"
+          getSession={jest.fn()}
+        />
+      );
+      await user.click(screen.getByTestId("jump-to-session-role-menu-trigger"));
+      return screen.getByTestId("jump-to-session-role-menu");
+    }
+
+    it("JumpToSessionPanel_should_FlipAboveAndStayOnScreen_When_TriggerIsAtBottomRight", async () => {
+      trigger = box(520, 270, 44, 44);
+      const menu = await openRoleMenu();
+      expect(menu).toHaveStyle({ top: "416px", left: "112px" });
+    });
+
+    it("JumpToSessionPanel_should_FollowTheTrigger_When_LayoutShiftsWhileMenuIsOpen", async () => {
+      trigger = box(300, 20, 44, 44);
+      const menu = await openRoleMenu();
+      expect(menu).toHaveStyle({ top: "348px", left: "20px" });
+
+      trigger = box(226, 20, 44, 44);
+      await waitFor(() => expect(menu).toHaveStyle({ top: "274px" }));
+    });
+  });
+
   describe("on mobile", () => {
     beforeEach(() => {
       mockIsMobile = true;
