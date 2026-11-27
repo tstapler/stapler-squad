@@ -51,6 +51,7 @@ test.describe('omnibar find sessions for this PR (phone)', () => {
   test('single-match toast should keep a tappable View all clear of the bottom navigation', async ({ page }) => {
     const omnibar = new OmnibarFindPrPage(page);
     await omnibar.mockLookup([{ sessionId: 'only-one', title: 'only one', source: 'session_pr' }]);
+    await omnibar.silenceLiveAlerts();
     await omnibar.open();
     await omnibar.paste();
     await omnibar.action.tap();

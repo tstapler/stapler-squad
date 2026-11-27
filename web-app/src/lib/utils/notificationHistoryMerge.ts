@@ -1,6 +1,7 @@
 import type { NotificationHistoryRecord } from "@/gen/session/v1/session_pb";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 import { mapNotificationType, mapPriority } from "@/lib/utils/notificationMapping";
+import { notificationDedupKey as dedupKeyOf } from "@/lib/utils/notificationGrouping";
 
 export function recordToHistoryItem(record: NotificationHistoryRecord): NotificationHistoryItem {
   return {
@@ -20,12 +21,10 @@ export function recordToHistoryItem(record: NotificationHistoryRecord): Notifica
   };
 }
 
-const dedupKeyOf = (n: NotificationHistoryItem) => `${n.sessionId ?? ""}:${n.notificationType ?? ""}`;
-
 /**
  * Merges the server's history into the local list. The backend is authoritative:
  * a local item is replaced by its server version (matched by id, or by
- * session+type for stream-added items that still carry a client-generated id) so
+ * dedup key for stream-added items that still carry a client-generated id) so
  * isRead and metadata always reflect server truth. Local-only callbacks (onView,
  * onApprove, ...) are carried over because they are never persisted.
  */

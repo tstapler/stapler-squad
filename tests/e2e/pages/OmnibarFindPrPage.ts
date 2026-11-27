@@ -43,6 +43,14 @@ export class OmnibarFindPrPage {
     });
   }
 
+  /**
+   * Call before `open`. The shared server raises pinned health alerts under load, and a pinned toast takes the phone
+   * deck's only slot (ADR-009), evicting the toast under test. Mocks both event streams so none arrives.
+   */
+  async silenceLiveAlerts(): Promise<void> {
+    await this.page.routeWebSocket(/\/Watch(Sessions|ReviewQueue)$/, () => {});
+  }
+
   async open(): Promise<void> {
     // Suppress the app-wide onboarding walkthrough; its overlay intercepts clicks.
     await this.page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));

@@ -1,4 +1,5 @@
 import { mergeBackendHistory, recordToHistoryItem } from "@/lib/utils/notificationHistoryMerge";
+import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 import type { NotificationHistoryRecord } from "@/gen/session/v1/session_pb";
 
@@ -69,5 +70,20 @@ describe("mergeBackendHistory", () => {
       ],
     );
     expect(merged.map((n) => n.id)).toEqual(["b1", "local"]);
+  });
+});
+
+describe("a session's question next to its generic input-required alert", () => {
+  const question = item({ id: "q", notificationType: "question", message: "Which cache?", metadata: { question_shape: "multi" }, timestamp: 1 });
+  const detector = item({ id: "d", notificationType: "question", message: "Selection prompt with numbered options", timestamp: 2 });
+
+  it("keeps the question card when a newer alert of the same session and type arrives", () => {
+    expect(mergeBackendHistory([detector, question], [detector, question]).map((n) => n.id)).toEqual(["d", "q"]);
+    expect(mergeBackendHistory([], [detector, question]).map((n) => n.id)).toEqual(["d", "q"]);
+    expect(groupNotifications([detector, question]).map((g) => g.notification.id)).toEqual(["d", "q"]);
+  });
+
+  it("still collapses a re-asked identical question", () => {
+    expect(groupNotifications([question, { ...question, id: "q2", timestamp: 3 }]).map((g) => g.notification.id)).toEqual(["q2"]);
   });
 });

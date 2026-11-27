@@ -113,6 +113,11 @@ export class EngagementTracker {
     this.recompute();
   }
 
+  /** Focus that never left a card which is back in Needs you: engages it, arms nothing. */
+  rejoin(id: string): void {
+    this.patch(id, { focus: true });
+  }
+
   focusOut(id: string): void {
     if (this.cards.has(id)) this.patch(id, { focus: false });
   }
