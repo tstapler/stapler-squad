@@ -39,6 +39,47 @@ const ProgramGemini = "gemini"
 const defaultAttachCols = 220
 const defaultAttachRows = 50
 
+// sizedNewSessionArgs builds "new-session ... command ; resize-window ; set-option -u window-size".
+// Version-specific: tmux 3.4 sizes a new window from another attached client (possibly 10x6),
+// ignoring -x/-y, and the reflow on the first wide attach can erase early output. 3.6a honors
+// -x/-y. On 3.4 a program can still read the old size if it starts before the resize reaches it.
+// A failure after new-session leaves the session running command (see isDuplicateSession).
+func sizedNewSessionArgs(session, workDir string, flags []string, command ...string) []string {
+	cols, rows := strconv.Itoa(defaultAttachCols), strconv.Itoa(defaultAttachRows)
+	args := append([]string{"new-session", "-d", "-s", session, "-x", cols, "-y", rows}, flags...)
+	args = append(append(args, "-c", workDir), command...)
+	return append(args,
+		";", "resize-window", "-t", session, "-x", cols, "-y", rows,
+		";", "set-option", "-w", "-t", session, "-u", "window-size")
+}
+
+// sessionKnownAbsent runs a has-session command and reports true only when tmux positively says
+// there is no such session. A timeout or any other failure is unknown, never "absent".
+func sessionKnownAbsent(e executor.Executor, hasSession *exec.Cmd) bool {
+	out, err := e.CombinedOutput(hasSession)
+	return err != nil && (strings.Contains(string(out), "can't find session") || serverNotRunning(out))
+}
+
+// isDuplicateSession reports that new-session refused the name, so the session is not ours to kill.
+func isDuplicateSession(stderr string) bool {
+	return strings.Contains(stderr, "duplicate session")
+}
+
+// runCapturingStderr runs cmd with stderr in a scratch file, not a pipe: "new-session -d" forks a
+// server that inherits the fds, so a buffer capture would wait forever for EOF.
+func runCapturingStderr(cmd *exec.Cmd, run func() error) (string, error) {
+	file, tmpErr := os.CreateTemp("", "tmux-new-session-stderr-*")
+	if tmpErr != nil {
+		return "", run()
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	cmd.Stderr = file
+	err := run()
+	data, _ := os.ReadFile(file.Name())
+	return strings.TrimSpace(string(data)), err
+}
+
 // TmuxSession represents a managed tmux session
 type TmuxSession struct {
 	// Initialized by NewTmuxSession
@@ -371,10 +412,17 @@ func ToStaplerSquadTmuxName(str string) string {
 
 func toStaplerSquadTmuxNameWithPrefix(str string, prefix string) string {
 	str = whiteSpaceRegex.ReplaceAllString(str, "")
-	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
-	str = strings.ReplaceAll(str, ":", "_") // colons are special in tmux (session:window.pane)
+	str = SafeSessionName(str) // one "_" each, before the next pass collapses runs
 	str = nonSafeTmuxNameChar.ReplaceAllString(str, "_")
-	return fmt.Sprintf("%s%s", prefix, str)
+	return SafeSessionName(prefix) + str
+}
+
+var tmuxTargetSyntax = strings.NewReplacer(".", "_", ":", "_")
+
+// SafeSessionName replaces "." and ":", which tmux either renames (3.4, 3.6a) or keeps but
+// cannot target (3.8), so the name asked for is the name later commands can address.
+func SafeSessionName(name string) string {
+	return tmuxTargetSyntax.Replace(name)
 }
 
 // SessionName is a sanitized tmux session identifier — the only string form that is

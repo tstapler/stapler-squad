@@ -242,8 +242,8 @@ test.describe("artifacts-view", () => {
       unscannedSessionCount: 0,
     }));
     await artifacts.goto("?pr=acme/app%2312");
+    await expect(artifacts.rows).toHaveCount(2); // rows render only after the mocked find answered
     expect(artifacts.requests.find[0]).toMatchObject({ pr: { owner: "acme", repo: "app", number: 12 } });
-    await expect(artifacts.rows).toHaveCount(2);
     await expect(artifacts.rows.nth(0)).toContainText("Tracked");
     await expect(artifacts.rows.nth(1)).toContainText("Seen in transcript");
   });

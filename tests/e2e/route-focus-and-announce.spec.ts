@@ -104,10 +104,11 @@ test.describe('route focus and announcements', () => {
     const shell = new AppShellPage(page);
     await shell.goto('/logs');
     await expect(shell.drawerNav).toBeVisible();
-    await shell.navLink(/history/i).click({ force: true });
-    await expect(page).toHaveTitle(HISTORY_TITLE);
-
     await watchAnnouncer(page);
+    await shell.navLink(/history/i).click({ force: true });
+    // The title changes before the announcer has set and cleared; drain that before recording Back.
+    await expect.poll(() => announcerLog(page)).toEqual([HISTORY_TITLE, '']);
+    await page.evaluate(() => ((window as unknown as { __ann: string[] }).__ann.length = 0));
     await page.goBack();
     await expect(page).toHaveTitle(LOGS_TITLE);
     await expect.poll(() => announcerLog(page)).toEqual([LOGS_TITLE, '']);

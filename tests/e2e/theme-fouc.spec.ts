@@ -17,7 +17,7 @@ const FONT_VARS = ['--font-jetbrains-mono', '--font-rajdhani', '--font-cinzel', 
 interface FirstPaintFacts {
   classes: string[];
   style: string;
-  /** Resolved theme tokens (every custom property declared in the stylesheets), joined. */
+  /** Resolved theme tokens (custom properties declared by the class rules that match <html>), joined. */
   tokens: string;
 }
 
@@ -36,7 +36,11 @@ async function loadWithStorage(page: Page, storage: Record<string, string>): Pro
         for (const sheet of Array.from(document.styleSheets)) {
           try {
             for (const rule of Array.from(sheet.cssRules)) {
-              for (const name of Array.from((rule as CSSStyleRule).style ?? [])) if (name.startsWith('--')) names.add(name);
+              // Theme class rules only: `:root` also declares layout variables (--bottom-nav-height) that
+              // React overwrites after mount, which may or may not have happened by this frame.
+              const { selectorText, style: declared } = rule as CSSStyleRule;
+              if (!selectorText?.startsWith('.') || !html.matches(selectorText)) continue;
+              for (const name of Array.from(declared)) if (name.startsWith('--')) names.add(name);
             }
           } catch {
             // cross-origin sheet
@@ -73,6 +77,7 @@ test.describe('theme FOUC prevention', () => {
     }
     // <body>'s own background is theme-independent (globals.css --background), so the
     // first-frame check reads the theme tokens instead: a late theme would still show clean's.
+    expect(clean.tokens.replaceAll('|', ''), 'theme tokens were read').not.toBe('');
     for (const theme of DARK_THEMES) {
       expect(byTheme.get(theme)!.tokens, `${theme} first-frame theme tokens`).not.toBe(clean.tokens);
     }
@@ -87,6 +92,7 @@ test.describe('theme FOUC prevention', () => {
     };
     const grimdark = await contextFor('grimdark');
     const legacy = await contextFor('wh40k');
+    expect(grimdark.tokens.replaceAll('|', ''), 'theme tokens were read').not.toBe('');
     expect(legacy.classes.join(' ')).toBe(grimdark.classes.join(' '));
     expect(legacy.tokens).toBe(grimdark.tokens);
   });
