@@ -1,4 +1,5 @@
-package services
+// Package contentsearch greps a session worktree for the SearchContent stream.
+package contentsearch
 
 import (
 	"context"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"google.golang.org/protobuf/proto"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
@@ -91,25 +91,49 @@ func (r *SearchRegistry) begin(parent context.Context, key SearchKey, host strin
 // SearchHandler serves SearchContent: validation, stream and walk admission, then the
 // ContentSearcher. It holds policy only; matching lives in the searcher.
 type SearchHandler struct {
-	ops       *FileOps
+	ports     Ports
 	searcher  ContentSearcher
 	registry  SearchRegistry
 	gate      *walkGate
-	limiter   *ipLimiter
+	limiter   *IPLimiter
 	viewerV2  func(context.Context) bool
 	queueWait time.Duration
 }
 
-func newSearchHandler(ops *FileOps, viewerV2 func(context.Context) bool) *SearchHandler {
+// Ports are what a search needs from its host.
+type Ports struct {
+	Workspace fsops.WorkspaceProvider
+	Backend   fsops.FileBackend
+	// Telemetry is called per search: the host may install its sink after construction. Nil records nothing.
+	Telemetry func() fsops.FilesTelemetry
+	// ViewerV2 gates the search and is required; SetViewerV2 replaces it.
+	ViewerV2 func(context.Context) bool
+}
+
+// NewSearchHandler builds the production handler with the process-wide walk and stream caps.
+// Workspace and Backend are not checked, so a nil one builds but panics on the first search the viewer flag lets through.
+func NewSearchHandler(ports Ports) *SearchHandler {
+	if ports.ViewerV2 == nil {
+		panic("contentsearch: NewSearchHandler requires Ports.ViewerV2")
+	}
+	if ports.Telemetry == nil {
+		ports.Telemetry = func() fsops.FilesTelemetry { return fsops.NoopFilesTelemetry{} }
+	}
 	return &SearchHandler{
-		ops:       ops,
+		ports:     ports,
 		searcher:  NewWalkSearcher(),
 		gate:      newWalkGate(maxConcurrentWalks),
-		limiter:   newIPLimiter(ipCaps{PerHost: maxSearchStreamsPerOrigin, Total: maxSearchStreamsTotal}),
-		viewerV2:  viewerV2,
+		limiter:   NewIPLimiter(IPCaps{PerHost: maxSearchStreamsPerOrigin, Total: maxSearchStreamsTotal}),
+		viewerV2:  ports.ViewerV2,
 		queueWait: maxQueueWait,
 	}
 }
+
+// SetViewerV2 replaces the viewer flag read; call at startup, before serving.
+func (h *SearchHandler) SetViewerV2(viewerV2 func(context.Context) bool) { h.viewerV2 = viewerV2 }
+
+// ViewerV2Enabled is the flag read the next search would use.
+func (h *SearchHandler) ViewerV2Enabled(ctx context.Context) bool { return h.viewerV2(ctx) }
 
 type sendFunc func(*sessionv1.SearchContentResponse) error
 
@@ -144,7 +168,7 @@ func (h *SearchHandler) Handle(ctx context.Context, msg *sessionv1.SearchContent
 		return err
 	}
 	key := SearchKey{SessionID: msg.GetSessionId(), ClientID: msg.GetClientId()}
-	host := remoteHost(remoteAddr)
+	host := RemoteHost(remoteAddr)
 	// Slot first, then registration; release runs before end so a superseder that waits on end finds the slot free.
 	release, end := func() {}, func() {}
 	defer func() { release(); end() }()
@@ -171,7 +195,7 @@ func (h *SearchHandler) Handle(ctx context.Context, msg *sessionv1.SearchContent
 		return busyError(refused)
 	}
 
-	root, closer, err := h.ops.openSearchRoot(msg.GetSessionId())
+	root, closer, err := h.openSearchRoot(msg.GetSessionId())
 	if err != nil {
 		return err
 	}
@@ -290,8 +314,8 @@ func queuedMessage(ahead int) *sessionv1.SearchContentResponse {
 // openSearchRoot resolves the session's worktree for a search. Unlike reads it never
 // accepts the repo-root fallback: a paused or archived session whose worktree is gone
 // is refused so the user is not shown another checkout's contents.
-func (o *FileOps) openSearchRoot(sessionID string) (fs.FS, io.Closer, error) {
-	ws, dir, err := fsops.WorkspaceDirFor(o.policy.Workspace, fsops.FileRef{SessionID: sessionID}, fsops.AccessRead)
+func (h *SearchHandler) openSearchRoot(sessionID string) (fs.FS, io.Closer, error) {
+	ws, dir, err := fsops.WorkspaceDirFor(h.ports.Workspace, fsops.FileRef{SessionID: sessionID}, fsops.AccessRead)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -299,7 +323,7 @@ func (o *FileOps) openSearchRoot(sessionID string) (fs.FS, io.Closer, error) {
 		return nil, nil, readOnlyError(connect.CodeFailedPrecondition, "WorktreeMissing: session worktree is not on disk",
 			sessionv1.ReadOnlyReason_READ_ONLY_REASON_WORKTREE_MISSING)
 	}
-	root, err := o.backend.OpenRoot(dir)
+	root, err := h.ports.Backend.OpenRoot(dir)
 	if err != nil {
 		return nil, nil, fsops.OpenRootError(err)
 	}
@@ -329,19 +353,12 @@ func searchStopError(parent, sctx context.Context, call *searchCall, err error) 
 }
 
 func readOnlyError(code connect.Code, msg string, reason sessionv1.ReadOnlyReason) *connect.Error {
-	return withDetail(connect.NewError(code, errors.New(msg)), &sessionv1.ReadOnlyReasonDetail{Reason: reason})
+	return fsops.WithDetail(connect.NewError(code, errors.New(msg)), &sessionv1.ReadOnlyReasonDetail{Reason: reason})
 }
 
 func busyError(reason SearchBusyReason) *connect.Error {
-	return withDetail(connect.NewError(connect.CodeResourceExhausted, errors.New("too many searches are running")),
+	return fsops.WithDetail(connect.NewError(connect.CodeResourceExhausted, errors.New("too many searches are running")),
 		&sessionv1.SearchBusyDetail{Reason: string(reason)})
-}
-
-func withDetail(ce *connect.Error, d proto.Message) *connect.Error {
-	if detail, err := connect.NewErrorDetail(d); err == nil {
-		ce.AddDetail(detail)
-	}
-	return ce
 }
 
 // finish records the one slog line, the metrics and the telemetry events. It logs
@@ -358,7 +375,7 @@ func (h *SearchHandler) finish(ctx context.Context, call *searchCall, err error)
 	fsops.RecordSearchMetrics(ctx, outcome, total, call.firstResult)
 
 	scale := fsops.BucketScale(call.stats.FilesScanned)
-	tel := h.ops.policy.Telemetry
+	tel := h.ports.Telemetry()
 	tel.RecordSearch(ctx, call.sessionID, fsops.SearchOutcomeEvent{
 		Outcome: outcome, Results: fsops.BucketCount(call.results), Scale: scale, Queued: call.queued,
 		Backend: fsops.SearchBackendWalker, Large: call.large, Duration: total,

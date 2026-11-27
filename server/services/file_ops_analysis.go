@@ -79,7 +79,7 @@ func (o *FileOps) fillAnalysis(ctx context.Context, resp *sessionv1.StatFileResp
 	}
 	state, a := o.startAnalysis(fr)
 	resp.Analysis = state
-	if wantSHA && state == analysisStateReady && fr.Size <= rangeHashCapBytes {
+	if wantSHA && state == analysisStateReady && fr.Size <= fsops.RangeHashCapBytes {
 		k := fr.Src.Key
 		resp.VersionToken = fsops.FileVersionToken{Size: k.Size, MtimeNs: k.MtimeNs, SHA256: a.SHA256}.String()
 	}
