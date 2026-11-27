@@ -69,7 +69,9 @@ test.describe("multi-pr-session", () => {
     await setMultiPrFlag(page, true);
   });
 
-  test.afterEach(async () => {
+  test.afterEach(async ({ page }) => {
+    // Close first: a terminal handshake still in flight would otherwise find its session deleted and log an error.
+    await page.close();
     for (const id of created.splice(0)) await client.deleteSession(id, true).catch(() => undefined);
     expect(consoleErrors, "no console or page errors").toEqual([]);
   });

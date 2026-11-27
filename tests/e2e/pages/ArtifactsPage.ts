@@ -120,6 +120,23 @@ export class ArtifactsPage {
     await this.page.route(`${RPC}/ListSessionArtifacts`, () => new Promise<void>(() => undefined));
   }
 
+  /**
+   * Call before goto. Returns a reader of the test ids of every role=status region that has ever shown `text`,
+   * one entry per element.
+   */
+  async recordStatusRegions(text: string): Promise<() => Promise<string[]>> {
+    await this.page.addInitScript((wanted) => {
+      const said = new Map<Element, string>();
+      (window as unknown as { __statusSaid: Map<Element, string> }).__statusSaid = said;
+      new MutationObserver(() => {
+        for (const el of document.querySelectorAll("[role=status]")) {
+          if (el.textContent?.includes(wanted)) said.set(el, el.getAttribute("data-testid") ?? el.outerHTML);
+        }
+      }).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+    }, text);
+    return () => this.page.evaluate(() => [...(window as unknown as { __statusSaid: Map<Element, string> }).__statusSaid.values()]);
+  }
+
   private async answer(
     route: import("@playwright/test").Route,
     log: Record<string, unknown>[],

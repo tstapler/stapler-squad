@@ -55,7 +55,9 @@ test.describe("artifacts-view", () => {
     artifacts = new ArtifactsPage(page);
   });
 
-  test.afterEach(async () => {
+  test.afterEach(async ({ page }) => {
+    // Close first: a terminal handshake still in flight would otherwise find its session deleted and log an error.
+    await page.close();
     for (const id of created.splice(0)) await client.deleteSession(id, true).catch(() => undefined);
     expect(consoleErrors, "no console or page errors").toEqual([]);
   });
@@ -198,11 +200,12 @@ test.describe("artifacts-view", () => {
 
   test("result count and loading should be announced via one role=status region", async ({ page }) => {
     await artifacts.mockBrowse((req) => browseResponse(serverFilter(req)));
+    // The announcer clears each message after 1s, so record what the regions say instead of polling for it.
+    const regionsThatSaid = await artifacts.recordStatusRegions("Showing 4 of 4");
     await artifacts.goto();
     await expect(artifacts.rows).toHaveCount(4);
     await expect(artifacts.root.locator("[role=status]")).toHaveCount(0);
-    await expect(page.getByTestId("announcer-polite")).toHaveText(/Showing 4 of 4/);
-    await expect(page.locator("[role=status]").filter({ hasText: "Showing 4 of 4" })).toHaveCount(1);
+    await expect.poll(regionsThatSaid).toEqual(["announcer-polite"]);
   });
 
   test("unscanned sessions should show the incomplete-results notice", async () => {
