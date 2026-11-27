@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,11 +33,22 @@ var updateAutonomyGolden = flag.Bool("update-autonomy-golden", false, "rewrite t
 
 type autonomyRespawner struct {
 	called chan string
+	opDone chan struct{} // closed once the op under test has returned
 	err    error
 }
 
 func (r *autonomyRespawner) AutoRespawnAutonomousWork(_ context.Context, itemID string) error {
 	r.called <- itemID
+	if r.err == nil {
+		return nil
+	}
+	// Production leaves the failure notice (this goroutine) unordered against the
+	// stop notice (the caller's); holding the error fixes the recorded order.
+	// Bounded so that a synchronous dispatch fails the golden instead of hanging.
+	select {
+	case <-r.opDone:
+	case <-time.After(10 * time.Second):
+	}
 	return r.err
 }
 
@@ -285,7 +297,9 @@ func runAutonomyScenario(t *testing.T, sc autonomyScenario, idx int) string {
 		require.NoError(t, err)
 	}
 
-	respawner := &autonomyRespawner{called: make(chan string, 4), err: sc.respawnErr}
+	respawner := &autonomyRespawner{called: make(chan string, 4), opDone: make(chan struct{}), err: sc.respawnErr}
+	releaseRespawner := sync.OnceFunc(func() { close(respawner.opDone) })
+	defer releaseRespawner()
 	if !sc.noRespawn {
 		svc.SetAutonomousStuckRespawner(respawner)
 	}
@@ -325,6 +339,7 @@ func runAutonomyScenario(t *testing.T, sc autonomyScenario, idx int) string {
 	if sc.twice {
 		act()
 	}
+	releaseRespawner()
 
 	if itemID != "" {
 		sessions, err := storage.ListItemSessions(ctx, itemID)
