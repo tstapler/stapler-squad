@@ -119,7 +119,8 @@ export interface SessionSeed {
 
 /**
  * Injects server-computed fields into the given sessions in ListSessions/GetSession (one route for all, since
- * Playwright runs only the latest-registered matching route). Blocks WatchSessions so no real event overwrites them.
+ * Playwright runs only the latest-registered matching route). The WatchSessions abort has no effect: that stream is a
+ * WebSocket, which page.route does not intercept, so real session events still reach the page.
  */
 export async function seedSessionFields(page: Page, seeds: SessionSeed | SessionSeed[]): Promise<void> {
   const list = Array.isArray(seeds) ? seeds : [seeds];

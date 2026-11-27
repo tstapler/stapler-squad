@@ -5,6 +5,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { AppShellPage } from './pages/AppShellPage';
+import { recordTexts } from './pages/recordTexts';
 
 const HISTORY_TITLE = 'History - Stapler Squad';
 const SETTINGS_TITLE = 'Settings - Stapler Squad';
@@ -20,14 +21,15 @@ test.describe('route announcements and nav state', () => {
     const shell = new AppShellPage(page);
     await shell.goto('/review-queue');
     await expect(shell.drawerNav).toBeVisible();
+    // The RouteAnnouncer (role=status, ADR-001) clears its text after ~1s, so address it by
+    // test id and record what it says.
+    const announcer = page.getByTestId('route-announcer');
+    const announced = await recordTexts(announcer);
 
     await shell.navLink(/history/i).click({ force: true });
     await expect(page).toHaveTitle(HISTORY_TITLE);
 
-    // The RouteAnnouncer (role=status, ADR-001) clears its text after ~1s, so address it by
-    // test id rather than by the text it carries.
-    const announcer = page.getByTestId('route-announcer');
-    await expect(announcer).toHaveText(HISTORY_TITLE);
+    await expect.poll(announced).toContain(HISTORY_TITLE);
     await expect(announcer).toHaveAttribute('role', 'status');
   });
 
