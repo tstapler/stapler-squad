@@ -2,6 +2,7 @@ package instance
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -36,6 +37,18 @@ func ResolvePRRepo(prURL, repoPath string) (github.RepoRef, error) {
 	return github.GetOwnerRepoFromRemote(repoPath, EnterpriseHostsForRemoteParsing())
 }
 
+// originNamesRepo matches the owner/repo tail of an origin the remote parser
+// rejects (SSH host alias, embedded credentials, ssh.github.com).
+func originNamesRepo(repoPath string, ref github.RepoRef) bool {
+	url, err := readOriginRemoteURL(repoPath)
+	if err != nil {
+		return false
+	}
+	url = strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(url, "/"), ".git"))
+	tail := strings.ToLower(ref.String())
+	return strings.HasSuffix(url, "/"+tail) || strings.HasSuffix(url, ":"+tail)
+}
+
 // CrossRepoPR returns the PR's repo when it cannot be shown to be repoPath's
 // origin, including an origin that does not parse. An unparseable PR URL or a
 // repo with no readable origin reports false.
@@ -45,7 +58,8 @@ func CrossRepoPR(prURL, repoPath string) (github.RepoRef, bool) {
 		return github.RepoRef{}, false
 	}
 	local, err := github.GetOwnerRepoFromRemote(repoPath, EnterpriseHostsForRemoteParsing())
-	if err != nil || (local.IsValid() && local.PRKey(0) == pr.PRKey(0)) {
+	switch {
+	case err != nil, local.IsValid() && local.PRKey(0) == pr.PRKey(0), !local.IsValid() && originNamesRepo(repoPath, pr):
 		return github.RepoRef{}, false
 	}
 	return pr, true

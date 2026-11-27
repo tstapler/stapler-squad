@@ -205,7 +205,7 @@ func TestReconcilePRPending_CrossRepoUnverifiedStartsNoFixSession(t *testing.T) 
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
-	newCrossRepoItem(t, storage, crossRepoPRURL)
+	item, _ := newCrossRepoItem(t, storage, crossRepoPRURL)
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: &git.PRStatus{CIFailing: true, FeedbackText: "do evil"}})
@@ -219,6 +219,10 @@ func TestReconcilePRPending_CrossRepoUnverifiedStartsNoFixSession(t *testing.T) 
 
 	assert.False(t, spawner.spawnCalled)
 	assert.Equal(t, []string{"Cross-repo PR needs you"}, notifier.Titles())
+	rows, err := storage.Repo.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	_, held := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonPRNeedsFix)
+	assert.True(t, held, "the hold must be visible in the stuck report")
 }
 
 // The flaky-rerun client reads the workspace remote, so it must not run here.
@@ -263,12 +267,14 @@ func TestPushAndCreatePR_KeepsCrossRepoPR(t *testing.T) {
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
-	listener.pushAndCreatePR(ctx, item, sessions[0])
+	listener.SetOneShotShipRunner(nil)
+	listener.shipViaAgentOrFallback(ctx, item, sessions[0])
 
 	got, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(domain.BacklogStatusPRPending), got.Status)
 	assert.Equal(t, crossRepoPRURL, got.PrURL)
+	assert.False(t, creator.pushCalled)
 	assert.False(t, creator.createCalled)
 	assert.False(t, creator.copilotReviewCalled)
 	assert.Equal(t, []string{"Auto-merge not enabled"}, notifier.Titles())
@@ -279,10 +285,16 @@ func TestCrossRepoPR_UnparseableOriginCountsAsCrossRepo(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	_, repoPath := newCrossRepoItem(t, storage, crossRepoPRURL)
-	runGitTestCmd(t, repoPath, "remote", "set-url", "origin", "git@github-work:tstapler/stapler-squad.git")
-
-	_, cross := instance.CrossRepoPR(crossRepoPRURL, repoPath)
-	assert.True(t, cross)
+	for origin, want := range map[string]bool{
+		"git@github-work:tstapler/stelekit.git":           true,
+		"git@github-work:tstapler/stapler-squad.git":      false,
+		"https://x:tok@github.com/tstapler/Stapler-Squad": false,
+		"ssh://git@ssh.github.com:443/tstapler/stelekit":  true,
+	} {
+		runGitTestCmd(t, repoPath, "remote", "set-url", "origin", origin)
+		_, cross := instance.CrossRepoPR(crossRepoPRURL, repoPath)
+		assert.Equal(t, want, cross, origin)
+	}
 	_, ok := instance.PRURLRepo("https://github.com/git@localhost:o/r/pull/1")
 	assert.False(t, ok, "gh would read that owner as another host")
 }
