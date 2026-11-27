@@ -2007,7 +2007,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 // investigation ruled out for a naive {in_progress} anchor — see below), so
 // review has to stay IN the anchor, not outside it, for the same reason
 // bouncing already treats it that way. Added here because resolveAutonomousStuck's
-// point-of-success call (server/services/autonomous_orchestration_service.go) and
+// point-of-success call (server/services/autonomysvc/autonomous_orchestration_service.go) and
 // the blanket terminal rule above only cover two of the row's actual close paths —
 // confirmed live on item a0fb3466: its autonomous_stuck row stayed open after the
 // item cycled all the way back to "ready" (via its abandoned_review resolving,

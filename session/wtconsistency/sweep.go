@@ -449,7 +449,7 @@ func buildRepairMessage(finding WorktreeConsistencyFinding) (title, message stri
 // lookupBacklogLinkage returns the BacklogItemID linked to sessionID (empty if none) and
 // the linked item's data (nil if none, or if the lookup itself failed — logged, not
 // fatal). Mirrors the 3-step pattern used elsewhere in this codebase (e.g.
-// server/services/autonomous_orchestration_service.go, session/backlog_lifecycle_pr.go's
+// server/services/autonomysvc/autonomous_orchestration_service.go, session/backlog_lifecycle_pr.go's
 // RecordPRCreatedOutOfBand): GetItemSessionBySessionUUID, then GetBacklogItem.
 func lookupBacklogLinkage(ctx context.Context, repo *session.EntRepository, sessionID string) (itemID string, item *backlogdto.BacklogItemData) {
 	is, err := repo.GetItemSessionBySessionUUID(ctx, sessionID)

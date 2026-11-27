@@ -13,6 +13,8 @@ import (
 // filesViewerTestFiles is the fixed list of files-viewer test files the hygiene
 // guard scans (BUG-067: they must not make the server/services -race suite slower).
 // Every entry must exist, so a moved file cannot silently drop out of the scan.
+// file_write_workspace_wiring_test.go is exempt: pinning the hub's composition needs a real
+// SessionService, hence svctest.CreateTestStorage.
 var filesViewerTestFiles = []string{
 	"contentsearch/content_search_test.go",
 	"contentsearch/content_search_handler_test.go",
@@ -26,6 +28,9 @@ var filesViewerTestFiles = []string{
 	"fileops/file_write_test.go",
 	"fileops/file_write_corpus_test.go",
 	"fileops/files_telemetry_test.go",
+	"fileops/flags_test.go",
+	"fileops/helpers_test.go",
+	"fileops/range_limiter_wire_test.go",
 	"os_root_semantics_test.go",
 	"fsops/file_atomic_test.go",
 	"fsops/file_codec_test.go",
@@ -38,7 +43,7 @@ var filesViewerTestFiles = []string{
 
 var (
 	forbiddenFilesTestCalls = []string{
-		"createTestStorage(", "tmux.NewTmux", "NewTmuxSession(", "NewSessionDriver(", `exec.Command("tmux"`,
+		"createTestStorage(", "CreateTestStorage(", "tmux.NewTmux", "NewTmuxSession(", "NewSessionDriver(", `exec.Command("tmux"`,
 	}
 	largeFixtureCall = regexp.MustCompile(`genFixtureTree\([^,]+,\s*(50000|50_000)\b`)
 	topLevelFunc     = regexp.MustCompile(`^func (\w+)`)
@@ -78,6 +83,7 @@ func TestFilesViewerGoTests_ShouldNotCallCreateTestStorageOrStartTmux_And_ShortS
 	t.Run("detects violations", func(t *testing.T) {
 		bad := "package services\nfunc TestX(t *testing.T) {\n\tcreateTestStorage(t)\n\tgenFixtureTree(t, 50000)\n}\n"
 		require.Len(t, scanFilesTestHygiene("bad_test.go", bad), 2)
+		require.Len(t, scanFilesTestHygiene("svc_test.go", "\tsvctest.CreateTestStorage(t)\n"), 1)
 		ok := "package services\nfunc TestX(t *testing.T) {\n\tif testing.Short() {\n\t\tt.Skip()\n\t}\n\tgenFixtureTree(t, 50000)\n}\nfunc BenchmarkY(b *testing.B) {\n\tgenFixtureTree(b, 50000)\n}\n"
 		require.Empty(t, scanFilesTestHygiene("ok_test.go", ok))
 	})
