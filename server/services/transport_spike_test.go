@@ -46,6 +46,11 @@ func goSourceText(t *testing.T, size int) string {
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
 	sort.Strings(files)
+	// The leaf packages follow: the hub alone is under 1 MiB since the leaf extractions.
+	leafFiles, err := filepath.Glob("*/*.go")
+	require.NoError(t, err)
+	sort.Strings(leafFiles)
+	files = append(files, leafFiles...)
 	var b strings.Builder
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
