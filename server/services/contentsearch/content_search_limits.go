@@ -1,4 +1,4 @@
-package services
+package contentsearch
 
 import (
 	"net"
@@ -24,10 +24,10 @@ const (
 	busyQueueTimeout SearchBusyReason = "queue_timeout"
 )
 
-// ipLimiter counts open streams per remote host and in total. It is the per-IP
+// IPLimiter counts open streams per remote host and in total. It is the per-IP
 // accounting seam the range limiter (Task 1.6.2c) will share; the key function is
-// remoteHost, the one place to change if a trusted proxy is ever introduced.
-type ipLimiter struct {
+// RemoteHost, the one place to change if a trusted proxy is ever introduced.
+type IPLimiter struct {
 	mu       sync.Mutex
 	perHost  map[string]int
 	total    int
@@ -35,16 +35,16 @@ type ipLimiter struct {
 	totalCap int
 }
 
-// ipCaps are the stream caps of an ipLimiter.
-type ipCaps struct{ PerHost, Total int }
+// IPCaps are the stream caps of an IPLimiter.
+type IPCaps struct{ PerHost, Total int }
 
-func newIPLimiter(c ipCaps) *ipLimiter {
-	return &ipLimiter{perHost: map[string]int{}, hostCap: c.PerHost, totalCap: c.Total}
+func NewIPLimiter(c IPCaps) *IPLimiter {
+	return &IPLimiter{perHost: map[string]int{}, hostCap: c.PerHost, totalCap: c.Total}
 }
 
-// remoteHost keys on the connection's peer address only: forwarded headers are
+// RemoteHost keys on the connection's peer address only: forwarded headers are
 // ignored because the unauthenticated local listener cannot trust them.
-func remoteHost(remoteAddr string) string {
+func RemoteHost(remoteAddr string) string {
 	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
 		return host
 	}
@@ -53,8 +53,8 @@ func remoteHost(remoteAddr string) string {
 
 // Acquire takes a slot for remoteAddr or says which cap refused it. The returned
 // release is idempotent.
-func (l *ipLimiter) Acquire(remoteAddr string) (release func(), refused SearchBusyReason) {
-	host := remoteHost(remoteAddr)
+func (l *IPLimiter) Acquire(remoteAddr string) (release func(), refused SearchBusyReason) {
+	host := RemoteHost(remoteAddr)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	switch {
@@ -76,46 +76,6 @@ func (l *ipLimiter) Acquire(remoteAddr string) (release func(), refused SearchBu
 			}
 		})
 	}, ""
-}
-
-// Range read caps (Task 1.6.2c, ADR-036): 4 concurrent range calls per client, 8 per
-// remote IP. "Client" is the (remote host, session) pair, the finest identity the
-// unauthenticated local listener can see; the IP key is the shared remoteHost seam.
-const (
-	maxRangesPerIP = 8
-	rangeNoTotal   = 1 << 30
-)
-
-// RangeBusyReason says which cap refused a range call; it travels in RangeBusyDetail.
-type RangeBusyReason string
-
-const (
-	rangeBusyPerClient RangeBusyReason = "per_client"
-	rangeBusyPerIP     RangeBusyReason = "per_ip"
-)
-
-// rangeLimiter counts in-flight ReadFileRange calls per remote IP and per client.
-type rangeLimiter struct{ perIP, perClient *ipLimiter }
-
-func newRangeLimiter() *rangeLimiter {
-	return &rangeLimiter{
-		perIP:     newIPLimiter(ipCaps{PerHost: maxRangesPerIP, Total: rangeNoTotal}),
-		perClient: newIPLimiter(ipCaps{PerHost: maxRangesPerClient, Total: rangeNoTotal}),
-	}
-}
-
-// Acquire takes a slot on both counters or reports which one refused.
-func (l *rangeLimiter) Acquire(remoteAddr, sessionID string) (release func(), refused RangeBusyReason) {
-	releaseIP, busy := l.perIP.Acquire(remoteAddr)
-	if busy != "" {
-		return nil, rangeBusyPerIP
-	}
-	releaseClient, busy := l.perClient.Acquire(remoteHost(remoteAddr) + "|" + sessionID)
-	if busy != "" {
-		releaseIP()
-		return nil, rangeBusyPerClient
-	}
-	return func() { releaseClient(); releaseIP() }, ""
 }
 
 // walkGate bounds concurrent walks process-wide with a FIFO queue. It replaces a plain

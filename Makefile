@@ -1266,10 +1266,10 @@ FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRe
 .PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
 
 files-viewer-go-tests: ensure-tools proto-gen ## Iterate on the files-viewer Go tests only, with -race (fixed -run prefix list)
-	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/fsops
+	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/contentsearch ./server/services/fsops
 
 files-viewer-perf: ensure-tools proto-gen ## Files-viewer benchmarks on full 50k-file fixtures (non-race, run in the background)
-	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services
+	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services ./server/services/contentsearch
 
 # Probe for Task 0.2.4f: does revive(file-length-limit) report an edit to server/server.go?
 files-viewer-server-length-probe: ensure-tools
