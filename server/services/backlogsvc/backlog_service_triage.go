@@ -24,7 +24,10 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
@@ -198,7 +201,7 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(true, true), // urgent, important — hit the rework cap; left for manual review
+		notify.DerivePriority(true, true), // urgent, important — hit the rework cap; left for manual review
 		"Auto-rework cap reached",
 		fmt.Sprintf("%s — hit the %d-iteration rework cap %s. Left for manual review.", itemTitle, reworkCap, capContext),
 		map[string]string{"item_id": itemID},
@@ -233,7 +236,7 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(true, true), // urgent, important
+		notify.DerivePriority(true, true), // urgent, important
 		"Auto-rework stopped — repeated failure",
 		fmt.Sprintf("%s — the last %d attempts (including one escalated retry) failed the same way, so auto-rework stopped instead of retrying again. Left for manual review.", itemTitle, attemptCount),
 		map[string]string{"item_id": itemID},
@@ -342,7 +345,7 @@ func (s *BacklogService) notifySpawnAndRollbackFailed(ctx context.Context, itemI
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-		services.DerivePriority(true, true), // urgent, important — stranded in_progress with no active session, needs manual action
+		notify.DerivePriority(true, true), // urgent, important — stranded in_progress with no active session, needs manual action
 		"Rework failed to start",
 		fmt.Sprintf("%s — a rework session failed to spawn and the automatic rollback also failed. The item is stranded in_progress with no active session; needs manual action.", itemTitle),
 		map[string]string{"item_id": itemID},
@@ -372,7 +375,7 @@ func (s *BacklogService) notifyTransitionFailed(itemID, itemTitle, failureContex
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-		services.DerivePriority(true, true), // urgent, important — a silent status/reality mismatch is a genuine correctness bug
+		notify.DerivePriority(true, true), // urgent, important — a silent status/reality mismatch is a genuine correctness bug
 		"Status update failed after work completed",
 		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
 		map[string]string{"item_id": itemID},
@@ -394,7 +397,7 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE),
-		services.DerivePriority(false, false), // urgent, important — human-initiated success path, purely informational
+		notify.DerivePriority(false, false), // urgent, important — human-initiated success path, purely informational
 		"Manual override applied",
 		fmt.Sprintf("%s — %s", itemTitle, message),
 		map[string]string{"item_id": itemID},
@@ -1102,12 +1105,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// remove when not — rather than only ever adding: without the removal side, a
 	// worktree that was ever spawned autonomously once would keep this hook wired
 	// into a later manual session on the same worktree forever.
-	driftHook := []services.HookName{services.HookGitDriftCheck}
+	driftHook := []approvals.HookName{approvals.HookGitDriftCheck}
 	if autonomous {
-		if hookErr := services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, driftHook); hookErr != nil {
+		if hookErr := approvals.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, driftHook); hookErr != nil {
 			log.Warn("[SpawnSessionFromItem] git-drift-check hook injection failed", "item", item.ID, "session", inst.UUID, "error", hookErr)
 		}
-	} else if hookErr := services.RemoveHooksConfig(inst.GetEffectiveRootDir(), driftHook); hookErr != nil {
+	} else if hookErr := approvals.RemoveHooksConfig(inst.GetEffectiveRootDir(), driftHook); hookErr != nil {
 		log.Warn("[SpawnSessionFromItem] git-drift-check hook removal failed", "item", item.ID, "session", inst.UUID, "error", hookErr)
 	}
 
@@ -1293,7 +1296,7 @@ func (s *BacklogService) publishOpenPRWarning(itemID string, warnings []string) 
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(false, true),
+		notify.DerivePriority(false, true),
 		"Stopped sessions with open PRs",
 		strings.Join(warnings, "; "),
 		map[string]string{"item_id": itemID},
@@ -1576,7 +1579,7 @@ func (s *BacklogService) notifyRespawnBlockedByActiveSession(ctx context.Context
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		services.DerivePriority(false, false), // urgent, important — informational, no action needed
+		notify.DerivePriority(false, false), // urgent, important — informational, no action needed
 		"Auto-respawn skipped — session already active",
 		fmt.Sprintf("%s — automatic respawn (%s) was skipped because a session is already active: %s.", itemTitle, caller, progress),
 		map[string]string{"item_id": itemID},
@@ -1691,7 +1694,7 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, ite
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(false, true), // urgent, important
+		notify.DerivePriority(false, true), // urgent, important
 		"Rework blocked by a stale-but-alive session",
 		fmt.Sprintf("%s — a failed review can't reopen for another rework attempt because its active work session hasn't produced output in over %s. The session is still running, so it will not be stopped automatically; check it manually, or use \"Reopen for Revision\" once you've confirmed it's actually stuck.", itemTitle, idle.Round(time.Second)),
 		map[string]string{"item_id": itemID},
@@ -1908,6 +1911,11 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		return fmt.Errorf("load item: %w", err)
 	}
 	if s.heldByTransitionDenial(ctx, "AutoReopenAfterFailedReview", item) {
+		return nil
+	}
+	// A FAIL verdict on an epic's integration child is a failing end-to-end check: attribute it to a
+	// sibling (fix child) or escalate to the epic's owner instead of blindly reworking the check itself.
+	if item.IsIntegrationChild && s.handleIntegrationCheckFailure(ctx, item) {
 		return nil
 	}
 
@@ -2284,10 +2292,10 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	// BUG-064's ordering is unaffected; the deadline stops a hung pane from
 	// stalling the sweep (expiry falls through to the plain restart).
 	if s.staleWorkInspector != nil {
-		inspectCtx, cancel := context.WithTimeout(ctx, services.StaleWorkInspectTimeout)
+		inspectCtx, cancel := context.WithTimeout(ctx, autonomysvc.StaleWorkInspectTimeout)
 		disposition := s.staleWorkInspector.InspectStaleWork(inspectCtx, active.SessionUUID, item)
 		cancel()
-		if disposition != services.StaleWorkRespawn {
+		if disposition != autonomysvc.StaleWorkRespawn {
 			return nil
 		}
 	}

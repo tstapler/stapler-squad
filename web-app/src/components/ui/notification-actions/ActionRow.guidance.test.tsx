@@ -54,6 +54,18 @@ describe("ActionRow question card: hook-mirrored single select", () => {
     expect(screen.getByText("Retry anyway?")).toBeInTheDocument();
   });
 
+  it("closes an open delivery confirm when the card stops needing the operator or is answered elsewhere", async () => {
+    const props = { descriptors: [makeDescriptor()], guidance: sentRow({ unacknowledged: true }), needsYou: true };
+    const { rerender } = renderRowWith(props);
+    for (const gone of [{ needsYou: false }, { elsewhere: "Redis" }]) {
+      rerender(props);
+      await userEvent.click(screen.getByTestId("action-delivery-markHandled"));
+      expect(screen.getByTestId("delivery-confirm")).toBeInTheDocument();
+      rerender({ ...props, ...gone });
+      expect(screen.queryByTestId("delivery-confirm")).toBeNull();
+    }
+  });
+
   it("marks an Unconfirmed answer handled only after the inline confirm", async () => {
     const onMarkHandled = jest.fn();
     renderRowWith({ descriptors: [makeDescriptor()], guidance: sentRow({ unacknowledged: true }), onMarkHandled });

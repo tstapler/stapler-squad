@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useSwipeToDismiss } from "@/lib/hooks/useSwipeToDismiss";
 import { useEngagement } from "@/lib/hooks/useEngagedCard";
 import { EngagedRow } from "./EngagedRow";
+import { ActionKind } from "@/gen/session/v1/notification_action_pb";
 import type { GroupedNotification, TrayRow } from "@/lib/utils/notificationGrouping";
 import { NotificationItem, type NotificationItemProps } from "./NotificationItem";
 import {
@@ -23,7 +24,13 @@ export type ListRow = TrayRow | { kind: "load-more"; key: string };
 
 export type TrayItemProps = Omit<NotificationItemProps, "group" | "removeFromHistory" | "offlineReason">;
 
-interface TrayListProps {
+interface TrayListPaging {
+  hasMore: boolean;
+  loading: boolean;
+  onLoadMore: () => void;
+}
+
+interface TrayListProps extends TrayListPaging {
   rows: ListRow[];
   /** Total selectable rows, for aria-setsize. */
   setSize: number;
@@ -33,9 +40,6 @@ interface TrayListProps {
   scrollRef: RefObject<HTMLDivElement | null>;
   /** Height of the non-virtual block (search, filters, cards) above the list in the same scroller. */
   scrollMargin?: number;
-  hasMore: boolean;
-  loading: boolean;
-  onLoadMore: () => void;
   onToggleGroup: (key: string) => void;
   /** Dismiss every record of an informational group (undoable). */
   onDismissGroup: (group: GroupedNotification) => void;
@@ -47,27 +51,29 @@ interface TrayListProps {
   onFocusAdvanced?: (leftKey: string) => void;
 }
 
-/** Needs-you cards report engagement; every other row is a plain listitem. */
-function RowShell({ cardId, preExpand, children, ...rest }: React.HTMLAttributes<HTMLDivElement> & { cardId?: string; preExpand?: boolean }) {
-  if (!cardId) return <div {...rest}>{children}</div>;
-  return (
-    <EngagedRow cardId={cardId} preExpand={preExpand} {...rest}>
-      {children}
-    </EngagedRow>
-  );
-}
-
 const HEADER_HEIGHT = 44;
 const GROUP_HEIGHT = 140;
 
-function SwipeRow({ onDismiss, disabled, children }: { onDismiss: () => void; disabled: boolean; children: React.ReactNode }) {
+const ANSWER_KINDS = new Set([ActionKind.ANSWER_QUESTION, ActionKind.ANSWER_GUIDANCE, ActionKind.OPEN]);
+
+/**
+ * Only a durable question card stays mounted when it changes tier (UX-AC26). Every other row remounts, which
+ * is what cancels a held Approve or decision and closes its sub-steps: fail closed.
+ */
+function staysMounted({ notification }: GroupedNotification): boolean {
+  const md = notification.metadata;
+  return !!md?.["guidance_request_id"] && !md["approval_id"] && (notification.actions ?? []).every((a) => ANSWER_KINDS.has(a.kind));
+}
+
+/** Wraps pinned rows too (never swipeable), so a question card that unpins keeps its subtree and focus. */
+function SwipeRow({ pinned, onDismiss, disabled, children }: { pinned: boolean; onDismiss: () => void; disabled: boolean; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
-  const view = useSwipeToDismiss(ref, { onDismiss, disabled });
+  const view = useSwipeToDismiss(ref, { onDismiss, disabled: pinned || disabled });
   return (
     <div
       ref={ref}
-      className={swipeRow}
-      data-testid="tray-swipe-row"
+      className={pinned ? undefined : swipeRow}
+      data-testid={pinned ? "needs-attention-row" : "tray-swipe-row"}
       style={{
         transform: view.offset ? `translateX(${view.offset}px)` : undefined,
         transition: view.dragging ? "none" : "transform 0.2s ease-out",
@@ -137,13 +143,21 @@ export function TrayList({
   // Focus inside a row that leaves moves to the next item header, never to an engaged state (7.1).
   const heldFocusKey = useRef<string | null>(null);
   const prevKeys = useRef<string[]>([]);
+  const prevPinned = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     const keys = rows.map((r) => r.key).filter((k) => k !== "nothing-needs-attention");
     const left = heldFocusKey.current;
     const before = prevKeys.current;
     prevKeys.current = keys;
     if (before.join("\0") !== keys.join("\0")) tracker?.noteListChange();
-    if (!left || (document.activeElement && document.activeElement !== document.body)) return;
+    const wasPinned = prevPinned.current;
+    prevPinned.current = new Set(rows.flatMap((r) => (r.kind === "group" && r.pinned ? [r.key] : [])));
+    if (!left) return;
+    if (document.activeElement && document.activeElement !== document.body) {
+      // A card that kept focus while leaving Needs you is still announced.
+      if (wasPinned.has(left) && !prevPinned.current.has(left) && keys.includes(left)) onFocusAdvanced?.(left);
+      return;
+    }
     const at = before.indexOf(left);
     const next = keys.find((k) => k !== left && before.indexOf(k) > at) ?? keys.find((k) => k !== left);
     heldFocusKey.current = null;
@@ -233,6 +247,7 @@ export function TrayList({
                     {row.label} ({row.count})
                   </span>
                 ) : (
+                  // analytics-exempt
                   <button
                     type="button"
                     className={groupToggle}
@@ -247,6 +262,7 @@ export function TrayList({
                   </button>
                 )}
                 {!row.pinned && !row.collapsed && (
+                  // analytics-exempt
                   <button
                     type="button"
                     className={trayButton}
@@ -264,7 +280,7 @@ export function TrayList({
           } else if (row.kind === "load-more") {
             body = (
               <div className={groupNote}>
-                <button type="button" className={loadMoreButton} onClick={onLoadMore} disabled={loading}>
+                <button type="button" className={loadMoreButton} onClick={onLoadMore} disabled={loading}>{/* analytics-exempt */}
                   {loading ? "Loading..." : "Load more"}
                 </button>
               </div>
@@ -285,10 +301,8 @@ export function TrayList({
                 }
               />
             );
-            body = row.pinned ? (
-              <div data-testid="needs-attention-row">{item}</div>
-            ) : (
-              <SwipeRow disabled={!!offlineReason} onDismiss={() => onDismissGroup(row.group)}>
+            body = (
+              <SwipeRow key={staysMounted(row.group) || row.pinned ? "row" : "recent"} pinned={row.pinned} disabled={!!offlineReason} onDismiss={() => onDismissGroup(row.group)}>
                 {item}
               </SwipeRow>
             );
@@ -302,7 +316,7 @@ export function TrayList({
               className={virtualRow}
               style={{ transform: `translateY(${v.start - scrollMargin}px)` }}
             >
-              <RowShell
+              <EngagedRow
                 cardId={isGroup && row.pinned ? row.key : undefined}
                 preExpand={isGroup && row.pinned && row.posInSet === 1}
                 role="listitem"
@@ -312,7 +326,7 @@ export function TrayList({
                 data-testid={isGroup ? "tray-row" : undefined}
               >
                 {body}
-              </RowShell>
+              </EngagedRow>
             </div>
           );
         })}

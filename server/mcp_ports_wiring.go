@@ -6,7 +6,9 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
@@ -19,7 +21,7 @@ var (
 	_ servermcp.UserPRSource       = (*githubpkg.UserPRCache)(nil)
 	_ servermcp.BacklogRPC         = (*backlogsvc.BacklogService)(nil)
 	_ servermcp.SessionRPC         = mcpSessionAdapter{}
-	_ servermcp.HelpAnswerer       = (*services.GuidanceRequestService)(nil)
+	_ servermcp.HelpAnswerer       = (*guidance.GuidanceRequestService)(nil)
 	_ servermcp.NudgeGate          = nudgeGateFunc(nil)
 )
 
@@ -56,15 +58,15 @@ func mcpBacklogRPC(svc *backlogsvc.BacklogService) servermcp.BacklogRPC {
 type mcpSessionAdapter struct{ *services.SessionService }
 
 func (mcpSessionAdapter) InjectHooksConfig(rootDir, sessionTitle string, hooks []string) error {
-	names := make([]services.HookName, len(hooks))
+	names := make([]approvals.HookName, len(hooks))
 	for i, h := range hooks {
-		names[i] = services.HookName(h)
+		names[i] = approvals.HookName(h)
 	}
-	return services.InjectHooksConfig(rootDir, sessionTitle, names)
+	return approvals.InjectHooksConfig(rootDir, sessionTitle, names)
 }
 
 func (mcpSessionAdapter) RefreshInstanceHookProof(inst *instance.Instance) {
-	services.RefreshInstanceHookProof(inst)
+	approvals.RefreshInstanceHookProof(inst)
 }
 
 // mcpSessionRPC returns a nil interface for a nil service: boxing the nil

@@ -14,7 +14,7 @@ import { buildSpec } from "./actionSpec";
 
 const isLive = (d?: NotificationActionDescriptor) => d?.kind === ActionKind.ANSWER_QUESTION;
 const REASON_READ_ONLY = "read_only";
-/** ActionResult.StaleReason (server/services/question_answer_sequence.go) when part of a multi-question answer was typed. */
+/** ActionResult.StaleReason (server/services/qareply/question_answer_sequence.go) when part of a multi-question answer was typed. */
 const ANSWER_ABORTED_PARTIAL = "answer_aborted_partial";
 
 /** What this browser knows about the last attempt, in the vocabulary of the delivery line. */
@@ -81,6 +81,8 @@ export interface GuidanceBodyProps {
   reset: () => void;
   /** Browser-local "Mark as handled" (Unconfirmed rows). */
   onMarkHandled?: () => void;
+  /** Changes when the card's decision moved on without this browser: closes an open inline confirm. */
+  stale?: string;
   /** Reports the row the card shows, so the tray can pull a reopened card back into view. */
   onDeliveryRow?: (view: DeliveryView | null) => void;
 }
@@ -91,7 +93,7 @@ export interface GuidanceBodyProps {
  * card flips to a final state, so focus is not moved when a terminal answer lands (UX-AC26).
  */
 export function GuidanceBody(props: GuidanceBodyProps) {
-  const { rowId, guidance, descriptor, state, disabledReason, minHeight, openControl, invoke, retry, reset, onMarkHandled, onDeliveryRow } = props;
+  const { rowId, guidance, descriptor, state, disabledReason, minHeight, openControl, invoke, retry, reset, onMarkHandled, onDeliveryRow, stale } = props;
   const { announce } = useAnnounce();
   const questions = useMemo(() => toFormQuestions(guidance), [guidance]);
   const client = useMemo(() => clientDeliveryOf(state), [state]);
@@ -131,7 +133,7 @@ export function GuidanceBody(props: GuidanceBodyProps) {
     }
   };
 
-  const line = view && <GuidanceDeliveryLine view={view} onAction={onAction} openControl={openControl} minHeight={minHeight} busy={state.status === "pending"} />;
+  const line = view && <GuidanceDeliveryLine key={stale ?? ""} view={view} onAction={onAction} openControl={openControl} minHeight={minHeight} busy={state.status === "pending"} />;
   const locked = !answerable || desktopOnly || !!view?.locked || state.status === "pending";
   return (
     <GuidanceQuestionForm

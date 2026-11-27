@@ -28,30 +28,35 @@ const NOOP_CARD: CardEngagement = { setSubStep: () => {}, setHold: () => {}, set
 export const CardEngagementContext = createContext<CardEngagement>(NOOP_CARD);
 export const useCardEngagement = (): CardEngagement => useContext(CardEngagementContext);
 
-/** Element handlers that feed one card's engagement conditions (a), (b) and (c) into the tracker. */
-export function useEngagedCard(cardId: string) {
-  const tracker = useEngagement();
-  const onFocusCapture = useCallback(() => tracker?.focusIn(cardId), [tracker, cardId]);
+/**
+ * Element handlers that feed one card's engagement conditions (a), (b) and (c) into the tracker.
+ * Without a `cardId` (a row outside Needs you) the tracker is null and everything is inert.
+ */
+export function useEngagedCard(cardId: string | undefined) {
+  const context = useEngagement();
+  const tracker = cardId === undefined ? null : context;
+  const id = cardId ?? "";
+  const onFocusCapture = useCallback(() => tracker?.focusIn(id), [tracker, id]);
   const onBlurCapture = useCallback(
     (e: FocusEvent<HTMLElement>) => {
-      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) tracker?.focusOut(cardId);
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) tracker?.focusOut(id);
     },
-    [tracker, cardId],
+    [tracker, id],
   );
-  const onPointerEnter = useCallback((e: PointerEvent) => e.pointerType !== "touch" && tracker?.pointer(cardId, true), [tracker, cardId]);
-  const onPointerLeave = useCallback((e: PointerEvent) => e.pointerType !== "touch" && tracker?.pointer(cardId, false), [tracker, cardId]);
-  const onTouchStart = useCallback((_e: TouchEvent) => tracker?.touch(cardId), [tracker, cardId]);
+  const onPointerEnter = useCallback((e: PointerEvent) => e.pointerType !== "touch" && tracker?.pointer(id, true), [tracker, id]);
+  const onPointerLeave = useCallback((e: PointerEvent) => e.pointerType !== "touch" && tracker?.pointer(id, false), [tracker, id]);
+  const onTouchStart = useCallback((_e: TouchEvent) => tracker?.touch(id), [tracker, id]);
 
   const card = useMemo<CardEngagement>(
     () =>
       tracker
         ? {
-            setSubStep: (v) => tracker.setSubStep(cardId, v),
-            setHold: (v) => tracker.setHold(cardId, v),
-            setResolved: (v) => tracker.setResolved(cardId, v),
+            setSubStep: (v) => tracker.setSubStep(id, v),
+            setHold: (v) => tracker.setHold(id, v),
+            setResolved: (v) => tracker.setResolved(id, v),
           }
         : NOOP_CARD,
-    [tracker, cardId],
+    [tracker, id],
   );
   const handlers = { onFocusCapture, onBlurCapture, onPointerEnter, onPointerLeave, onTouchStart };
   return { tracker, handlers, card };

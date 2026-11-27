@@ -13,6 +13,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
 )
@@ -333,7 +334,7 @@ func (s *GitHubUserService) freshPrompt(ctx context.Context, call *nudgeCall) (p
 		early, err = s.fetchFailure(fetchCtx, call, fetchErr)
 		return "", nil, early, err
 	}
-	prompt, reasons = BuildPRNudgePrompt(detail)
+	prompt, reasons = prs.BuildPRNudgePrompt(detail)
 	if prompt == "" || len(reasons) == 0 {
 		return "", nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOTHING_TO_FIX, nil, call.sessionID, nudgeNothingToFixDetail), nil
 	}
@@ -486,11 +487,6 @@ func linkedStrictly(pr githubpkg.UserPR, sessionID string) bool {
 	}
 	return false
 }
-
-// Canonical reason names shared with PR-fix auto-steer's duplicate key.
-const (
-	ReasonNameMergeConflict = "MERGE_CONFLICT"
-)
 
 // nudgeSignature keys the duplicate window by PR and canonical reason set, the
 // same key PR-fix auto-steer derives for the same PR, so the two paths dedupe

@@ -23,6 +23,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/contentsearch"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
@@ -38,19 +39,6 @@ const (
 	// maxSearchResults is the default cap on entries returned by SearchFiles.
 	maxSearchResults = 500
 )
-
-// hardSkipDirs are always excluded from directory listings regardless of gitignore settings.
-var hardSkipDirs = map[string]bool{
-	".git":         true,
-	"node_modules": true,
-	"vendor":       true,
-	".tox":         true,
-	"__pycache__":  true,
-	"target":       true,
-	".gradle":      true,
-	"dist":         true,
-	"build":        true,
-}
 
 // videoMIMEOverrides maps video file extensions to their canonical MIME types.
 // mime.TypeByExtension reads /etc/mime.types which may be absent on minimal Linux installs.
@@ -70,7 +58,7 @@ type FileService struct {
 	workspace      WorkspaceProvider
 	ops            *FileOps
 	writer         *FileWriter
-	search         *SearchHandler
+	search         *contentsearch.SearchHandler
 	ranges         *rangeLimiter
 	dirCache       *DirCache
 	gitignoreCache GitignoreCache
@@ -82,10 +70,15 @@ func NewFileService(workspace WorkspaceProvider) *FileService {
 	invalidator, _ := workspace.(StatusInvalidator)
 	ops := NewFileOps(FilePolicy{Workspace: workspace, Guard: guard}, fsops.OsRootBackend{})
 	return &FileService{
-		workspace:      workspace,
-		ops:            ops,
-		writer:         NewFileWriter(ops, invalidator),
-		search:         newSearchHandler(ops, globalFilesFlags{reader: flagsvc.FlagReader{Reg: flagsvc.FlagRegistry()}}.ViewerV2),
+		workspace: workspace,
+		ops:       ops,
+		writer:    NewFileWriter(ops, invalidator),
+		search: contentsearch.NewSearchHandler(contentsearch.Ports{
+			Workspace: workspace,
+			Backend:   ops.backend,
+			Telemetry: func() fsops.FilesTelemetry { return ops.policy.Telemetry },
+			ViewerV2:  globalFilesFlags{reader: flagsvc.FlagReader{Reg: flagsvc.FlagRegistry()}}.ViewerV2,
+		}),
 		ranges:         newRangeLimiter(),
 		dirCache:       NewDirCache(512, 30*time.Second),
 		gitignoreCache: NewGitignoreCache(256, 5*time.Minute),
@@ -100,7 +93,7 @@ func (s *FileService) SetFlagRegistry(reg *featureflags.Registry) {
 	}
 	flags := globalFilesFlags{reader: flagsvc.FlagReader{Reg: reg}}
 	s.ops.policy.Flags = flags
-	s.search.viewerV2 = flags.ViewerV2
+	s.search.SetViewerV2(flags.ViewerV2)
 }
 
 // resolveAndValidatePath resolves a relative path against a base and ensures the
@@ -173,7 +166,7 @@ func (fs *FileService) ListFiles(
 		name := entry.Name()
 
 		// Skip hardcoded directories.
-		if entry.IsDir() && hardSkipDirs[name] {
+		if entry.IsDir() && fsops.IsHardSkipDir(name) {
 			continue
 		}
 
@@ -390,7 +383,7 @@ func searchFilesInWorktree(ctx context.Context, basePath, query string, includeI
 		}
 
 		// Always skip hardcoded directories.
-		if d.IsDir() && hardSkipDirs[name] {
+		if d.IsDir() && fsops.IsHardSkipDir(name) {
 			return filepath.SkipDir
 		}
 
@@ -457,7 +450,7 @@ func collectAllGitignorePatterns(rootPath string) []gitignore.Pattern {
 		if err != nil || !d.IsDir() {
 			return nil
 		}
-		if path != rootPath && hardSkipDirs[d.Name()] {
+		if path != rootPath && fsops.IsHardSkipDir(d.Name()) {
 			return filepath.SkipDir
 		}
 		if d.Type()&os.ModeSymlink != 0 {

@@ -1,0 +1,68 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "taggingrules",
+    srcs = [
+        "tagging_classifier_service.go",
+        "tagging_rules_service.go",
+        "tagging_rules_store.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/taggingrules",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//pkg/classifier",
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/domain",
+        "//session/instance",
+        "//session/tagpoller",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":taggingrules",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "taggingrules_test",
+    srcs = [
+        "tagging_classifier_service_test.go",
+        "tagging_rules_conversion_test.go",
+        "tagging_rules_fallback_test.go",
+        "tagging_rules_service_test.go",
+        "tagging_rules_store_test.go",
+        "taggingrules_golden_test.go",
+        "testmain_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":taggingrules"],
+    deps = [
+        "//pkg/classifier",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/internal/svctest",
+        "//session",
+        "//session/domain",
+        "//session/headless",
+        "//session/instance",
+        "//session/tagpoller",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

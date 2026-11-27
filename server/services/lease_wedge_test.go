@@ -12,6 +12,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -40,17 +42,20 @@ func TestWedgedLease_ShouldRaiseExactlyOneTrayWarningPerEpisodeNotPushedAndDeliv
 	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 	require.True(t, ok)
 	t0 := time.Now()
+	scan := func(now time.Time) int {
+		return autonomysvc.ScanLeaseWedges(now, only(inst), e.svc.leaseWedgePorts())
+	}
 
-	assert.Zero(t, e.svc.scanLeaseWedges(t0.Add(instance.LeaseWedgeWarnAfter-time.Second), only(inst)), "not wedged yet")
-	assert.Equal(t, 1, e.svc.scanLeaseWedges(t0.Add(instance.LeaseWedgeWarnAfter+time.Second), only(inst)))
-	assert.Zero(t, e.svc.scanLeaseWedges(t0.Add(5*time.Minute), only(inst)), "the same episode never raises a second one")
+	assert.Zero(t, scan(t0.Add(instance.LeaseWedgeWarnAfter-time.Second)), "not wedged yet")
+	assert.Equal(t, 1, scan(t0.Add(instance.LeaseWedgeWarnAfter+time.Second)))
+	assert.Zero(t, scan(t0.Add(5*time.Minute)), "the same episode never raises a second one")
 
 	got := notificationsOf(e.collect(t), warning)
 	require.Len(t, got, 1)
 	n := got[0]
-	assert.Equal(t, leaseWedgeTitle, n.NotificationTitle)
+	assert.Equal(t, "A write to this session is stuck", n.NotificationTitle)
 	assert.Equal(t, inst.UUID, n.SessionID)
-	assert.Equal(t, DerivePriority(true, false), n.NotificationPriority, "medium: below the urgent push threshold")
+	assert.Equal(t, notify.DerivePriority(true, false), n.NotificationPriority, "medium: below the urgent push threshold")
 	assert.Equal(t, pkgevents.DeliveryClassFailure, n.NotificationMetadata[pkgevents.MetadataKeyDeliveryClass])
 	assert.Equal(t, "true", n.NotificationMetadata[pkgevents.MetadataKeySessionScoped])
 	assert.NotEqual(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), n.NotificationPriority)
@@ -63,12 +68,14 @@ func TestWedgedLease_ShouldRaiseExactlyOneTrayWarningPerEpisodeNotPushedAndDeliv
 	lease2, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 	t1 := time.Now()
-	assert.Equal(t, 1, e.svc.scanLeaseWedges(t1.Add(instance.LeaseWedgeWarnAfter+time.Second), only(inst)))
+	assert.Equal(t, 1, scan(t1.Add(instance.LeaseWedgeWarnAfter+time.Second)))
 	assert.Len(t, notificationsOf(e.collect(t), warning), 1)
 	lease2.Release()
 }
 
-func TestLeaseWedgeWatcher_ShouldScanOnEveryTickAndJoinOnCancel(t *testing.T) {
+// The hub's watcher scans through the hub's own ports on each tick. A sweep sees
+// every lease in the process, so only this instance's events are asserted.
+func TestLeaseWedgeWatcher_ShouldRaiseThroughTheHubPorts_When_ATickArrives(t *testing.T) {
 	e := newCrashEnv(t, false)
 	inst := wedgeTarget(t, "uuid-wedge-watch")
 	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
@@ -76,13 +83,23 @@ func TestLeaseWedgeWatcher_ShouldScanOnEveryTickAndJoinOnCancel(t *testing.T) {
 	defer lease.Release()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	tick := make(chan time.Time)
 	var wg sync.WaitGroup
-	e.svc.startLeaseWedgeWatcher(ctx, tick, &wg, func(now time.Time) { e.svc.scanLeaseWedges(now, only(inst)) })
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	tick := make(chan time.Time)
+	e.svc.StartLeaseWedgeWatcher(ctx, tick, &wg)
 
-	tick <- time.Now().Add(instance.LeaseWedgeWarnAfter + time.Second)
+	select {
+	case tick <- time.Now().Add(instance.LeaseWedgeWarnAfter + time.Second):
+	case <-time.After(5 * time.Second):
+		t.Fatal("the watcher never took the tick")
+	}
 	cancel()
 	wg.Wait() // joined: the goroutine exits on cancel
-	got := notificationsOf(e.collect(t), int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING))
-	assert.Len(t, got, 1)
+	var got int
+	for _, n := range notificationsOf(e.collect(t), int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING)) {
+		if n.SessionID == inst.UUID {
+			got++
+		}
+	}
+	assert.Equal(t, 1, got)
 }

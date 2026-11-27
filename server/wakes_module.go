@@ -12,6 +12,7 @@ import (
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -153,14 +154,14 @@ func wakeDispatcherEnabled(cfg *config.Config) bool {
 
 // startWakes wires the wake dispatcher's lifecycle to the flag matrix and
 // starts it when the flag is on. A non-leader process leaves it stopped.
-func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guidance *services.GuidanceRequestService, triggers *services.WakeTriggerService) {
+func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService, triggers *services.WakeTriggerService) {
 	if deps.Storage == nil || deps.SessionService == nil {
 		return
 	}
 	lc := &wakeLifecycle{
 		enabled: func() bool { return wakeDispatcherEnabled(config.LoadConfig()) },
 		start: func(ctx context.Context) (func(), func(context.Context), error) {
-			return buildAndStartWakes(ctx, deps, guidance, triggers)
+			return buildAndStartWakes(ctx, deps, guidanceSvc, triggers)
 		},
 	}
 	activeWakeLifecycle.Store(lc)
@@ -175,7 +176,7 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guid
 
 // buildAndStartWakes builds a dispatcher over the server dependencies and
 // starts it, returning how to stop and reconcile it.
-func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidance *services.GuidanceRequestService, triggers *services.WakeTriggerService) (func(), func(context.Context), error) {
+func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService, triggers *services.WakeTriggerService) (func(), func(context.Context), error) {
 	cfg := config.LoadConfig()
 	var leader wakes.LeaderGuard = wakes.NoLeader{}
 	if dir, err := config.GetConfigDir(); err == nil {
@@ -210,10 +211,10 @@ func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidance 
 		deps.Storage.SetWakeChangeHook(nil)
 		return nil, nil, err
 	}
-	if guidance != nil {
-		guidance.SetAnswerListener(d.OnGuidanceAnswered)
+	if guidanceSvc != nil {
+		guidanceSvc.SetAnswerListener(d.OnGuidanceAnswered)
 	}
-	installWakeTools(d, deps, guidance)
+	installWakeTools(d, deps, guidanceSvc)
 	if triggers != nil {
 		triggers.SetBackend(d)
 	}
@@ -221,8 +222,8 @@ func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidance 
 		if triggers != nil {
 			triggers.SetBackend(nil)
 		}
-		if guidance != nil {
-			guidance.SetAnswerListener(nil)
+		if guidanceSvc != nil {
+			guidanceSvc.SetAnswerListener(nil)
 		}
 		servermcp.SetWakeToolDeps(func() *servermcp.WakeToolDeps { return nil })
 		deps.Storage.SetWakeChangeHook(nil)
@@ -239,13 +240,13 @@ func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidance 
 // installWakeTools lets the MCP wake and peer-help tools reach the running
 // dispatcher; until this runs (or in a process that is not the leader) they
 // answer `unavailable`.
-func installWakeTools(d *wakes.Dispatcher, deps *ServerDependencies, guidance *services.GuidanceRequestService) {
+func installWakeTools(d *wakes.Dispatcher, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService) {
 	tools := &servermcp.WakeToolDeps{
 		Backend: d,
 		Owners:  wakeOwners{svc: deps.SessionService, storage: deps.Storage},
 	}
-	if guidance != nil {
-		tools.Answerer = guidance
+	if guidanceSvc != nil {
+		tools.Answerer = guidanceSvc
 	}
 	servermcp.SetWakeToolDeps(func() *servermcp.WakeToolDeps { return tools })
 }

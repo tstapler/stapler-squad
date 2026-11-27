@@ -1,0 +1,32 @@
+name: 'Save the Go module + build cache'
+description: >
+  Last step of the writer job, with setup-go-cached's outputs: trims GOCACHE, then saves. An explicit
+  step, not a post step, so it does not depend on how deeply it is nested.
+
+inputs:
+  path:
+    description: setup-go-cached's cache-path output.
+    required: true
+  key:
+    description: setup-go-cached's cache-key output.
+    required: true
+  max-build-cache-mb:
+    # Race archives for server, session and config are 3838 MB and non-race ./... 3974 MB (about 6:1
+    # under zstd). A cap near the writer's own output makes the trim drop it before it is saved.
+    description: Trim GOCACHE to this many MB (oldest first) before saving.
+    default: '5120'
+
+runs:
+  using: composite
+  steps:
+    - name: Trim Go build cache
+      shell: bash
+      env:
+        MAX_MB: ${{ inputs.max-build-cache-mb }}
+      run: ./tools/ci/trim-go-cache.sh "$(go env GOCACHE)" "$MAX_MB"
+
+    - name: Save Go caches
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}

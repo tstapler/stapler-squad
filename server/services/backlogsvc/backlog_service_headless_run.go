@@ -13,12 +13,16 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/server/services/secretscan"
+
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -117,7 +121,7 @@ func truncateErrorDetail(err error, maxRunes int) string {
 	if err == nil {
 		return ""
 	}
-	s := services.RedactErrorDetail(strings.Join(strings.Fields(err.Error()), " ")) // one line: it is embedded in a one-line stuck context
+	s := secretscan.RedactErrorDetail(strings.Join(strings.Fields(err.Error()), " ")) // one line: it is embedded in a one-line stuck context
 	if utf8.RuneCountInString(s) <= maxRunes {
 		return s
 	}
@@ -247,7 +251,7 @@ func (s *BacklogService) TriggerReReview(
 					s.eventBus.Publish(events.NewNotificationEvent(
 						item.ID, "", uuid.New().String(),
 						int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-						services.DerivePriority(true, true), // urgent, important — needs investigation, not rework
+						notify.DerivePriority(true, true), // urgent, important — needs investigation, not rework
 						"Review blocked — branch drifted too far behind main",
 						fmt.Sprintf("%s — the branch could not be automatically synced with main. See the item's review history for the conflict details.", item.Title),
 						map[string]string{"item_id": item.ID},
@@ -342,7 +346,7 @@ Do not modify the code. Only write the review verdict.
 				s.eventBus.Publish(events.NewNotificationEvent(
 					item.ID, "", uuid.New().String(),
 					int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-					services.DerivePriority(true, true), // urgent, important — needs investigation, not rework
+					notify.DerivePriority(true, true), // urgent, important — needs investigation, not rework
 					"Review blocked — codebase directory missing",
 					fmt.Sprintf("%s — no diff could be computed and the fallback review directory is gone. Needs investigation.", item.Title),
 					map[string]string{"item_id": item.ID},

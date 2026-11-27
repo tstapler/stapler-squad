@@ -4,6 +4,7 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "secretscan",
     srcs = [
+        "error_detail.go",
         "redaction_sentinels.go",
         "secret_scanner.go",
     ],
@@ -20,10 +21,12 @@ alias(
 go_test(
     name = "secretscan_test",
     srcs = [
+        "error_detail_test.go",
         "redaction_sentinels_test.go",
         "secret_scanner_test.go",
     ],
     embed = [":secretscan"],
+    deps = ["@com_github_stretchr_testify//assert"],
 )
 
 # Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.

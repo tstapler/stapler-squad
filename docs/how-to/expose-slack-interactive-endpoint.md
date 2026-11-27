@@ -1,7 +1,7 @@
 # Slack Phase 2 — Scoping Public Reachability
 
 Enabling `cfg.Slack.ApprovalEnabled` registers `POST /api/hooks/slack-interactive`
-(`server/server.go`, `server/services/slack_interactive_handler.go`) so a click on an
+(`server/server.go`, `server/services/notify/slack_interactive_handler.go`) so a click on an
 outbound Slack message's Approve/Deny button resolves the pending approval. Slack calls
 this endpoint from Slack's own servers, not from your LAN — the stapler-squad instance
 must be reachable from the public internet at that path for the buttons to work at all.
@@ -11,11 +11,12 @@ must be reachable from the public internet at that path for the buttons to work 
 Every other hook receiver (`/api/hooks/permission-request`, `/api/hooks/stop`,
 `/api/hooks/pre-tool-use`, etc.) is only ever called by Claude Code running on the same
 machine — the existing trust boundary is "localhost only," the same one
-`validateLocalhostOrigin`/`validateLocalhostAddr` (`server/services/notification_service.go`)
+`validateLocalhostOrigin`/`validateLocalhostAddr` (`server/services/notify/notification_service.go`)
 establish for other local-only surfaces. `/api/hooks/slack-interactive` cannot rely on that:
 it is a new, genuinely internet-facing HTTP endpoint. Signature verification
 (`verifySlackSignature`, HMAC-SHA256 over the raw body with your Slack app's signing
-secret, `hmac.Equal` comparison, 5-minute replay window) is necessary, but exposing more of
+secret, `hmac.Equal` comparison, 5-minute replay window, repeats of a handled request ignored
+in memory until restart or expiry) is necessary, but exposing more of
 the app than this one path to get there defeats the point of having it.
 
 ## Do not tunnel the whole port

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -316,7 +317,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if err := s.setupRemoteApprovalHooks(p.instance, instanceRootDir, p.instanceTitle); err != nil {
 			log.Warn("[session pipeline] failed to set up remote approval relay", "session", p.instanceTitle, "err", err)
 		}
-	} else if err := InjectHookConfig(instanceRootDir, p.instanceTitle, p.instance.UUID); err != nil {
+	} else if err := approvals.InjectHookConfig(instanceRootDir, p.instanceTitle, p.instance.UUID); err != nil {
 		log.Warn("[session pipeline] failed to inject hook config", "session", p.instanceTitle, "err", err)
 	}
 
@@ -344,21 +345,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	// was already started by another code path.
 	driver.StartSessionDriver(p.instance, instanceRootDir)
 
-	if p.instance.AutonomousMode && s.headlessPool != nil {
-		costOpt := autonomous.NoopDriverOption
-		if concreteStorage := s.GetStorage(); concreteStorage != nil {
-			costOpt = autonomous.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, p.instance.UUID))
-		}
-		driver := autonomous.NewAutonomousDriver(p.instance, s.autonomousDriverClient(), p.instance.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
-		driver.RegisterCompletionCallback(s.AutonomousSvc.OnAutonomousDriverComplete)
-		if driverErr := driver.Start(s.AutonomousSvc.driverCtx()); driverErr != nil {
-			log.Warn("[session pipeline] failed to start autonomous driver", "session", p.instanceTitle, "err", driverErr)
-		} else {
-			s.AutonomousSvc.registerDriver(p.instanceTitle, driver)
-		}
-	} else if p.instance.AutonomousMode {
-		log.Warn("[session pipeline] autonomous_mode requested but headlessPool is nil", "session", p.instanceTitle)
-	}
+	s.startCreationAutonomousDriver(p.instance, p.instanceTitle)
 
 	terminal(pipelineOutcome{domain.Active, "", SessionCreationOutcomeSuccess})
 	log.Info("[session pipeline] async start complete", "session", p.instanceTitle)
@@ -377,4 +364,24 @@ func (s *SessionService) creationResolutionTimeoutOrDefault() time.Duration {
 		return maxCreationResolutionTimeout
 	}
 	return s.creationResolutionTimeout
+}
+
+// startCreationAutonomousDriver starts and registers the autonomous driver of a
+// just-created session. It does nothing unless the session asked for autonomy.
+func (s *SessionService) startCreationAutonomousDriver(inst *instance.Instance, title string) {
+	if inst.AutonomousMode && s.headlessPool != nil {
+		costOpt := autonomous.NoopDriverOption
+		if concreteStorage := s.GetStorage(); concreteStorage != nil {
+			costOpt = autonomous.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, inst.UUID))
+		}
+		d := autonomous.NewAutonomousDriver(inst, s.autonomousDriverClient(), inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
+		d.RegisterCompletionCallback(s.AutonomousSvc.OnAutonomousDriverComplete)
+		if driverErr := d.Start(s.AutonomousSvc.DriverContext()); driverErr != nil {
+			log.Warn("[session pipeline] failed to start autonomous driver", "session", title, "err", driverErr)
+		} else {
+			s.AutonomousSvc.RegisterDriver(title, d)
+		}
+	} else if inst.AutonomousMode {
+		log.Warn("[session pipeline] autonomous_mode requested but headlessPool is nil", "session", title)
+	}
 }

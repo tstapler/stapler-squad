@@ -101,13 +101,13 @@ type ExemptSite struct {
 
 const (
 	fileLifecycle    = "server/services/backlogsvc/backlog_service_lifecycle.go"
-	fileNotifyAction = "server/services/notification_action_backlog.go"
+	fileNotifyAction = "server/services/notifyactions/notification_action_backlog.go"
 	fileTriage       = "server/services/backlogsvc/backlog_service_triage.go"
 	fileHeadlessRun  = "server/services/backlogsvc/backlog_service_headless_run.go"
 	fileTriggerTri   = "server/services/backlogsvc/backlog_service_trigger_triage.go"
 	fileSync         = "server/services/backlogsvc/backlog_service_sync.go"
-	fileAutonomous   = "server/services/autonomous_orchestration_service.go"
-	fileDebugMutate  = "server/services/backlog_debug_mutate_handler.go"
+	fileAutonomous   = "server/services/autonomysvc/autonomous_orchestration_service.go"
+	fileDebugMutate  = "server/services/backlogmisc/backlog_debug_mutate_handler.go"
 	fileJulesDisp    = "server/services/jules_dispatch_service.go"
 	fileMCPBacklog   = "server/mcp/tools_backlog.go"
 	fileMCPBacklogPR = "server/mcp/tools_backlog_pr.go"

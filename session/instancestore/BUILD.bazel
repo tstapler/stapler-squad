@@ -43,6 +43,7 @@ go_test(
         "create_delete_test.go",
         "mapper_test.go",
         "reads_test.go",
+        "rename_pin_test.go",
         "update_test.go",
         "updaters_test.go",
     ],

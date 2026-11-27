@@ -76,7 +76,7 @@ expected or deliberate).
 [440](https://github.com/tstapler/stapler-squad/blob/a9b19d863a44a42f6966b3e1616693d210ac7ef2/session/autonomous_driver.go#L440), plus the definition at
 [L516](https://github.com/tstapler/stapler-squad/blob/a9b19d863a44a42f6966b3e1616693d210ac7ef2/session/autonomous_driver.go#L516). Every exit except D9 goes through one of the three.
 
-### How the service reacts (`server/services/autonomous_orchestration_service.go`)
+### How the service reacts (`server/services/autonomysvc/autonomous_orchestration_service.go`)
 
 | id | where | symbol | what happens | verdict |
 |----|-------|--------|--------------|---------|

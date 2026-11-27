@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"regexp"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -89,16 +88,6 @@ type SessionSteerer interface {
 	SteerSessionGuarded(ctx context.Context, sessionUUID, sig, message string) (SteerOutcome, error)
 }
 
-type transitionCallerKey struct{}
-
-// WithTransitionCaller names the registered operator caller of an RPC that
-// another operator-facing component forwards to TransitionBacklogItemStatus.
-// resolveTransitionCaller honors only session.CallerOperatorNotificationAction,
-// and only for the user actor.
-func WithTransitionCaller(ctx context.Context, caller domain.TransitionCaller) context.Context {
-	return context.WithValue(ctx, transitionCallerKey{}, caller)
-}
-
 // resolveTransitionCaller maps the request's actor to its registered caller:
 // the user actor is an operator; the agent actor, and any unknown value, is the
 // MCP delegate (class agent), so an unknown actor never gains the operator
@@ -107,7 +96,7 @@ func ResolveTransitionCaller(ctx context.Context) domain.TransitionCaller {
 	if TransitionActorFromContext(ctx) != instance.TriggeredByUser {
 		return domain.CallerMCPTransitionDelegate
 	}
-	if c, ok := ctx.Value(transitionCallerKey{}).(domain.TransitionCaller); ok && c == domain.CallerOperatorNotificationAction {
+	if c := domain.TransitionCallerFrom(ctx); c == domain.CallerOperatorNotificationAction {
 		return c
 	}
 	return domain.CallerOperatorTransitionRPC
@@ -118,29 +107,6 @@ func TransitionActorFromContext(ctx context.Context) string {
 		return a
 	}
 	return instance.TriggeredByUser
-}
-
-// dropSubsumedChangesRequested removes CHANGES_REQUESTED when UNRESOLVED_THREADS
-// is also present: the manual nudge has no changes-requested reason and its
-// thread prompt carries the same actionable content, so keeping the name would
-// key the same fix differently on the two paths and send it twice.
-func DropSubsumedChangesRequested(names []string) []string {
-	hasThreads := false
-	for _, n := range names {
-		if n == ReasonNameUnresolvedThreads {
-			hasThreads = true
-		}
-	}
-	if !hasThreads {
-		return names
-	}
-	out := make([]string, 0, len(names))
-	for _, n := range names {
-		if n != ReasonNameChangesRequested {
-			out = append(out, n)
-		}
-	}
-	return out
 }
 
 // fromProtoStuckReason maps a proto StuckReason enum value back to the domain
@@ -238,30 +204,6 @@ func FindSupersededSessions(sessions []backlogdto.ItemSessionSummary) []backlogd
 	return superseded
 }
 
-// errorDetailSecretPattern matches common credential shapes that could ride along in a
-// wrapped exec/network error: vendor token prefixes, JWTs, bearer/basic auth, and
-// key/value or --flag secrets with =, :, quoted-JSON or (for --flags) space separators.
-var errorDetailSecretPattern = regexp.MustCompile(`(?i)(` +
-	`\bsk-[a-z0-9_-]{8,}` +
-	`|\b(?:gh[pousr]|github_pat)_[a-z0-9_]{20,}` +
-	`|\bxox[abpr]-[a-z0-9-]{8,}` +
-	`|\b(?:akia|asia)[a-z0-9]{16}\b` +
-	`|\beyj[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]*` +
-	`|\b(?:bearer|basic)\s+[a-z0-9._~+/=-]{8,}` +
-	`|(?:api[_-]?key|token|secret|passw(?:or)?d|authorization)\b["']?\s*[:=]\s*["']?(?:(?:bearer|basic)\s+)?[^\s"',;&]+` +
-	`|--(?:api[_-]?key|token|secret|passw(?:or)?d)\s+[^\s"',;&]+` +
-	`)`)
-
-// errorDetailURLUserinfoPattern captures a URL's scheme so only its user:pass@ part is masked.
-var errorDetailURLUserinfoPattern = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@`)
-
-// redactErrorDetail masks credential-shaped substrings. Best-effort: error_detail outlives
-// log rotation and is shown in the UI, so it must not become a durable secret store.
-func RedactErrorDetail(s string) string {
-	s = errorDetailURLUserinfoPattern.ReplaceAllString(s, "${1}[REDACTED]@")
-	return errorDetailSecretPattern.ReplaceAllString(s, "[REDACTED]")
-}
-
 // findMostRecentSessions returns the most recently created review and work ItemSessions
 // from the provided list. Either return value may be nil if no session of that role exists.
 func FindMostRecentSessions(sessions []backlogdto.ItemSessionSummary) (reviewSession, workSession *backlogdto.ItemSessionSummary) {
@@ -280,11 +222,3 @@ func FindMostRecentSessions(sessions []backlogdto.ItemSessionSummary) (reviewSes
 	}
 	return
 }
-
-const ReasonNameFailingChecks = "FAILING_CHECKS"
-
-const ReasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
-
-// reasonNameChangesRequested has no manual-nudge counterpart, so a
-// changes-requested-only steer never suppresses a thread nudge.
-const ReasonNameChangesRequested = "CHANGES_REQUESTED"

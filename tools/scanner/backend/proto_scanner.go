@@ -181,6 +181,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
+	"CreateEpicIntegrationChild":  "backlog:create-epic-integration-child",
 	"AddBacklogItemDependency":    "backlog:add-item-dependency",
 	"RemoveBacklogItemDependency": "backlog:remove-item-dependency",
 	"ListBacklogItemDependencies": "backlog:list-item-dependencies",
@@ -379,7 +380,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
 	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
 	// not left as a followup like headless.proto, since it was cheap here.
-	// Tagging-classifier RPCs (tagging_classifier_service.go).
+	// Tagging-classifier RPCs (session_service_escape_tagging.go delegates to taggingrules).
 	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
 	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
 	"GetBackgroundModels":           "background-models:get",
@@ -440,7 +441,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"RestartTmuxServer":    "tmux:restart-server",
 	// Durable guidance-request RPCs (GuidanceRequestService in
 	// guidance_request.proto, #809) -- must match the "// +api:
-	// guidance-request:*" markers in server/services/guidance_request_service.go
+	// guidance-request:*" markers in server/services/guidance/guidance_request_service.go
 	// verbatim, same failure mode as the SearchGitHubRepos comment above.
 	"CreateGuidanceRequest":          "guidance-request:create",
 	"AnswerGuidanceRequest":          "guidance-request:answer",

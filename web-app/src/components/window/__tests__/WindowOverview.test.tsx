@@ -86,4 +86,26 @@ describe("WindowTabStrip hover preview", () => {
     expect(screen.getByTestId("window-hover-preview")).toBeInTheDocument();
     expect(screen.getAllByText("Fix login bug")).toHaveLength(2);
   });
+
+  it.each([
+    { device: "no input that can hover", matching: ["(hover: none)", "(any-hover: none)"], opens: false },
+    { device: "a touch tablet with a mouse attached", matching: ["(hover: none)"], opens: true },
+  ])("on $device, a mouse pointer opens the preview: $opens", ({ matching, opens }) => {
+    // Not jest.spyOn: jest.setup.js's matchMedia is already a mock, and mockRestore() would blank it.
+    const original = window.matchMedia;
+    window.matchMedia = (query) => ({ matches: matching.includes(query) }) as MediaQueryList;
+    try {
+      render(
+        <WindowTabStrip windows={windows} currentWindowId="w1" onSwitch={jest.fn()} onCreate={jest.fn()}
+          onClose={jest.fn()} onRename={jest.fn()} getWindows={() => windows} getSessionTitle={getSessionTitle} />,
+      );
+
+      fireEvent.pointerEnter(screen.getByRole("tablist").parentElement as HTMLElement, { pointerType: "mouse" });
+      act(() => { jest.advanceTimersByTime(400); });
+
+      expect(screen.queryByTestId("window-hover-preview") !== null).toBe(opens);
+    } finally {
+      window.matchMedia = original;
+    }
+  });
 });

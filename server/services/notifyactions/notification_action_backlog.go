@@ -1,0 +1,254 @@
+package notifyactions
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"connectrpc.com/connect"
+
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
+)
+
+// notification_action_backlog.go delegates BACKLOG_DECISION choices to the
+// existing RPCs. A decision is applied once: the item's current status is read
+// first, so a retry after a restart (empty idempotency cache) reports
+// ALREADY_RESOLVED instead of repeating the transition or the merge.
+
+const (
+	backlogStatusReady    = "ready"
+	backlogStatusDone     = "done"
+	backlogStatusArchived = "archived"
+)
+
+// errItemNotFound is returned by ItemStatusReader for an unknown item.
+var errItemNotFound = errors.New("backlog item not found")
+
+// ItemStatusReader reads a backlog item's current status.
+type ItemStatusReader interface {
+	ItemStatus(ctx context.Context, itemID string) (string, error)
+}
+
+// WorkSessionFinder returns the UUID of the newest work session of an item, or
+// "" when it has none.
+type WorkSessionFinder interface {
+	LatestWorkSession(ctx context.Context, itemID string) (string, error)
+}
+
+// BacklogTransitioner is TransitionBacklogItemStatus.
+type BacklogTransitioner interface {
+	TransitionBacklogItemStatus(context.Context, *connect.Request[sessionv1.TransitionBacklogItemStatusRequest]) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error)
+}
+
+// PRMerger is MergePR.
+type PRMerger interface {
+	MergePR(context.Context, *connect.Request[sessionv1.MergePRRequest]) (*connect.Response[sessionv1.MergePRResponse], error)
+}
+
+// BacklogDeciderDeps are the collaborators of the production BacklogDecider.
+type BacklogDeciderDeps struct {
+	Status      ItemStatusReader
+	Transitions BacklogTransitioner
+	Sessions    WorkSessionFinder
+	Merger      PRMerger
+}
+
+type backlogDecider struct{ BacklogDeciderDeps }
+
+// NewBacklogDecider builds the BacklogDecider over the existing RPCs.
+func NewBacklogDecider(d BacklogDeciderDeps) BacklogDecider { return backlogDecider{d} }
+
+func (b backlogDecider) Decide(ctx context.Context, d BacklogDecision) (questionkit.ActionResult, error) {
+	status, err := b.Status.ItemStatus(ctx, d.ItemID)
+	if errors.Is(err, errItemNotFound) {
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_gone"}, nil
+	}
+	if err != nil {
+		return questionkit.ActionResult{}, err
+	}
+	switch d.Choice {
+	case notify.ChoiceAccept:
+		return b.transition(ctx, d, status, backlogStatusDone, notify.BacklogStatusReview)
+	case notify.ChoiceRework:
+		return b.transition(ctx, d, status, backlogStatusReady, notify.BacklogStatusReview, notify.BacklogStatusPRPending)
+	case notify.ChoiceMerge:
+		return b.merge(ctx, d, status)
+	}
+	return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "unknown choice"), nil
+}
+
+// transition moves the item to target when it is in one of from. An item
+// already at target was decided by an earlier call.
+func (b backlogDecider) transition(ctx context.Context, d BacklogDecision, current, target string, from ...string) (questionkit.ActionResult, error) {
+	if current == target {
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, current), nil
+	}
+	if !stringIn(from, current) {
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
+	}
+	ctx = domain.WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
+	_, err := b.Transitions.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId: d.ItemID, TargetStatus: target, ExpectedStatus: current, OverrideReason: d.Reason,
+	}))
+	return mapTransitionError(err)
+}
+
+func mapTransitionError(err error) (questionkit.ActionResult, error) {
+	if err == nil {
+		return questionkit.Applied(), nil
+	}
+	switch connect.CodeOf(err) {
+	case connect.CodeFailedPrecondition, connect.CodeInvalidArgument:
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
+	case connect.CodeNotFound:
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_gone"}, nil
+	}
+	return questionkit.ActionResult{}, err
+}
+
+// merge merges the pull request of the item's newest work session. It needs the
+// operator's inline confirm (design/ux.md 2.4) and is skipped once the item is done.
+func (b backlogDecider) merge(ctx context.Context, d BacklogDecision, status string) (questionkit.ActionResult, error) {
+	switch status {
+	case backlogStatusDone, backlogStatusArchived:
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, status), nil
+	case notify.BacklogStatusReview, notify.BacklogStatusPRPending:
+	default:
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
+	}
+	if !d.Confirm {
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "merge needs confirmation"), nil
+	}
+	sessionID, err := b.Sessions.LatestWorkSession(ctx, d.ItemID)
+	if err != nil {
+		return questionkit.ActionResult{}, err
+	}
+	if sessionID == "" {
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "the item has no work session to merge"), nil
+	}
+	resp, err := b.Merger.MergePR(ctx, connect.NewRequest(&sessionv1.MergePRRequest{Id: sessionID, MergeMethod: sessionv1.MergeMethod_MERGE_METHOD_MERGE}))
+	if err != nil {
+		return mapTransitionError(err)
+	}
+	if !resp.Msg.GetSuccess() {
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, resp.Msg.GetMessage()), nil
+	}
+	return questionkit.Applied(), nil
+}
+
+func stringIn(set []string, v string) bool {
+	for _, s := range set {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// backlogStorage is the storage the production readers use.
+type backlogStorage interface {
+	GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error)
+	ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error)
+}
+
+type storageItemReader struct{ storage backlogStorage }
+
+// NewItemStatusReader reads item status from storage.
+func NewItemStatusReader(s backlogStorage) ItemStatusReader { return storageItemReader{s} }
+
+func (r storageItemReader) ItemStatus(ctx context.Context, itemID string) (string, error) {
+	item, err := r.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return "", errItemNotFound
+		}
+		return "", fmt.Errorf("load backlog item: %w", err)
+	}
+	return item.Status, nil
+}
+
+type storageSessionFinder struct{ storage backlogStorage }
+
+// NewWorkSessionFinder finds an item's newest work session in storage.
+func NewWorkSessionFinder(s backlogStorage) WorkSessionFinder { return storageSessionFinder{s} }
+
+func (f storageSessionFinder) LatestWorkSession(ctx context.Context, itemID string) (string, error) {
+	rows, err := f.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		return "", fmt.Errorf("list item sessions: %w", err)
+	}
+	for i := len(rows) - 1; i >= 0; i-- { // oldest first, so scan from the end
+		if rows[i].Role == string(instance.SessionRoleWork) {
+			return rows[i].SessionUUID, nil
+		}
+	}
+	return "", nil
+}
+
+// HistoryResolver is the NotificationResolver over the notification history: it
+// retires the unread rows of a decided target. A nil store makes it a no-op.
+type HistoryResolver struct {
+	store *notifications.NotificationHistoryStore
+}
+
+// NewNotificationResolver marks an item's decision rows read.
+func NewNotificationResolver(store *notifications.NotificationHistoryStore) HistoryResolver {
+	return HistoryResolver{store}
+}
+
+func (r HistoryResolver) ResolveItemNotifications(itemID string) {
+	if r.store == nil {
+		return
+	}
+	_, err := r.store.MarkReadWhere(func(n *notifications.NotificationRecord) bool {
+		return n.Metadata[notify.MetaItemID] == itemID && n.Metadata[notify.MetaDecisionSchema] != ""
+	})
+	if err != nil {
+		log.Warn("[NotificationAction] could not retire decision notifications", "item", itemID, "err", err)
+	}
+}
+
+func (r HistoryResolver) ResolveQuestionNotifications(questionID string) {
+	if r.store == nil {
+		return
+	}
+	if _, err := r.store.ResolveQuestion(questionID); err != nil {
+		log.Warn("[NotificationAction] could not retire question notifications", "question", questionID, "err", err)
+	}
+}
+
+func (r HistoryResolver) ResolveApprovalNotifications(approvalID string) {
+	if r.store == nil {
+		return
+	}
+	if _, err := r.store.ResolveApproval(approvalID); err != nil {
+		log.Warn("[NotificationAction] could not retire approval notifications", "approval", approvalID, "err", err)
+	}
+}
+
+// ReopenQuestionNotifications puts a question's cards back in Needs you.
+func (r HistoryResolver) ReopenQuestionNotifications(questionID string) {
+	if r.store == nil {
+		return
+	}
+	if _, err := r.store.ReopenQuestion(questionID); err != nil {
+		log.Warn("[NotificationAction] could not reopen question notifications", "question", questionID, "err", err)
+	}
+}
+
+// ResolveGuidanceNotifications retires the cards of a mirrored question whose dialog was resolved elsewhere.
+func (r HistoryResolver) ResolveGuidanceNotifications(guidanceID string) {
+	if r.store == nil {
+		return
+	}
+	if _, err := r.store.ResolveGuidance(guidanceID); err != nil {
+		log.Warn("[NotificationAction] could not retire guidance notifications", "guidance", guidanceID, "err", err)
+	}
+}

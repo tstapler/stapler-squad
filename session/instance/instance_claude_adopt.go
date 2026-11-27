@@ -27,6 +27,10 @@ func (i *Instance) detectAdoptableByPath(detector *HistoryFileDetector, path str
 		notBefore = snap.CreatedAt
 	}
 
+	// A worktree is this session's own directory, so its newest conversation is its own.
+	// Any other directory can hold several sessions' conversations: never guess there.
+	exclusiveDir := i.gitManager.HasWorktree()
+	var eligible *HistoryFileInfo
 	for idx := range candidates {
 		c := &candidates[idx]
 		if !clearedAt.IsZero() {
@@ -53,7 +57,15 @@ func (i *Instance) detectAdoptableByPath(detector *HistoryFileDetector, path str
 				continue
 			}
 		}
-		return c, nil
+		if exclusiveDir {
+			return c, nil
+		}
+		if eligible != nil {
+			log.Warn("tryextractconversationuuid: several conversations could belong to this session in a shared directory, not guessing",
+				"session", i.Title, "path", path)
+			return nil, nil //nolint:nilnil
+		}
+		eligible = c
 	}
-	return nil, nil //nolint:nilnil
+	return eligible, nil
 }

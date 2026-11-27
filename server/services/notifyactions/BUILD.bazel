@@ -1,0 +1,92 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "notifyactions",
+    srcs = [
+        "deps.go",
+        "notification_action_adapters.go",
+        "notification_action_backlog.go",
+        "notification_action_cache.go",
+        "notification_action_lookups.go",
+        "notification_action_metrics.go",
+        "notification_action_service.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/notifyactions",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/notifications",
+        "//server/services/access",
+        "//server/services/approvalkit",
+        "//server/services/approvals",
+        "//server/services/auditkit",
+        "//server/services/featureflags",
+        "//server/services/flagsvc",
+        "//server/services/guidance",
+        "//server/services/notify",
+        "//server/services/questionkit",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+        "//telemetry",
+        "@com_connectrpc_connect//:connect",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":notifyactions",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "notifyactions_test",
+    srcs = [
+        "deps_test.go",
+        "feature_flags_reader_threading_test.go",
+        "helpers_test.go",
+        "notification_action_backlog_test.go",
+        "notification_action_group_test.go",
+        "notification_action_metrics_test.go",
+        "notification_action_service_test.go",
+        "notification_action_tier_test.go",
+    ],
+    embed = [":notifyactions"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//server/analytics",
+        "//server/middleware",
+        "//server/notifications",
+        "//server/services/access",
+        "//server/services/approvalkit",
+        "//server/services/approvals",
+        "//server/services/auditkit",
+        "//server/services/featureflags",
+        "//server/services/flagsvc",
+        "//server/services/guidance",
+        "//server/services/internal/svctest",
+        "//server/services/notify",
+        "//server/services/questionkit",
+        "//session/instance",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

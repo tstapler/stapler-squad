@@ -131,7 +131,7 @@ var bypassInventory = []bypassSite{
 	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.OverrideVerdict", 1, "GatedTransition as operator_override_verdict (Story 1.5.5a)"),
 
 	// Gate-routed in Story 1.5.5 (operator and agent writers).
-	gateRouted("server/services/notification_action_backlog.go", "backlogDecider.transition", 1, "forwards the operator's inline click to the transition handler as operator_notification_action"),
+	gateRouted("server/services/notifyactions/notification_action_backlog.go", "backlogDecider.transition", 1, "forwards the operator's inline click to the transition handler as operator_notification_action"),
 	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.SubmitManualReview", 1, "GatedTransition as operator_submit_manual_review (Story 1.5.5a)"),
 	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.ArchiveBacklogItem", 1, "GatedArchive as operator_archive_rpc (Story 1.5.5b)"),
 	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.UnarchiveBacklogItem", 1, "GatedUnarchive as operator_unarchive_rpc (Story 1.5.5b)"),
@@ -144,7 +144,7 @@ var bypassInventory = []bypassSite{
 
 	// Gated, Story 1.5.6 (system writers in server/services, the two operator triage writers,
 	// the rollbacks and the debug handler).
-	gated("server/services/autonomous_orchestration_service.go", "AutonomousOrchestrationService.advanceItemOnDriverComplete", 1, "GatedTransition as autonomous_complete"),
+	gated("server/services/autonomysvc/autonomous_orchestration_service.go", "AutonomousOrchestrationService.advanceItemOnDriverComplete", 1, "GatedTransition as autonomous_complete"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.TransitionWithGuard", 1, "GatedTransition; caller derived from target and actor (queue, claim, Jules dispatch)"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.AutoReopenAfterFailedReview", 1, "GatedTransition as auto_reopen_after_failed_review"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.rollbackFailedReopen", 1, "gate.Rollback (exempt, counted)"),
@@ -158,8 +158,8 @@ var bypassInventory = []bypassSite{
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.forceResetItem", 1, "GatedTransition as operator_force_reset (Unconditional)"),
 	gated("server/services/backlogsvc/backlog_service_trigger_triage.go", "BacklogService.TriggerTriage", 2, "GatedTransition as operator_trigger_triage and triage_complete"),
 	gated("server/services/backlogsvc/backlog_service_sync.go", "BacklogService.AttachSessionToItem", 1, "GatedTransition as attach_session_to_item (Unconditional)"),
-	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleTransition", 1, "gate.DebugForce (exempt class debug, counted)"),
-	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleArchive", 1, "gate.DebugForce (exempt class debug, counted)"),
+	gated("server/services/backlogmisc/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleTransition", 1, "gate.DebugForce (exempt class debug, counted)"),
+	gated("server/services/backlogmisc/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleArchive", 1, "gate.DebugForce (exempt class debug, counted)"),
 
 	// Gated, Story 1.5.7 (system writers in session).
 	gated("session/backlog_remediation.go", "Storage.redriveOne", 1, "GatedTransition as the recorded denied caller: autonomous_complete, maybe_trigger_triage or triage_complete (Story 1.5.8e)"),
@@ -478,7 +478,7 @@ func anyDeclaresTarget(specs []domain.TransitionCallerSpec, to string) bool {
 // The autonomous_complete registry entry pins the set {ready}: toStatus is
 // assigned exactly once in onAutonomousDriverComplete, to BacklogStatusReady.
 func TestWorkflowBypassInventory_AutonomousCompleteTargetSetIsExactlyReady(t *testing.T) {
-	const file = "server/services/autonomous_orchestration_service.go"
+	const file = "server/services/autonomysvc/autonomous_orchestration_service.go"
 	var assigned []string
 	walkModuleFuncs(t, moduleRoot(t), func(rel string, fd *ast.FuncDecl) {
 		if rel != file {
@@ -556,9 +556,10 @@ var createInventory = []createSite{
 	{"server/mcp/tools_backlog_import_tracker.go", "backlogHandlers.importTrackerIssue", 1, classCreate, idleCreateReason},
 	{"server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.CreateBacklogItem", 1, classCreate, idleCreateReason + " (through its data literal)"},
 	{"server/services/backlogsvc/backlog_service_sync.go", "BacklogService.ImportGitHubIssue", 1, classCreate, idleCreateReason},
+	{"server/services/backlogsvc/backlog_service_epic.go", "BacklogService.createIntegrationFixChild", 1, classCreate, idleCreateReason + " (data literal sets no Status)"},
 	{"session/backlog_sync.go", "SyncLoop.SyncOne", 1, classCreateForwarder, "item comes from the source plugin's MapToBacklogItem (not resolvable here): the GitHub plugins set idea and the Jira and Linear plugins set no status"},
 
-	{"server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleCreate", 1, classCreateDebug, debugCreateReason},
+	{"server/services/backlogmisc/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleCreate", 1, classCreateDebug, debugCreateReason},
 	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.createSimpleBacklogItem", 1, classCreateDebug, debugCreateReason},
 	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeed", 1, classCreateDebug, debugCreateReason},
 	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedQueued", 1, classCreateDebug, debugCreateReason},

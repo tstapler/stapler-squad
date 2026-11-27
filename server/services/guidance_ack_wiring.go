@@ -6,7 +6,11 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
+	"github.com/tstapler/stapler-squad/server/services/qareply"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -21,15 +25,13 @@ var errAckLeaseBusy = errors.New("terminal write lease is busy")
 
 // wireGuidanceAcks builds the detector over storage and starts its loop; nil
 // storage leaves keystroke answers untracked.
-func (s *SessionService) wireGuidanceAcks(storage *session.Storage) *GuidanceAckDetector {
+func (s *SessionService) wireGuidanceAcks(storage *session.Storage) *guidance.GuidanceAckDetector {
 	if storage == nil {
 		return nil
 	}
 	s.stopGuidanceAcks()
-	d := NewGuidanceAckDetector(storage, s.ackCapture, func(uuid string) bool {
-		return s.answerSessions()(uuid).phase != phaseLive
-	}, nil)
-	d.SetNotes(historyItemResolver{store: s.GetNotificationStore()})
+	d := guidance.NewGuidanceAckDetector(storage, s.ackCapture, s.replyService().SessionEnded, nil)
+	d.SetNotes(notifyactions.NewNotificationResolver(s.GetNotificationStore()))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	s.ackCancel, s.ackDone, s.guidanceAcks = cancel, done, d
@@ -50,7 +52,7 @@ func (s *SessionService) stopGuidanceAcks() {
 }
 
 // GuidanceAcks is the detector, or nil before notification actions are wired.
-func (s *SessionService) GuidanceAcks() *GuidanceAckDetector { return s.guidanceAcks }
+func (s *SessionService) GuidanceAcks() *guidance.GuidanceAckDetector { return s.guidanceAcks }
 
 func (s *SessionService) ackCapture(_ context.Context, sessionUUID string, underLease bool) (string, error) {
 	inst := s.findInstance(sessionUUID)
@@ -69,15 +71,21 @@ func (s *SessionService) ackCapture(_ context.Context, sessionUUID string, under
 
 // answerRouterDeps maps the wiring inputs onto the router's. A nil storage or
 // detector stays a nil interface so the router sees "not wired".
-func answerRouterDeps(w NotificationActionWiring, acks *GuidanceAckDetector) AnswerRouterDeps {
-	d := AnswerRouterDeps{Mirror: w.Mirror}
+func answerRouterDeps(w NotificationActionWiring, acks *guidance.GuidanceAckDetector) qareply.AnswerRouterDeps {
+	d := qareply.AnswerRouterDeps{Mirror: w.Mirror}
 	if w.Storage != nil {
 		d.Rows = w.Storage
 	}
-	if acks != nil {
-		d.Acks = acks
-	}
+	d.Acks = ackSink(acks)
 	return d
+}
+
+// ackSink keeps a nil detector a nil interface, never a boxed nil pointer.
+func ackSink(acks *guidance.GuidanceAckDetector) questionkit.DeliverySink {
+	if acks == nil {
+		return nil
+	}
+	return acks
 }
 
 // ObservePostToolUse routes a PostToolUse receipt to the detector. sessionID is
@@ -86,7 +94,7 @@ func (s *SessionService) ObservePostToolUse(ctx context.Context, sessionID, tool
 	if toolName == questionkit.ScheduleWakeupTool {
 		s.observeScheduleWakeup(ctx, sessionID)
 	}
-	if toolName != askUserQuestion {
+	if toolName != guidance.AskUserQuestionTool {
 		return
 	}
 	inst := s.findInstance(sessionID)
@@ -119,20 +127,17 @@ func (s *SessionService) observeScheduleWakeup(ctx context.Context, sessionID st
 
 // wireHookReply installs the pre-answered-question resolver. It stays inert
 // while stage:hook_reply is closed (spikeS1HookReplyPassed).
-func (s *SessionService) wireHookReply(storage *session.Storage, acks *GuidanceAckDetector) {
+func (s *SessionService) wireHookReply(storage *session.Storage, acks *guidance.GuidanceAckDetector) {
 	if storage == nil {
 		return
 	}
-	r := &hookReplyResolver{rows: storage, flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: s.flagReader()}}
-	if acks != nil {
-		r.acks = acks
-	}
-	s.hookReply.Store(r)
+	flags := notifyactions.NewConfigFlags(flagsvc.CompiledFlagEvidence, s.flagReader())
+	s.hookReply.Store(qareply.NewHookReplyResolver(storage, flags, ackSink(acks)))
 }
 
 // HookReplier is the AskUserQuestion hook answerer for the hook IPC server. It
 // reads the resolver at call time, so it may be installed before actions are wired.
-func (s *SessionService) HookReplier() HookReplier { return lazyHookReplier{s} }
+func (s *SessionService) HookReplier() approvals.HookReplier { return lazyHookReplier{s} }
 
 type lazyHookReplier struct{ s *SessionService }
 

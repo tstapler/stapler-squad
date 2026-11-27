@@ -63,6 +63,20 @@ func (c *FakeClock) Pending() int {
 	return n
 }
 
+// PendingWithin counts the armed timers due within d, telling a short retry timer apart from a
+// longer one that is still armed.
+func (c *FakeClock) PendingWithin(d time.Duration) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, t := range c.timers {
+		if !t.done && !t.deadline.After(c.now.Add(d)) {
+			n++
+		}
+	}
+	return n
+}
+
 // Advance moves time forward by d, running due callbacks in deadline order.
 // Callbacks run without the clock's lock held, so they may arm or stop timers.
 func (c *FakeClock) Advance(d time.Duration) {

@@ -5,6 +5,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { AppShellPage } from './pages/AppShellPage';
+import { recordTexts } from './pages/recordTexts';
 
 const HISTORY_TITLE = 'History - Stapler Squad';
 const SETTINGS_TITLE = 'Settings - Stapler Squad';
@@ -20,14 +21,15 @@ test.describe('route announcements and nav state', () => {
     const shell = new AppShellPage(page);
     await shell.goto('/review-queue');
     await expect(shell.drawerNav).toBeVisible();
+    // The RouteAnnouncer (role=status, ADR-001) clears its text after ~1s, so address it by
+    // test id and record what it says.
+    const announcer = page.getByTestId('route-announcer');
+    const announced = await recordTexts(announcer);
 
     await shell.navLink(/history/i).click({ force: true });
     await expect(page).toHaveTitle(HISTORY_TITLE);
 
-    // The RouteAnnouncer (role=status, ADR-001) clears its text after ~1s, so address it by
-    // test id rather than by the text it carries.
-    const announcer = page.getByTestId('route-announcer');
-    await expect(announcer).toHaveText(HISTORY_TITLE);
+    await expect.poll(announced).toContain(HISTORY_TITLE);
     await expect(announcer).toHaveAttribute('role', 'status');
   });
 
@@ -38,23 +40,6 @@ test.describe('route announcements and nav state', () => {
     await expect(shell.navLink(/history/i)).toHaveAttribute('aria-current', 'page');
   });
 });
-
-/** Records every announcer-region text change, keyed by its own clear-then-set sequencing. */
-async function watchAnnouncer(page: import('@playwright/test').Page) {
-  await page.evaluate(() => {
-    (window as unknown as { __ann: string[] }).__ann = [];
-    const el = document.querySelector('[data-testid=route-announcer]')!;
-    new MutationObserver(() => (window as unknown as { __ann: string[] }).__ann.push(el.textContent ?? '')).observe(el, {
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
-  });
-}
-
-async function announcerLog(page: import('@playwright/test').Page): Promise<string[]> {
-  return page.evaluate(() => (window as unknown as { __ann: string[] }).__ann);
-}
 
 test.describe('route focus and announcements', () => {
   test.beforeEach(async ({ page }) => {
@@ -80,12 +65,12 @@ test.describe('route focus and announcements', () => {
     const shell = new AppShellPage(page);
     await shell.goto('/settings');
     await expect(shell.drawerNav).toBeVisible();
-    await watchAnnouncer(page);
+    const announced = await recordTexts(page.getByTestId('route-announcer'));
 
     await shell.clientNavigate('/settings/pipeline-modes');
-    await expect.poll(() => announcerLog(page)).toEqual([SETTINGS_TITLE, '']);
+    await expect.poll(announced).toEqual([SETTINGS_TITLE, '']);
     await shell.clientNavigate('/settings/remotes');
-    await expect.poll(() => announcerLog(page)).toEqual([SETTINGS_TITLE, '', SETTINGS_TITLE, '']);
+    await expect.poll(announced).toEqual([SETTINGS_TITLE, '', SETTINGS_TITLE, '']);
   });
 
   test('a page that autofocuses its own input (the omnibar) keeps that focus', async ({ page }) => {
@@ -104,13 +89,14 @@ test.describe('route focus and announcements', () => {
     const shell = new AppShellPage(page);
     await shell.goto('/logs');
     await expect(shell.drawerNav).toBeVisible();
+    const announced = await recordTexts(page.getByTestId('route-announcer'));
     await shell.navLink(/history/i).click({ force: true });
-    await expect(page).toHaveTitle(HISTORY_TITLE);
-
-    await watchAnnouncer(page);
+    // The title changes before the announcer has set and cleared; drain that before recording Back.
+    await expect.poll(announced).toEqual([HISTORY_TITLE, '']);
+    const announcedAfterBack = await recordTexts(page.getByTestId('route-announcer'));
     await page.goBack();
     await expect(page).toHaveTitle(LOGS_TITLE);
-    await expect.poll(() => announcerLog(page)).toEqual([LOGS_TITLE, '']);
+    await expect.poll(announcedAfterBack).toEqual([LOGS_TITLE, '']);
     await expect
       .poll(() => page.evaluate(() => document.activeElement === document.getElementById('main-content')))
       .toBe(true);
@@ -120,11 +106,11 @@ test.describe('route focus and announcements', () => {
     const shell = new AppShellPage(page);
     await shell.goto('/history');
     await expect(shell.drawerNav).toBeVisible();
-    await watchAnnouncer(page);
+    const announced = await recordTexts(page.getByTestId('route-announcer'));
 
     await shell.clientNavigate('/config');
     await expect(page).toHaveURL(/\/settings\?tab=config-files/);
-    await expect.poll(() => announcerLog(page)).toEqual([SETTINGS_TITLE, '']);
+    await expect.poll(announced).toEqual([SETTINGS_TITLE, '']);
   });
 
   test('/history: duplicate main#main-content nodes are tolerated, but the first is focused', async ({ page }) => {

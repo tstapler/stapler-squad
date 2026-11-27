@@ -49,7 +49,7 @@ const (
 )
 
 // AllowedFeatureKeys is the set of feature keys accepted by the MCP-exposed RunHeadlessCall path
-// (server/services/headless_service.go). FeatureKeyTriage is intentionally excluded — triage calls
+// (server/services/backlogmisc/headless_service.go). FeatureKeyTriage is intentionally excluded — triage calls
 // go through BacklogService.TriggerTriage → Pool.CallBlocking directly, bypassing the
 // MCP gate. This prevents triage from being triggered via the public headless API.
 var AllowedFeatureKeys = map[FeatureKey]bool{

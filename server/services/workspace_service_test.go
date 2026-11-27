@@ -410,7 +410,7 @@ func TestWorkspaceService_GetVCSStatus_WorktreeMode_PopulatesCommitsAndDiffStat(
 	dir, baseSHA, headSHA := svctest.NewVCSStatusTestRepo(t)
 
 	// repoPath == worktreePath here, matching the pattern already used by
-	// create_pull_request_test.go's newDraftPRTestRepo call sites — the test
+	// create_pull_request_test.go's NewDraftPRTestRepo call sites — the test
 	// only needs a valid git repo at the effective path, not an actual
 	// `git worktree add` checkout.
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "wt-mode-session", "feature/x", baseSHA)

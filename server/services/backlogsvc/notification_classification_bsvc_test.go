@@ -10,8 +10,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -28,7 +28,7 @@ import (
 //     failed, Bounce cap exhausted, Review session ended without a verdict, Review item
 //     needs attention, Work session may be stuck, Triage may be stuck).
 //   - server/server_test.go for Fork Pressure / Tmux Server Recovered.
-//   - stale_session_notifier_test.go / memory_pressure_notifier_test.go for the other two
+//   - server/services/healthnotify (stale_session / memory_pressure tests) for the other two
 //     rows (Session went stale, Memory usage near limit), asserted alongside their
 //     existing fire/re-arm coverage rather than duplicated here.
 func TestNotificationPushGateClassification(t *testing.T) {
@@ -38,11 +38,11 @@ func TestNotificationPushGateClassification(t *testing.T) {
 		defer cancel()
 		ch, _ := bus.Subscribe(ctx)
 
-		h := services.NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
+		h := approvals.NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 		h.BroadcastQuestionNotification("sess-1", classifier.PermissionRequestPayload{
 			ToolName:  "AskUserQuestion",
 			ToolInput: map[string]interface{}{"prompt": "Which approach?"},
-		}, services.QuestionAttribution{})
+		}, approvals.QuestionAttribution{})
 
 		ev := svctest.RequireOneNotification(t, ch)
 		assert.Equal(t, "Claude has a question", ev.NotificationTitle)
@@ -56,7 +56,7 @@ func TestNotificationPushGateClassification(t *testing.T) {
 		defer cancel()
 		ch, _ := bus.Subscribe(ctx)
 
-		h := services.NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
+		h := approvals.NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 		h.BroadcastApprovalNotification("sess-1", &approvalkit.PendingApproval{
 			ID:        "approval-1",
 			SessionID: "sess-1",

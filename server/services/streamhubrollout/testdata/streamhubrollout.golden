@@ -1,0 +1,89 @@
+key("a","")="staplersquad_a"
+key("my session.v2:x","")="staplersquad_mysession_v2_x"
+key("a","custom_")="custom_a"
+key("","")="staplersquad_"
+key("staplersquad_a","")="staplersquad_staplersquad_a"
+path(custom)="pfx_customone" path(plain)="staplersquad_plain"
+== finder wired=false
+get: bytes=
+  persisted overrides=[] global=false/false rehearsed=false
+session "custom one" true: bytes=1a1a0a16737461706c657273717561645f637573746f6d6f6e651001
+  persisted overrides=[staplersquad_customone=true] global=false/false rehearsed=false
+session "plain" true: bytes=1a1a0a16737461706c657273717561645f637573746f6d6f6e6510011a160a12737461706c657273717561645f706c61696e1001
+  persisted overrides=[staplersquad_customone=true staplersquad_plain=true] global=false/false rehearsed=false
+session "unknown" true: bytes=1a1a0a16737461706c657273717561645f637573746f6d6f6e6510011a160a12737461706c657273717561645f706c61696e10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[staplersquad_customone=true staplersquad_plain=true staplersquad_unknown=true] global=false/false rehearsed=false
+session "" true: bytes=1a110a0d737461706c657273717561645f10011a1a0a16737461706c657273717561645f637573746f6d6f6e6510011a160a12737461706c657273717561645f706c61696e10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[staplersquad_=true staplersquad_customone=true staplersquad_plain=true staplersquad_unknown=true] global=false/false rehearsed=false
+session "custom one" false: bytes=1a110a0d737461706c657273717561645f10011a180a16737461706c657273717561645f637573746f6d6f6e651a160a12737461706c657273717561645f706c61696e10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[staplersquad_=true staplersquad_customone=false staplersquad_plain=true staplersquad_unknown=true] global=false/false rehearsed=false
+session "custom one" nil: bytes=1a110a0d737461706c657273717561645f10011a160a12737461706c657273717561645f706c61696e10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[staplersquad_=true staplersquad_plain=true staplersquad_unknown=true] global=false/false rehearsed=false
+session "plain" nil: bytes=1a110a0d737461706c657273717561645f10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[staplersquad_=true staplersquad_unknown=true] global=false/false rehearsed=false
+session "unknown" nil: bytes=1a110a0d737461706c657273717561645f1001
+  persisted overrides=[staplersquad_=true] global=false/false rehearsed=false
+session "" nil: bytes=
+  persisted overrides=[] global=false/false rehearsed=false
+session "never set" nil: bytes=
+  persisted overrides=[] global=false/false rehearsed=false
+global true: bytes=2001
+  persisted overrides=[] global=true/true rehearsed=false
+global false: bytes=2000
+  persisted overrides=[] global=false/true rehearsed=false
+get with global: bytes=2000
+  persisted overrides=[] global=false/true rehearsed=false
+global nil: bytes=
+  persisted overrides=[] global=false/false rehearsed=false
+rehearsal: bytes=12020801
+  persisted overrides=[] global=false/false rehearsed=true
+get after rehearsal: bytes=12020801
+  persisted overrides=[] global=false/false rehearsed=true
+== finder wired=true
+get: bytes=12020801
+  persisted overrides=[] global=false/false rehearsed=true
+session "custom one" true: bytes=120208011a110a0d7066785f637573746f6d6f6e651001
+  persisted overrides=[pfx_customone=true] global=false/false rehearsed=true
+session "plain" true: bytes=120208011a110a0d7066785f637573746f6d6f6e6510011a160a12737461706c657273717561645f706c61696e1001
+  persisted overrides=[pfx_customone=true staplersquad_plain=true] global=false/false rehearsed=true
+session "unknown" true: bytes=120208011a110a0d7066785f637573746f6d6f6e6510011a160a12737461706c657273717561645f706c61696e10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[pfx_customone=true staplersquad_plain=true staplersquad_unknown=true] global=false/false rehearsed=true
+session "" true: bytes=120208011a110a0d7066785f637573746f6d6f6e6510011a110a0d737461706c657273717561645f10011a160a12737461706c657273717561645f706c61696e10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[pfx_customone=true staplersquad_=true staplersquad_plain=true staplersquad_unknown=true] global=false/false rehearsed=true
+session "custom one" false: bytes=120208011a0f0a0d7066785f637573746f6d6f6e651a110a0d737461706c657273717561645f10011a160a12737461706c657273717561645f706c61696e10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[pfx_customone=false staplersquad_=true staplersquad_plain=true staplersquad_unknown=true] global=false/false rehearsed=true
+session "custom one" nil: bytes=120208011a110a0d737461706c657273717561645f10011a160a12737461706c657273717561645f706c61696e10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[staplersquad_=true staplersquad_plain=true staplersquad_unknown=true] global=false/false rehearsed=true
+session "plain" nil: bytes=120208011a110a0d737461706c657273717561645f10011a180a14737461706c657273717561645f756e6b6e6f776e1001
+  persisted overrides=[staplersquad_=true staplersquad_unknown=true] global=false/false rehearsed=true
+session "unknown" nil: bytes=120208011a110a0d737461706c657273717561645f1001
+  persisted overrides=[staplersquad_=true] global=false/false rehearsed=true
+session "" nil: bytes=12020801
+  persisted overrides=[] global=false/false rehearsed=true
+session "never set" nil: bytes=12020801
+  persisted overrides=[] global=false/false rehearsed=true
+global true: bytes=120208012001
+  persisted overrides=[] global=true/true rehearsed=true
+global false: bytes=120208012000
+  persisted overrides=[] global=false/true rehearsed=true
+get with global: bytes=120208012000
+  persisted overrides=[] global=false/true rehearsed=true
+global nil: bytes=12020801
+  persisted overrides=[] global=false/false rehearsed=true
+rehearsal: bytes=12020801
+  persisted overrides=[] global=false/false rehearsed=true
+get after rehearsal: bytes=12020801
+  persisted overrides=[] global=false/false rehearsed=true
+== unwritable config
+get: bytes=
+  persisted overrides=[] global=false/false rehearsed=false
+rehearsal: code=internal err="internal: failed to rename config: rename <dir>/config.json.tmp-N <dir>/config.json: file exists"
+  persisted overrides=[] global=false/false rehearsed=false
+session set: code=internal err="internal: failed to rename config: rename <dir>/config.json.tmp-N <dir>/config.json: file exists"
+  persisted overrides=[] global=false/false rehearsed=false
+session clear: code=internal err="internal: failed to rename config: rename <dir>/config.json.tmp-N <dir>/config.json: file exists"
+  persisted overrides=[] global=false/false rehearsed=false
+global set: code=internal err="internal: failed to rename config: rename <dir>/config.json.tmp-N <dir>/config.json: file exists"
+  persisted overrides=[] global=false/false rehearsed=false
+global clear: code=internal err="internal: failed to rename config: rename <dir>/config.json.tmp-N <dir>/config.json: file exists"
+  persisted overrides=[] global=false/false rehearsed=false

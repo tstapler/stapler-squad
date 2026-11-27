@@ -75,21 +75,15 @@ func (r storageLinkResolver) ResolveLiveReviewLink(ctx context.Context, inst *in
 	return BacklogReviewLink{inst: inst, itemID: row.BacklogItemID}, true, nil
 }
 
-// steerRequestFacts are the per-request facts an audit line records, carried
-// to the writer through the context.
-type steerRequestFacts struct {
-	refusal   access.LocalWriteRefusal
-	userAgent string
-}
-
+// steerFactsKey carries the audit facts to the writer through the context.
 type steerFactsKey struct{}
 
-func withSteerRequestFacts(ctx context.Context, f steerRequestFacts) context.Context {
+func withSteerRequestFacts(ctx context.Context, f access.SteerRequestFacts) context.Context {
 	return context.WithValue(ctx, steerFactsKey{}, f)
 }
 
-func steerRequestFactsFrom(ctx context.Context) steerRequestFacts {
-	f, _ := ctx.Value(steerFactsKey{}).(steerRequestFacts)
+func steerRequestFactsFrom(ctx context.Context) access.SteerRequestFacts {
+	f, _ := ctx.Value(steerFactsKey{}).(access.SteerRequestFacts)
 	return f
 }
 
@@ -165,9 +159,9 @@ func (s *SessionService) steerAuditLine(ctx context.Context, inst *instance.Inst
 		ChangeID:    uuid.NewString(),
 		SessionUUID: inst.GetStableID(), SessionTitle: snap.Title,
 		MessageLen: len(msg), MessageSHA256: hex.EncodeToString(sum[:]), MessagePreview: steerPreview(msg),
-		Listener: f.refusal.Listener, PeerAddr: f.refusal.Peer, Host: f.refusal.Host, Origin: f.refusal.Origin,
-		UserAgent: f.userAgent, AuthMode: f.refusal.AuthMode,
-		PeerLoopback: flagsvc.BoolRef(f.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(f.refusal.Proxied),
+		Listener: f.Refusal.Listener, PeerAddr: f.Refusal.Peer, Host: f.Refusal.Host, Origin: f.Refusal.Origin,
+		UserAgent: f.UserAgent, AuthMode: f.Refusal.AuthMode,
+		PeerLoopback: flagsvc.BoolRef(f.Refusal.PeerLoopback), Proxied: flagsvc.BoolRef(f.Refusal.Proxied),
 	}
 }
 

@@ -13,9 +13,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
+	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/rules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -43,7 +48,7 @@ func (s *SessionService) GetClassifier() *classifier.RuleBasedClassifier {
 	if s.rulesSvc == nil {
 		return nil
 	}
-	return s.rulesSvc.classifier
+	return s.rulesSvc.Classifier()
 }
 
 // GetTaggingEngine returns the live TaggingEngine (the same instance taggingRulesSvc
@@ -55,11 +60,20 @@ func (s *SessionService) GetTaggingEngine() *classifier.TaggingEngine {
 }
 
 // GetAnalyticsStore returns the analytics store for wiring up the ApprovalHandler.
-func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
+func (s *SessionService) GetAnalyticsStore() *rules.AnalyticsStore {
 	if s.rulesSvc == nil {
 		return nil
 	}
-	return s.rulesSvc.analyticsStore
+	return s.rulesSvc.AnalyticsStore()
+}
+
+// ClassificationRecorder is GetAnalyticsStore as the hook paths consume it: a
+// nil interface, not a typed nil pointer, when there is no store.
+func (s *SessionService) ClassificationRecorder() approvals.ClassificationRecorder {
+	if a := s.GetAnalyticsStore(); a != nil {
+		return a
+	}
+	return nil
 }
 
 // GetClaudeSettingsWatcher returns the claude-settings file watcher for starting/stopping it
@@ -68,7 +82,7 @@ func (s *SessionService) GetClaudeSettingsWatcher() *claudesettings.ClaudeSettin
 	if s.rulesSvc == nil {
 		return nil
 	}
-	return s.rulesSvc.claudeSettingsWatcher
+	return s.rulesSvc.ClaudeSettingsWatcher()
 }
 
 // Shutdown stops background goroutines owned by SessionService (currently the
@@ -144,13 +158,6 @@ func (s *SessionService) SetEscapeAggregateReader(r *escapedb.Reader) {
 	s.escapeAggregates = r
 }
 
-func (s *SessionService) escapeAggregateReader() *escapedb.Reader {
-	if s.escapeAggregates != nil {
-		return s.escapeAggregates
-	}
-	return escapedb.NewReader(s.escapeEventsClient, nil, escapedb.RollupTiers{}, nil)
-}
-
 // GetEventBus returns the event bus instance for wiring up reactive components.
 func (s *SessionService) GetEventBus() *events.EventBus {
 	return s.eventBus
@@ -198,7 +205,7 @@ func (s *SessionService) SetRegistry(r *registry.Registry) {
 // never on refcount++ hits, never on Register (CreateSession wires callbacks explicitly).
 func (s *SessionService) WireInstanceCallbacks(inst *instance.LiveInstance) {
 	inst.SetReviewQueue(s.reviewQueueSvc.GetQueue())
-	inst.SetNotifier(&EventBusNotifier{Bus: s.eventBus})
+	inst.SetNotifier(&notify.EventBusNotifier{Bus: s.eventBus})
 	if s.statusManager != nil {
 		inst.SetStatusManager(s.statusManager)
 	}
@@ -240,13 +247,13 @@ func (s *SessionService) SetSessionSummaryGenerator(g *summaries.SessionSummaryG
 
 // SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
 // service so that completed work sessions immediately kick off headless review.
-func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
+func (s *SessionService) SetReviewGateTrigger(t autonomysvc.ReviewGateTrigger) {
 	s.AutonomousSvc.SetReviewGateTrigger(t)
 }
 
 // StaleWorkInspector exposes the autonomous service's inspect-and-nudge step
 // for BacklogService.SetStaleWorkInspector.
-func (s *SessionService) StaleWorkInspector() StaleWorkInspector { return s.AutonomousSvc }
+func (s *SessionService) StaleWorkInspector() autonomysvc.StaleWorkInspector { return s.AutonomousSvc }
 
 // DeadPaneRecorder is the health checker's sink for dead-pane stop snapshots.
 func (s *SessionService) DeadPaneRecorder() autonomous.DeadPaneRecorder {
@@ -256,7 +263,7 @@ func (s *SessionService) DeadPaneRecorder() autonomous.DeadPaneRecorder {
 // SetAutonomousStuckRespawner wires the respawner into the autonomous orchestration
 // service so a turn-cap-stopped work session gets a fresh turn budget instead of
 // being forced into review.
-func (s *SessionService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
+func (s *SessionService) SetAutonomousStuckRespawner(r autonomysvc.AutonomousStuckRespawner) {
 	s.AutonomousSvc.SetAutonomousStuckRespawner(r)
 }
 
@@ -512,19 +519,19 @@ func (s *SessionService) GetNotificationStore() *notifications.NotificationHisto
 }
 
 // SetConfigService wires the ConfigService for delegating config RPCs.
-func (s *SessionService) SetConfigService(svc *ConfigService) {
+func (s *SessionService) SetConfigService(svc *claudeconfig.ConfigService) {
 	s.configSvc = svc
 }
 
 // SetSlackNotifier rewires slackConfigSvc onto the given SlackNotifier
 // instance — intended for server/dependencies.go to call with the SAME
-// *services.SlackNotifier wired into ReactiveQueueManager/ApprovalHandler,
+// *notify.SlackNotifier wired into ReactiveQueueManager/ApprovalHandler,
 // so GetSlackConfig's last_delivery reflects real production sends from
 // those trigger points, not only sends made via TestSlackWebhook. Optional:
 // if never called, slackConfigSvc keeps the private SlackNotifier instance
 // NewSessionService constructed for it.
-func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
-	s.slackConfigSvc = NewSlackConfigService(n)
+func (s *SessionService) SetSlackNotifier(n *notify.SlackNotifier) {
+	s.slackConfigSvc = notify.NewSlackConfigService(n)
 }
 
 // SlackNotifierForTest returns the SlackNotifier instance currently wired
@@ -532,8 +539,8 @@ func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
 // tests (server package) can assert pointer identity against the other
 // consumers (ReactiveQueueManager, ApprovalHandler) without restructuring
 // production code — not intended for any non-test caller.
-func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
-	return s.slackConfigSvc.slackNotifier
+func (s *SessionService) SlackNotifierForTest() *notify.SlackNotifier {
+	return s.slackConfigSvc.SlackNotifier
 }
 
 // SetJulesConfigDependencies rewires julesConfigSvc onto the real Jules

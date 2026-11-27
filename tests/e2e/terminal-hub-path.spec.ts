@@ -58,7 +58,7 @@ test.describe('terminal hub-owned path (PathHubOwned)', () => {
     const opened = await openTerminalView(page);
     test.skip(!opened, 'No session available in test server');
 
-    // Same bounded-wait threshold terminal-resize.spec.ts / terminal-flickering.spec.ts
+    // Same bounded-wait threshold terminal-resize.spec.ts
     // apply to the legacy path — establishing the hub-owned path's own verified parity
     // rather than an inferred non-regression on the untouched legacy branch.
     await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });

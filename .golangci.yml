@@ -507,6 +507,264 @@ linters:
           allow:
             - $gostd
             - github.com/tstapler/stapler-squad/config
+        # server/services/approvals decides permission requests and injects the hooks that ask for them; it never
+        # imports the services hub (backlogsvc, the hub and the composition root import it).
+        isolate_approvals:
+          list-mode: strict
+          files:
+            - "**/services/approvals/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - golang.org/x/sync/singleflight
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/executor/safeexec
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/internal/hookipc
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/classifier
+            - github.com/tstapler/stapler-squad/pkg/events
+            - github.com/tstapler/stapler-squad/pkg/localtoken
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/server/notifications
+            - github.com/tstapler/stapler-squad/server/services/approvalkit
+            - github.com/tstapler/stapler-squad/server/services/domainage
+            - github.com/tstapler/stapler-squad/server/services/flagsvc
+            - github.com/tstapler/stapler-squad/server/services/fsops
+            - github.com/tstapler/stapler-squad/server/services/notify
+            - github.com/tstapler/stapler-squad/server/services/piextension
+            - github.com/tstapler/stapler-squad/server/services/questionkit
+            - github.com/tstapler/stapler-squad/server/services/secretscan
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/headless
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/panereply
+            - github.com/tstapler/stapler-squad/session/prpoller
+            - github.com/tstapler/stapler-squad/session/queue
+            - github.com/tstapler/stapler-squad/session/tmux
+        # server/services/notifyactions dispatches inline notification actions to the handlers that own them; it
+        # never imports the services hub (the hub wires it).
+        isolate_notifyactions:
+          list-mode: strict
+          files:
+            - "**/services/notifyactions/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - go.opentelemetry.io/otel/attribute
+            - go.opentelemetry.io/otel/metric
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/notifications
+            - github.com/tstapler/stapler-squad/server/services/access
+            - github.com/tstapler/stapler-squad/server/services/approvalkit
+            - github.com/tstapler/stapler-squad/server/services/approvals
+            - github.com/tstapler/stapler-squad/server/services/auditkit
+            - github.com/tstapler/stapler-squad/server/services/featureflags
+            - github.com/tstapler/stapler-squad/server/services/flagsvc
+            - github.com/tstapler/stapler-squad/server/services/guidance
+            - github.com/tstapler/stapler-squad/server/services/notify$
+            - github.com/tstapler/stapler-squad/server/services/questionkit
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/telemetry
+        # server/services/qareply answers AskUserQuestion dialogs (the code of this cluster that types into a
+        # terminal); it never imports the services hub (the hub wires it).
+        isolate_qareply:
+          list-mode: strict
+          files:
+            - "**/services/qareply/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - golang.org/x/time/rate
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/internal/hookipc
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/access
+            - github.com/tstapler/stapler-squad/server/services/auditkit
+            - github.com/tstapler/stapler-squad/server/services/featureflags
+            - github.com/tstapler/stapler-squad/server/services/flagsvc
+            - github.com/tstapler/stapler-squad/server/services/guidance
+            - github.com/tstapler/stapler-squad/server/services/notifyactions
+            - github.com/tstapler/stapler-squad/server/services/questionkit
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/panereply
+            - github.com/tstapler/stapler-squad/session/tmux
+        # server/services/contentsearch greps a session worktree for the SearchContent stream (admission caps,
+        # .gitignore rules, matcher); it never imports the services hub (the hub wires it).
+        isolate_contentsearch:
+          list-mode: strict
+          files:
+            - "**/services/contentsearch/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/bmatcuk/doublestar/v4
+            - github.com/go-git/go-git/v5/plumbing/format/gitignore
+            - golang.org/x/sync/errgroup
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/fsops$
+        # server/services/escapecode owns the escape-analytics REST handler and query RPCs; it never imports the hub.
+        isolate_escapecode:
+          list-mode: strict
+          files:
+            - "**/services/escapecode/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/analytics
+            - github.com/tstapler/stapler-squad/server/analytics/escapedb
+            - github.com/tstapler/stapler-squad/session/ent
+        # server/services/taggingrules owns session tagging (rules and the LLM classifier RPCs); it never imports the hub.
+        isolate_taggingrules:
+          list-mode: strict
+          files:
+            - "**/services/taggingrules/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/classifier
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/tagpoller
+        # server/services/rules owns the auto-approval rules and analytics; it never imports the
+        # services hub (the hub builds it).
+        isolate_rules:
+          list-mode: strict
+          files:
+            - "**/services/rules/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - google.golang.org/protobuf/types/known/timestamppb
+            - gopkg.in/yaml.v3
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/classifier
+            - github.com/tstapler/stapler-squad/server/services/anthropicwire
+            - github.com/tstapler/stapler-squad/server/services/antigravityexport
+            - github.com/tstapler/stapler-squad/server/services/approvalkit
+            - github.com/tstapler/stapler-squad/server/services/claudesettings
+            - github.com/tstapler/stapler-squad/server/services/secretscan
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain
+        # server/services/prs owns PR creation, the PR nudge prompt and signatures and the PR hold
+        # derivation; it never imports the services hub (the hub, backlogsvc and server import it).
+        isolate_prs:
+          list-mode: strict
+          files:
+            - "**/services/prs/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/github$
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/server/services/access
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/backlog$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/git$
+            - github.com/tstapler/stapler-squad/session/headless
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/steertext
+            - github.com/tstapler/stapler-squad/session/unfinished$
+        # server/services/autonomysvc runs autonomous drivers, stall recovery and the lease-wedge warning; it never
+        # imports the services hub (the hub builds it, backlogsvc and server import it).
+        isolate_autonomysvc:
+          list-mode: strict
+          files:
+            - "**/services/autonomysvc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/events
+            - github.com/tstapler/stapler-squad/server/deliverygate
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/server/services/notify$
+            - github.com/tstapler/stapler-squad/server/services/secretscan
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/autonomous
+            - github.com/tstapler/stapler-squad/session/backlog/pipeline
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/headless
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/nudgeoutcomes
+        # server/services/sessiondefaults, claudeconfig and workspacedb serve the configuration RPCs;
+        # none imports the services hub (the hub builds them).
+        isolate_sessiondefaults:
+          list-mode: strict
+          files:
+            - "**/services/sessiondefaults/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/config/clihelp
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/session/domain
+        isolate_claudeconfig:
+          list-mode: strict
+          files:
+            - "**/services/claudeconfig/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+        isolate_workspacedb:
+          list-mode: strict
+          files:
+            - "**/services/workspacedb/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - modernc.org/sqlite
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/internal/sqlitedsn
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/fsops$
+            - github.com/tstapler/stapler-squad/session/dbpool
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict
@@ -713,8 +971,8 @@ linters:
             # Temporarily excluded — session/ent still imported; removed-in: refactor/storage-interface-cleanup (P6)
             - "!**/server/services/error_registry.go"
             - "!**/server/services/error_registry_test.go"
-            - "!**/server/services/analytics_escape_service.go"
-            - "!**/server/services/analytics_escape_service_test.go"
+            - "!**/server/services/escapecode/analytics_escape_service.go"
+            - "!**/server/services/escapecode/analytics_escape_service_test.go"
             - "!**/server/services/workflow_service_test.go"
             - "!**/server/services/workflow_service.go"
             - "!**/server/services/backlogsvc/backlog_service_query.go"

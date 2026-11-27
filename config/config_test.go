@@ -832,7 +832,7 @@ func TestSaveConfigAtomic(t *testing.T) {
 // ".tmp" file, producing a rename failure or a torn write that LoadConfig
 // silently swallows into DefaultConfig() (see saveConfigMu's doc comment).
 // Mirrors TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON
-// in server/services/hook_injector_test.go.
+// in server/services/approvals/hook_injector_test.go.
 func TestSaveConfig_ConcurrentWritesToSamePath_NeverProduceCorruptJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

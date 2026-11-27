@@ -14,7 +14,7 @@ import (
 )
 
 // TestListSlashCommands_RejectsTraversingTargetDirectory verifies that
-// ListSlashCommands' validateTargetDirectory gate actually prevents walking a
+// ListSlashCommands' fsops.ValidateTargetDirectory gate actually prevents walking a
 // target_directory containing ".." components: a marker command file placed
 // at the path the traversal resolves to must NOT show up in the response,
 // proving the containment check runs before filepath.Join/WalkDir ever touch
@@ -25,7 +25,7 @@ func TestListSlashCommands_RejectsTraversingTargetDirectory(t *testing.T) {
 
 	base := t.TempDir()
 	// escapeDir is what filepath.Clean(maliciousTargetDir) resolves to below.
-	// The point isn't where it lands -- it's that validateTargetDirectory must
+	// The point isn't where it lands -- it's that fsops.ValidateTargetDirectory must
 	// reject any target_directory containing literal ".." components, purely
 	// from the string, before that resolved directory is ever walked.
 	escapeDir := filepath.Join(base, "ssq-slash-cmd-escape-poc")

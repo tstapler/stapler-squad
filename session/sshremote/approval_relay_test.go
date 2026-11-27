@@ -182,7 +182,7 @@ func testClientConfig(t *testing.T, hostKey ssh.PublicKey) ssh.ClientConfig {
 }
 
 // writeApprovalAndReadResponse simulates the remote agent hook script
-// (server/services.remoteApprovalHookCommand's socat pipeline, not this
+// (server/services/approvals.remoteApprovalHookCommand's socat pipeline, not this
 // package): it listens on socketPath, accepts exactly one connection,
 // writes payload as JSON, half-closes its write side (via CloseWrite, the
 // same "printf/cat's stdin EOF becomes an SSH channel EOF" mechanic socat
@@ -250,12 +250,12 @@ func poolTargetFor(t *testing.T, srv *approvalRelayTestServer, name string) (tmu
 
 // fakePermissionRequestHandler is a same-package test double for
 // PermissionRequestHandler. Every test in this file uses a fake rather than
-// a real *server/services.ApprovalHandler: constructing one here would
+// a real *server/services/approvals.ApprovalHandler: constructing one here would
 // require this package to import server/services, which itself imports
 // session/sshremote -- an import cycle. The real end-to-end proof that
-// *server/services.ApprovalHandler actually satisfies this interface and
+// *server/services/approvals.ApprovalHandler actually satisfies this interface and
 // works correctly through a real RemoteApprovalRelay belongs in
-// server/services's own package tests (Part B).
+// server/services/approvals' own package tests (Part B).
 type fakePermissionRequestHandler struct {
 	// handle is invoked synchronously with the decoded request body and
 	// X-CS-Session-ID header value; its return value is written verbatim to
@@ -642,7 +642,7 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 	// Simulate the agent script retrying: it keeps re-listening/re-writing
 	// the same request on the fixed socket path until it gets through -- the
 	// documented agent-side-retry constraint Story 5.1.2 relies on (see
-	// server/services.remoteApprovalHookCommand's retry loop, the real
+	// server/services/approvals.remoteApprovalHookCommand's retry loop, the real
 	// production mechanism this simulates). This scenario has no undelivered
 	// decision to buffer/redeliver (the connection died before the FIRST
 	// attempt's request even reached the relay, unlike
@@ -771,7 +771,7 @@ func (c *writeFailConn) Write([]byte) (int, error) {
 // (writeFailConn) -- simulating the connection having died in the interval
 // between the human deciding and the response reaching the wire. A second
 // connection resending the SAME request bytes (the hook script's own retry,
-// server/services.remoteApprovalHookCommand) must receive that SAME decision
+// server/services/approvals.remoteApprovalHookCommand) must receive that SAME decision
 // without r.handler being invoked a second time -- re-invoking it would
 // create a second pending-approval record and could re-prompt a human who
 // already decided once.

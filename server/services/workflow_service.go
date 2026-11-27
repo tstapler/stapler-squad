@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"connectrpc.com/connect"
@@ -15,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -203,17 +203,6 @@ func encryptWebhookSecret(secret string) (string, error) {
 	return encrypted, nil
 }
 
-// validateTargetDirectory checks that dir is an absolute path with no traversal components.
-func validateTargetDirectory(dir string) error {
-	if !filepath.IsAbs(dir) {
-		return errors.New("target_directory must be an absolute path")
-	}
-	if filepath.Clean(dir) != dir {
-		return errors.New("target_directory contains path traversal components")
-	}
-	return nil
-}
-
 // CreateWorkflow handles the CreateWorkflow RPC.
 func (s *WorkflowService) CreateWorkflow(
 	ctx context.Context,
@@ -237,7 +226,7 @@ func (s *WorkflowService) CreateWorkflow(
 	if req.Msg.TargetDirectory == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("target_directory is required"))
 	}
-	if err := validateTargetDirectory(req.Msg.TargetDirectory); err != nil {
+	if err := fsops.ValidateTargetDirectory(req.Msg.TargetDirectory); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	if req.Msg.CronExpression != "" {
@@ -353,7 +342,7 @@ func (s *WorkflowService) UpdateWorkflow(
 
 	// Validate target_directory if being updated.
 	if req.Msg.TargetDirectory != nil {
-		if err := validateTargetDirectory(*req.Msg.TargetDirectory); err != nil {
+		if err := fsops.ValidateTargetDirectory(*req.Msg.TargetDirectory); err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
 	}

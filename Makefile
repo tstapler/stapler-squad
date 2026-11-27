@@ -907,7 +907,7 @@ coverage-integration: ensure-tools proto-gen ## Run integration tests, emit inte
 test-ux-polish: ## Run tests registered in docs/registry/features/ (no server/tmux required)
 	@RUN=$$(python3 -c "import json,glob; ids=[t for p in glob.glob('docs/registry/features/backend/**/*.json',recursive=True) for t in json.load(open(p)).get('testIds',[])]; print('|'.join(sorted(set(ids))))"); \
 	echo "Running: $$RUN"; \
-	go test ./server/services/ -run "$$RUN" -v -timeout 120s
+	go test ./server/services/... -run "$$RUN" -v -timeout 120s
 	go test ./session/prompts/... -v -timeout 30s
 
 test-with-pinned-tmux: ensure-tools proto-gen $(BIN_TMUX) ## Run tests using the pinned tmux binary (reproducible)
@@ -1273,10 +1273,10 @@ FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRe
 .PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
 
 files-viewer-go-tests: ensure-tools proto-gen ## Iterate on the files-viewer Go tests only, with -race (fixed -run prefix list)
-	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/fsops
+	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/contentsearch ./server/services/fsops
 
 files-viewer-perf: ensure-tools proto-gen ## Files-viewer benchmarks on full 50k-file fixtures (non-race, run in the background)
-	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services
+	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services ./server/services/contentsearch
 
 # Probe for Task 0.2.4f: does revive(file-length-limit) report an edit to server/server.go?
 files-viewer-server-length-probe: ensure-tools

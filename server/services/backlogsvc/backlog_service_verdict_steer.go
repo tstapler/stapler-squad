@@ -16,7 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -197,7 +197,7 @@ func (s *BacklogService) notifyVerdictSteerFailed(ctx context.Context, itemID, i
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(false, true),
+		notify.DerivePriority(false, true),
 		fmt.Sprintf("Could not deliver review verdict — %s", itemTitle),
 		fmt.Sprintf("%s — session %s did not receive its review verdict (%s). Tell it to run /backlog/status.", itemTitle, sessionUUID, reason),
 		map[string]string{"item_id": itemID},

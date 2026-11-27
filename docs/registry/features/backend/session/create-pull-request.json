@@ -5,7 +5,7 @@
   "method": "CreatePullRequest",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/pr_creation_service.go",
+  "handlerFile": "server/services/prs/pr_creation_service.go",
   "tested": true,
   "testIds": [
     "TestCreatePullRequest_should_CallCreatePRDirectly_NotHeadlessPool",
@@ -19,5 +19,5 @@
     "TestCreatePullRequest_should_ReturnInternalError_When_PRNumberIsZero",
     "TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListenerPresent"
   ],
-  "lastModified": "2026-08-21T00:00:00-07:00"
+  "lastModified": "2026-11-27T04:49:09.352776627-08:00"
 }

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from "react";
 import type { LogEntry as ProtoLogEntry } from "@/gen/session/v1/session_pb";
 import { useLogViewer, type LogViewerTimeRange, type LogEntry } from "@/lib/hooks/useLogViewer";
+import { nextLevelFilters } from "@/lib/logs/levelFilter";
 import { VirtualLogList } from "./VirtualLogList";
 import { JumpToLatestButton } from "./JumpToLatestButton";
 import { LogViewerToolbar } from "./LogViewerToolbar";
@@ -77,6 +78,12 @@ export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function Lo
   useEffect(() => {
     onStateChange?.({ logs, rawEntries, totalCount: serverTotalCount, lastRefresh, error });
   }, [logs, rawEntries, serverTotalCount, lastRefresh, error, onStateChange]);
+
+  // Badge tap: show only that level; tapping it again (it is the sole active filter) clears the filter.
+  const toggleLevelFilter = useCallback(
+    (level: string) => setLevelFilters(nextLevelFilters(levelFilters, level)),
+    [levelFilters, setLevelFilters],
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -168,18 +175,19 @@ export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function Lo
   // window.visualViewport (not window.resize) to get the actual visible height.
   // Debounced 400ms to avoid thrashing during keyboard animation.
   useEffect(() => {
-    if (!window.visualViewport) return;
+    const viewport = window.visualViewport;
+    if (!viewport) return;
     let debounceTimer: ReturnType<typeof setTimeout>;
     const handler = () => {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        const height = window.visualViewport!.height;
+        const height = viewport.height;
         containerRef.current?.style.setProperty("--log-container-height", `${height}px`);
       }, 400);
     };
-    window.visualViewport.addEventListener("resize", handler);
+    viewport.addEventListener("resize", handler);
     return () => {
-      window.visualViewport!.removeEventListener("resize", handler);
+      viewport.removeEventListener("resize", handler);
       clearTimeout(debounceTimer);
     };
   }, []);
@@ -237,6 +245,7 @@ export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function Lo
           searchQuery={searchQuery}
           onAtBottomStateChange={onAtBottomStateChange}
           onToggleRow={toggleRow}
+          onFilterByLevel={toggleLevelFilter}
           virtuosoRef={virtuosoRef}
         />
 

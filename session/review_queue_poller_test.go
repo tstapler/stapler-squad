@@ -1253,7 +1253,7 @@ func (s *stubApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID st
 // TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID is the regression test for the bug
 // fixed alongside this test: ApprovalHandler.resolveSessionID stores PendingApproval.SessionID
 // keyed by the session's UUID (Title only as a fallback when no UUID exists — see
-// approval_handler.go's stableIDForData), but checkSession's enrichment step queried the
+// notify.StableIDForData), but checkSession's enrichment step queried the
 // provider by snap.Title. That mismatch silently dropped pending_approval_id (and therefore
 // the escalation reason) from every real queue item. This test seeds the stub provider ONLY
 // under the UUID key — pre-fix, the first (and only) lookup by Title would find nothing and

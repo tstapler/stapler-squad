@@ -5,6 +5,9 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
@@ -29,7 +32,7 @@ func (s *SessionService) wireDialogCanary() *questionkit.DialogMatchCanary {
 		}
 	}
 	notify := func() {
-		(&EventBusNotifier{Bus: s.eventBus}).NotifySession(canaryNoticeSession, canaryNoticeTitle, canaryNoticeMessage,
+		(&notify.EventBusNotifier{Bus: s.eventBus}).NotifySession(canaryNoticeSession, canaryNoticeTitle, canaryNoticeMessage,
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING), false, true)
 	}
 	c := questionkit.NewDialogMatchCanary(nil, count, notify)
@@ -45,7 +48,7 @@ func (s *SessionService) wireDialogCanary() *questionkit.DialogMatchCanary {
 func (s *SessionService) SetGuidanceMirror(m *questionkit.GuidanceHookMirror) {
 	if m != nil {
 		m.SetPaneCapture(s.PaneCapture)
-		m.SetCardRetirer(historyItemResolver{store: s.GetNotificationStore()}.ResolveGuidanceNotifications)
+		m.SetCardRetirer(notifyactions.NewNotificationResolver(s.GetNotificationStore()).ResolveGuidanceNotifications)
 	}
 	s.guidanceMirror.Store(m)
 }
@@ -55,26 +58,25 @@ func (s *SessionService) PaneCapture(ctx context.Context, sessionUUID string) (s
 	return s.ackCapture(ctx, sessionUUID, false)
 }
 
-// ensureRegistered re-registers an expired hook question from its durable row,
-// through the explicit mirror when given and otherwise the installed one.
-func (s *SessionService) ensureRegistered(explicit *questionkit.GuidanceHookMirror) func(context.Context, questionkit.QuestionKey) bool {
-	return func(ctx context.Context, key questionkit.QuestionKey) bool {
-		m := explicit
-		if m == nil {
-			m = s.guidanceMirror.Load()
-		}
-		return m != nil && m.EnsureRegistered(ctx, key)
+// GuidanceSeedPorts binds the e2e question seed route to this service's live sessions.
+func (s *SessionService) GuidanceSeedPorts() guidance.SeedPorts {
+	return guidance.SeedPorts{
+		SessionID: func(id string) (string, bool) {
+			inst := s.findInstance(id)
+			if inst == nil {
+				return "", false
+			}
+			return inst.GetStableID(), true
+		},
+		Mirror: s.GuidanceMirror,
 	}
 }
 
 // deliveryProbes reads unconfirmed answers from the detector and session
 // liveness from the live service. acks may be nil.
-func (s *SessionService) deliveryProbes(acks *GuidanceAckDetector) DeliveryProbes {
-	phase := func(sessionUUID string) answerPhase { return s.answerSessions()(sessionUUID).phase }
-	p := DeliveryProbes{
-		SessionEnded:    func(sessionUUID string) bool { return phase(sessionUUID) != phaseLive },
-		SessionArchived: func(sessionUUID string) bool { return phase(sessionUUID) == phaseArchived },
-	}
+func (s *SessionService) deliveryProbes(acks *guidance.GuidanceAckDetector) guidance.DeliveryProbes {
+	replies := s.replyService()
+	p := guidance.DeliveryProbes{SessionEnded: replies.SessionEnded, SessionArchived: replies.SessionArchived}
 	if acks != nil {
 		p.Unconfirmed = acks.Unconfirmed
 	}

@@ -42,6 +42,7 @@ func sessionToInstanceData(sess *ent.Session) *domain.InstanceData {
 		Note:                sess.Note,
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
+		TmuxTitle:           sess.TmuxTitle,
 		Backend:             domain.ProcessManagerBackend(sess.Backend),
 		TymuxSessionID:      sess.TymuxSessionID,
 		LastOutputSignature: sess.LastOutputSignature,

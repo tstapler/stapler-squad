@@ -8,6 +8,7 @@ import { CTRL_KEY_MAP, ALT_KEY_MAP, SHIFT_KEY_MAP } from "@/lib/terminal/modifie
 
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { useE2eInputDropTrigger } from "@/lib/hooks/useE2eInputDropTrigger";
 import { useFileDrop } from "@/lib/hooks/useFileDrop";
 import { usePublishDeckTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { useVisibilityResync } from "./useVisibilityResync";
@@ -846,26 +847,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   }, []);
   const reportDroppedInput = useDropEpisodeCoalescer(handleDropEpisodeFlush, DROP_EPISODE_COALESCE_WINDOW_MS);
 
-  // Task 2.3.5 — e2e test-only trigger. Reproducing a genuine WebSocket
-  // reconnect race (the real trigger for onInputDropped) inside Playwright
-  // proved impractical for this pass (it would require deterministically
-  // racing a server-side connection teardown against a client keystroke),
-  // so tests/e2e/input-drop-badge.spec.ts exercises the badge's rendering/
-  // announcement/dismiss behavior via this harmless, additive test seam
-  // instead of the full reconnect path (Stories 2.1/2.2 already have direct
-  // Jest coverage of the drop mechanism itself). Gated on NODE_ENV (matching
-  // the existing dev-only-hook convention in WebVitalsReporter.tsx /
-  // rpcTiming.ts) so this unauthenticated, script-callable surface is never
-  // attached in a production bundle — Next.js statically inlines
-  // `process.env.NODE_ENV` at build time, so the production build tree-shakes
-  // this block out entirely rather than merely no-op'ing it at runtime.
-  useEffect(() => {
-    if (typeof window === "undefined" || process.env.NODE_ENV === "production") return;
-    (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped = reportDroppedInput;
-    return () => {
-      delete (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped;
-    };
-  }, [reportDroppedInput]);
+  // Reproducing a real reconnect-race drop in Playwright proved impractical, so
+  // the e2e server alone exposes a trigger that raises this badge.
+  useE2eInputDropTrigger(reportDroppedInput);
 
   const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, isServerUnreachable, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, visibilityResyncDecision, connectionCount } = useTerminalStream({
     baseUrl,

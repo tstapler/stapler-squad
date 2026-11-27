@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/paneactivity"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
@@ -100,7 +101,7 @@ func TestFeatureFlagWrites_AndUpdateQuotaConfig_NoLostUpdate_UnderRace(t *testin
 	const flag = "browser-passthrough"
 	const iterations = 50
 	flags := flagsvc.NewFeatureFlagService()
-	quota := NewQuotaSettingsService()
+	quotaSvc := quota.NewQuotaSettingsService()
 
 	errCh := make(chan error, 2*iterations)
 	var wg sync.WaitGroup
@@ -114,7 +115,7 @@ func TestFeatureFlagWrites_AndUpdateQuotaConfig_NoLostUpdate_UnderRace(t *testin
 	go func() {
 		defer wg.Done()
 		for i := 1; i <= iterations; i++ {
-			_, err := quota.UpdateQuotaConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateQuotaConfigRequest{
+			_, err := quotaSvc.UpdateQuotaConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateQuotaConfigRequest{
 				Settings: &sessionv1.QuotaSettings{Enabled: proto.Bool(i%2 == 0)},
 			}))
 			errCh <- err
@@ -665,14 +666,14 @@ func TestFilesFlags_ShouldRejectScopedUpdate_When_ScopeSupplied(t *testing.T) {
 // GetFeatureFlagWithDefault for a registered flag. The literal agrees with the
 // registry today; the list is a ratchet, so a new literal fails the test.
 var dfltKnownLiteralSites = map[string]bool{
-	"server/changelog_handler.go|" + featureflags.ChangelogFlagName:                       true,
-	"server/changelog_handler.go|" + featureflags.UpdateCheckFlagName:                     true,
-	"server/services/guards_flag.go|" + featureflags.HiddenSessionReadonlyGuardsFlagName:  true,
-	"server/services/hidden_question_reply.go|" + featureflags.HiddenSessionReplyFlagName: true,
-	"server/services/lease_flag.go|" + featureflags.TerminalWriteLeaseFlagName:            true,
-	"github/client.go|" + flagsvc.GithubGraphQLMigrationFlagName:                          true,
-	"github/http_client.go|" + flagsvc.GithubPriorityAdmissionFlagName:                    true,
-	"session/gitwt/manager.go|" + flagsvc.WorktreeChangeDetectionFlagName:                 true,
+	"server/changelog_handler.go|" + featureflags.ChangelogFlagName:                               true,
+	"server/changelog_handler.go|" + featureflags.UpdateCheckFlagName:                             true,
+	"server/services/guards_flag.go|" + featureflags.HiddenSessionReadonlyGuardsFlagName:          true,
+	"server/services/qareply/hidden_question_reply.go|" + featureflags.HiddenSessionReplyFlagName: true,
+	"server/services/lease_flag.go|" + featureflags.TerminalWriteLeaseFlagName:                    true,
+	"github/client.go|" + flagsvc.GithubGraphQLMigrationFlagName:                                  true,
+	"github/http_client.go|" + flagsvc.GithubPriorityAdmissionFlagName:                            true,
+	"session/gitwt/manager.go|" + flagsvc.WorktreeChangeDetectionFlagName:                         true,
 }
 
 // dfltKnownPlainReadDisagreements are plain GetFeatureFlag reads of a flag whose

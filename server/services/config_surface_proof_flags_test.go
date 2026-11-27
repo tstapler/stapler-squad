@@ -163,3 +163,14 @@ func TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run(t *testi
 		})
 	}
 }
+
+// The flag is written through FeatureFlagService.UpdateFeatureFlag and read back through the same
+// fresh-config read BacklogService.OnEpicPlanningComplete gates on (backlogsvc's own tests cover the
+// gate; its package cannot be imported here without a cycle).
+func TestConfigSurfaceProof_EpicIntegrationChild_ChangesReader(t *testing.T) {
+	set := bkfFlagWriter(t)
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
+		set(featureflags.EpicIntegrationChildFlagName, setting.(bool))
+		return config.LoadConfig().GetFeatureFlag(featureflags.EpicIntegrationChildFlagName)
+	}, false, true)
+}

@@ -180,6 +180,8 @@ type Instance struct {
 	RequestedNewWorktree bool `json:"-"`
 	// TmuxPrefix is the prefix to use for tmux session names
 	TmuxPrefix string
+	// TmuxTitle pins the tmux session name across renames; empty means Title.
+	TmuxTitle string
 	// TmuxServerSocket is the server socket name for tmux isolation (used with -L flag)
 	// If empty, uses the default tmux server. For complete isolation (e.g., testing),
 	// set to a unique value like "test" or "teatest_123" to create separate tmux servers.

@@ -1,0 +1,102 @@
+package notifyactions
+
+import (
+	"context"
+
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+)
+
+// notification_action_lookups.go holds the production adapters behind the
+// per-page descriptor lookups. Each performs one store read per page.
+
+// approvalStoreLookup answers ApprovalLookup from the in-memory approval store.
+type approvalStoreLookup struct{ store *approvalkit.ApprovalStore }
+
+// NewApprovalLookup adapts the approval store to ApprovalLookup.
+func NewApprovalLookup(store *approvalkit.ApprovalStore) notify.ApprovalLookup {
+	return approvalStoreLookup{store}
+}
+
+func (l approvalStoreLookup) PendingApprovalIDs() map[string]bool {
+	out := map[string]bool{}
+	if l.store == nil {
+		return out
+	}
+	for _, a := range l.store.ListAll() {
+		out[a.ID] = true
+	}
+	return out
+}
+
+// guidanceLister is the one storage read the guidance lookup needs.
+type guidanceLister interface {
+	ListAllPendingGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error)
+}
+
+type guidanceStorageLookup struct{ storage guidanceLister }
+
+// NewGuidanceLookup adapts guidance storage to GuidanceLookup.
+func NewGuidanceLookup(storage guidanceLister) notify.GuidanceLookup {
+	return guidanceStorageLookup{storage}
+}
+
+func (l guidanceStorageLookup) OpenGuidance(ctx context.Context, ids []string) (map[string]notify.OpenGuidance, error) {
+	rows, err := l.storage.ListAllPendingGuidanceRequests(ctx)
+	if err != nil {
+		return nil, err
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := map[string]notify.OpenGuidance{}
+	for _, r := range rows {
+		if want[r.ID] {
+			g := notify.OpenGuidance{Options: guidance.DecodeGuidanceOptions(r.Options), Source: r.Source, PeerHelp: r.Source == domain.QuestionSourcePeer}
+			if qs, ok := questionkit.TabbedFromRow(r); ok {
+				g.Tabbed = qs
+			}
+			out[r.ID] = g
+		}
+	}
+	return out, nil
+}
+
+// backlogLister is the one storage read the backlog decision lookup needs.
+type backlogLister interface {
+	ListBacklogItems(ctx context.Context, filter backlogdto.BacklogItemFilter) ([]backlogdto.BacklogItemData, error)
+}
+
+type backlogStorageLookup struct{ storage backlogLister }
+
+// NewBacklogDecisionLookup adapts backlog storage to BacklogDecisionLookup. One
+// query lists the items that can be awaiting a decision (review, pr_pending); an
+// item in any other status is absent, which reduces its row to OPEN.
+func NewBacklogDecisionLookup(storage backlogLister) notify.BacklogDecisionLookup {
+	return backlogStorageLookup{storage}
+}
+
+func (l backlogStorageLookup) DecisionStates(ctx context.Context, ids []string) (map[string]notify.BacklogDecisionState, error) {
+	rows, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
+		Statuses: []string{notify.BacklogStatusReview, notify.BacklogStatusPRPending},
+	})
+	if err != nil {
+		return nil, err
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := map[string]notify.BacklogDecisionState{}
+	for _, r := range rows {
+		if want[r.ID] {
+			out[r.ID] = notify.BacklogDecisionState{Status: r.Status}
+		}
+	}
+	return out, nil
+}

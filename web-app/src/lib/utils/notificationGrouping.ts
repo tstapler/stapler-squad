@@ -1,4 +1,4 @@
-import { NotificationHistoryItem } from "@/lib/types/notification";
+import type { NotificationHistoryItem } from "@/lib/types/notification";
 
 export interface GroupedNotification {
   /** Representative notification (most recent in the group) */
@@ -10,7 +10,17 @@ export interface GroupedNotification {
 }
 
 /**
- * Groups notifications by (sessionId, notificationType).
+ * What may collapse into one card: same session and type, except that a question
+ * card stays distinct from other alerts and other questions (server: questionKey).
+ */
+export function notificationDedupKey(n: NotificationHistoryItem): string {
+  const base = `${n.sessionId ?? ""}:${n.notificationType ?? ""}`;
+  if (!n.metadata?.["question_shape"]) return base;
+  return `${base}:${n.message}\0${n.metadata["question_options"] ?? ""}`;
+}
+
+/**
+ * Groups notifications by notificationDedupKey.
  *
  * - Uses server-provided occurrenceCount when a record has one (>= 1)
  * - Falls back to client-side grouping for backward compatibility
@@ -26,11 +36,11 @@ export interface GroupedNotification {
 export function groupNotifications(
   notifications: NotificationHistoryItem[]
 ): GroupedNotification[] {
-  // 1. Build a Map keyed by "sessionId:notificationType"
+  // 1. Build a Map keyed by notificationDedupKey
   const groups = new Map<string, NotificationHistoryItem[]>();
 
   for (const notification of notifications) {
-    const key = `${notification.sessionId ?? ""}:${notification.notificationType ?? ""}`;
+    const key = notificationDedupKey(notification);
     const existing = groups.get(key);
     if (existing) {
       existing.push(notification);

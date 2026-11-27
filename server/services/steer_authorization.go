@@ -8,7 +8,6 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 )
@@ -73,10 +72,10 @@ func backlogLinkAuthorization(link BacklogReviewLink) steerAuthorization {
 // steerDecision is what the access-decision block hands the steer branch.
 type steerDecision struct {
 	auth   steerAuthorization
-	link   BacklogReviewLink // zero unless the O7 path was chosen
-	typed  bool              // the O7 backlog path: audited, through BacklogSteerWriter
-	bypass bool              // hidden, non-qualifying, guards flag off: audited guard_bypass
-	facts  steerRequestFacts // what the audit lines record about the request
+	link   BacklogReviewLink        // zero unless the O7 path was chosen
+	typed  bool                     // the O7 backlog path: audited, through BacklogSteerWriter
+	bypass bool                     // hidden, non-qualifying, guards flag off: audited guard_bypass
+	facts  access.SteerRequestFacts // what the audit lines record about the request
 }
 
 // Outcome labels of hidden_session_backlog_steer_total and of the steer audit
@@ -90,16 +89,6 @@ const (
 	steerOutcomeGuardBypass = "guard_bypass"
 	steerOutcomeFailed      = "failed"
 )
-
-// requestFactsOf records the request's raw facts without evaluating a verdict.
-func requestFactsOf(ctx context.Context, req connect.AnyRequest) steerRequestFacts {
-	peer := req.Peer().Addr
-	f := access.LocalWriteRefusal{Peer: peer, PeerLoopback: middleware.PeerIsLoopback(peer)}
-	if rec, ok := access.RequestRecordFrom(ctx); ok {
-		f.Listener, f.AuthMode, f.Host, f.Origin, f.Proxied = rec.Listener, rec.AuthMode, rec.Host, rec.Origin, rec.Proxied
-	}
-	return steerRequestFacts{refusal: f, userAgent: req.Header().Get("User-Agent")}
-}
 
 // decideSteerAccess is the one constructor of the visible and backlog_link
 // kinds. It runs in the access-decision block of UpdateSession, before any
@@ -122,7 +111,7 @@ func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyR
 		}
 		return steerDecision{
 			auth: backlogLinkAuthorization(link), link: link, typed: true,
-			facts: steerRequestFacts{refusal: refusal, userAgent: req.Header().Get("User-Agent")},
+			facts: access.SteerRequestFacts{Refusal: refusal, UserAgent: req.Header().Get("User-Agent")},
 		}, nil
 	}
 	if access.AccessForUnary(inst, s.guards) == access.TerminalReadWrite {
@@ -130,7 +119,7 @@ func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyR
 		return steerDecision{
 			auth:   steerAuthorization{kind: steerAuthVisible, instanceUUID: inst.LeaseOwnerUUID()},
 			bypass: true,
-			facts:  requestFactsOf(ctx, req),
+			facts:  access.RequestFactsOf(ctx, req),
 		}, nil
 	}
 	s.countBacklogSteer(steerOutcomeNoLink)

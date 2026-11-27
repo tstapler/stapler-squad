@@ -3,7 +3,7 @@ package server
 import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/webhooks"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -63,11 +63,11 @@ func registerWebhookManagement(srv *Server, deps *ServerDependencies, cfg *confi
 	}
 
 	receiverEnabled := cfg.GetFeatureFlag("webhook_triggers")
-	svc := services.NewWebhookRegistrationService(
-		session.NewEntRepositoryFromClient(entClient), cfg, services.WebhookWorkspaceID(configDir), receiverEnabled)
+	svc := webhooks.NewWebhookRegistrationService(
+		session.NewEntRepositoryFromClient(entClient), cfg, webhooks.WebhookWorkspaceID(configDir), receiverEnabled)
 	svc.SetEventBus(deps.EventBus)
-	services.NewWebhookRegistrationHandler(svc).RegisterRoutes(srv.mux)
-	srv.addSelfAuthenticatedPaths(services.IsWebhookManagementPath)
+	webhooks.NewWebhookRegistrationHandler(svc).RegisterRoutes(srv.mux)
+	srv.addSelfAuthenticatedPaths(webhooks.IsWebhookManagementPath)
 	log.Info("Registered webhook management API", "base", "/api/integrations/webhooks/v1", "receiver_enabled", receiverEnabled)
 	if !receiverEnabled {
 		log.Warn("webhook_management is enabled but webhook_triggers is not: reconcile will refuse to create registrations until the receiver is enabled and the service restarts")

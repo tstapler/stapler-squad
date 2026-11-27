@@ -37,7 +37,7 @@ type PendingApproval struct {
 	EscalationCategory string
 
 	// RiskLevel is the classifier-assigned risk level ("low"/"medium"/"high"/"critical"),
-	// captured once at creation via riskLevelString(escalation.RiskLevel) — never re-derived
+	// captured once at creation via escalation.RiskLevel.Label() — never re-derived
 	// after creation (matches EscalationReason/EscalationCategory). "" means "not recorded"
 	// (approvals created before this field existed, or when the classifier was unreachable) —
 	// never treated as a fallback to "low".

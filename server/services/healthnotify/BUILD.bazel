@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "healthnotify",
+    srcs = [
+        "memory_pressure_notifier.go",
+        "stale_session_notifier.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/healthnotify",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//session/domain",
+        "//session/instance",
+        "//telemetry",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":healthnotify",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "healthnotify_test",
+    srcs = [
+        "healthnotify_golden_helper_test.go",
+        "healthnotify_golden_test.go",
+        "memory_pressure_notifier_test.go",
+        "ports_test.go",
+        "stale_session_notifier_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":healthnotify"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//server/services/internal/svctest",
+        "//session/domain",
+        "//session/instance",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

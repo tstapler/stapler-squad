@@ -197,7 +197,6 @@
   "session-artifacts.spec.ts": 44,
   "session-lifecycle.spec.ts": 6,
   "session-tag-removal-confirmation.spec.ts": 27,
-  "terminal-flickering.spec.ts": 289,
   "terminal-mobile-overflow.spec.ts": 133,
   "terminal-resize.spec.ts": 29,
   "touch-targets.spec.ts": 493,

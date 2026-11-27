@@ -44,7 +44,18 @@ export interface ApprovalDisplay {
   ruleScope?: string;
 }
 
-export interface ActionRowProps {
+interface QuestionCardRowProps {
+  /** The durable question behind this row: renders the shared question form and its delivery line. */
+  guidance?: PlainGuidanceRequest;
+  /** Approvals of the same session still pending behind this row after it is decided ("Approved. 19 more waiting."). */
+  remaining?: number;
+  /** Browser-local "Mark as handled" of an Unconfirmed answer. */
+  onMarkHandled?: () => void;
+  /** The delivery row the question card shows changed. */
+  onDeliveryRow?: (view: DeliveryView | null) => void;
+}
+
+export interface ActionRowProps extends QuestionCardRowProps {
   /** Scopes sessionStorage drafts and the polite-region key. */
   rowId: string;
   descriptors: NotificationActionDescriptor[];
@@ -63,16 +74,10 @@ export interface ActionRowProps {
   onApplied?: (kind: ActionKind, summary: string) => void;
   /** Another tab resolved this record: show its result, in place, without moving focus. */
   elsewhere?: string;
+  /** False once the record no longer waits on the operator, even while the row is held in Needs you. */
+  needsYou?: boolean;
   /** Overrides the shared connectivity reason (Offline, Reconnecting, Updating...). */
   disabledReason?: string;
-  /** The durable question behind this row: renders the shared question form and its delivery line. */
-  guidance?: PlainGuidanceRequest;
-  /** Approvals of the same session still pending behind this row after it is decided ("Approved. 19 more waiting."). */
-  remaining?: number;
-  /** Browser-local "Mark as handled" of an Unconfirmed answer. */
-  onMarkHandled?: () => void;
-  /** The delivery row the question card shows changed. */
-  onDeliveryRow?: (view: DeliveryView | null) => void;
 }
 
 type Step = "row" | "deny" | "confirm" | "retry-anyway" | "more" | "create-rule";
@@ -187,6 +192,18 @@ export function ActionRow(props: ActionRowProps) {
   useEffect(() => {
     if (holding) undoRef.current?.focus();
   }, [holding]);
+
+  // Answered elsewhere, read or resolved: send nothing held and close any open step.
+  const { elsewhere: answered, needsYou = false } = props;
+  const neededYou = useRef(needsYou);
+  const cancelHold = delay.leave;
+  useEffect(() => {
+    const retired = neededYou.current && !needsYou;
+    neededYou.current = needsYou;
+    if (!retired && answered === undefined) return;
+    cancelHold();
+    setStep("row");
+  }, [needsYou, answered, cancelHold]);
 
   const dispatch = useCallback(
     (spec: ActionSpec, ctx: OutcomeContext) => {
@@ -387,6 +404,7 @@ export function ActionRow(props: ActionRowProps) {
         retry={() => void retry()}
         reset={reset}
         onMarkHandled={props.onMarkHandled}
+        stale={!needsYou ? "retired" : answered}
         onDeliveryRow={props.onDeliveryRow}
       />
     );

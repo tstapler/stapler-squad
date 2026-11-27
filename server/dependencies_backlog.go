@@ -8,10 +8,12 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
+	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -163,7 +165,7 @@ func newBacklogLifecycleListener(svc *ServiceDeps, llm llmWiring, engines backlo
 	// The pool is passed at construction time to close the race window that existed when
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
 	backlogLifecycleListener := backlog.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine, livenessEngine)
-	backlogLifecycleListener.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
+	backlogLifecycleListener.SetNotifier(&notify.EventBusNotifier{Bus: eventBus})
 	if llmClient != nil {
 		backlogLifecycleListener.SetHeadlessClient(llmClient)
 	}
@@ -172,7 +174,7 @@ func newBacklogLifecycleListener(svc *ServiceDeps, llm llmWiring, engines backlo
 	// backlog mutation methods (Phase 2) can publish BacklogItemChanged
 	// events. This is a different struct than backlogLifecycleListener.SetNotifier
 	// above — placed here for readability only, not because it mirrors that call.
-	storage.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: eventBus})
+	storage.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: eventBus})
 	// Review now always spawns a real, hidden session.Instance (via
 	// SessionService.SpawnReviewSession) instead of an in-process headless LLM
 	// call, so review-queue visibility (idle/error/approval detection) works the
@@ -187,7 +189,7 @@ func newBacklogLifecycleListener(svc *ServiceDeps, llm llmWiring, engines backlo
 // tracker plugin registry and key source the manual TriggerSync path shares.
 type backlogControl struct {
 	ctrl      *session.BacklogController
-	quotaGate *services.QuotaGate
+	quotaGate *quota.QuotaGate
 	registry  *session.PluginRegistry
 	keyFunc   func() ([]byte, error)
 }
@@ -225,7 +227,7 @@ func startBacklogControl(svc *ServiceDeps, cfg *config.Config, backlogLifecycleL
 	if tokenStore != nil {
 		tokenStoreReader = tokenStore
 	}
-	quotaGate := services.NewQuotaGate(
+	quotaGate := quota.NewQuotaGate(
 		// config.LoadConfig() re-reads config.json from disk on every call
 		// (same pattern as flagsvc/feature_flag_service.go's GetFeatureFlags) — cfg
 		// here is the boot-time snapshot passed into BuildRuntimeDeps and is
@@ -237,9 +239,10 @@ func startBacklogControl(svc *ServiceDeps, cfg *config.Config, backlogLifecycleL
 		sessionService,
 		backlogCtrl,
 		eventBus,
+		quota.Ports{DerivePriority: notify.DerivePriority},
 	)
 	sessionService.SetQuotaGate(quotaGate)
-	services.LogQuotaEffectiveConfig("Using quota gate config", config.LoadConfig().Quota)
+	quota.LogQuotaEffectiveConfig("Using quota gate config", config.LoadConfig().Quota)
 	quotaGate.Reconcile(context.Background())
 
 	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
@@ -424,7 +427,7 @@ func wireBacklogLifecycle(svc *ServiceDeps, cfg *config.Config, backlogLifecycle
 	// Prompt cleanup when a done/archived item's last PR goes terminal (bounded worker;
 	// the 60s reconcileTerminalItemWorktrees sweep remains the backstop).
 	svc.PRStatusPoller.SetPRTerminalListener(backlogLifecycleListener)
-	svc.PRStatusPoller.SetOnPRUnknown(newPRUnknownNotifier(storage, &services.EventBusNotifier{Bus: eventBus}))
+	svc.PRStatusPoller.SetOnPRUnknown(newPRUnknownNotifier(storage, &notify.EventBusNotifier{Bus: eventBus}))
 	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
 	// session/backlog_lifecycle.go) so a PASS verdict whose work session has
 	// already exited ships via a headless one-shot /backlog/ship run (CI

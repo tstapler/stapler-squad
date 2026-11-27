@@ -34,6 +34,15 @@ import (
 // why an ambient value of either silently defeats config.GetConfigDirForDir's
 // own per-PID test isolation and fails session creation with an unrelated
 // "Session.program" validator error.
+//
+// HOME is a temp directory for the whole run, so code that exports files under
+// $HOME (rule upserts and deletes) never touches the developer's.
 func TestMain(m *testing.M) {
-	os.Exit(svctest.Main(m, func() { lookupIPAddr = svctest.HermeticLookupIPAddr }))
+	cleanup, err := svctest.UseTempHome()
+	if err != nil {
+		panic(err)
+	}
+	code := svctest.Main(m, func() {})
+	cleanup()
+	os.Exit(code)
 }

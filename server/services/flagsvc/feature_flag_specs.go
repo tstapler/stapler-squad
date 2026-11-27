@@ -22,6 +22,10 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "Comment on the linked GitHub issue when a backlog item starts work (in_progress, naming the host) and when it opens a PR (review). The done-transition close comment is not gated by this flag. Default: off.",
 	},
 	{
+		Name:        featureflags.EpicIntegrationChildFlagName,
+		Description: "Epic integration child: when an epic's planning completes, auto-create a last child that depends on every sibling, runs the epic's end-to-end check, and gates the epic's done transition. Flip on once the Epic items parent-child edge is live. Default: off.",
+	},
+	{
 		Name:        featureflags.ChangelogFlagName,
 		Description: "Built-in changelog: the /changelog page, GET /api/changelog, and the update badge. Turn off to hide all three. Default: on.",
 		Default:     true,
@@ -257,6 +261,10 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Name:        config.SessionMultiPRFlag,
 		Description: "Session multi-PR tracking: per-PR state, the active PR and the item PR set. Scopes reader:poller, reader:backlog, reader:actions, reader:ui switch the readers on; enable them in that order (a later reader stays off until the earlier ones are on, applied at read time). The scope refresher_off is the kill switch of the always-on state refresher (default: refresher runs). Applies at once. Default: off.",
 		Scopes:      config.SessionMultiPRScopes(),
+	},
+	{
+		Name:        config.GoalModeFlag,
+		Description: "Goal mode pilot: run opted-in chore/docs backlog items through Claude Code /goal as a direct subprocess (not visible in the terminal UI) with a cost ceiling and heartbeat, instead of the autonomous driver. Off leaves the driver untouched. Global only. Default: off.",
 	},
 	{
 		Name:        config.ArtifactScanV2Flag,

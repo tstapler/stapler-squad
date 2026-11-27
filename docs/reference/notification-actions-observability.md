@@ -17,7 +17,7 @@ exports, the queries that judge a flag flip, and the alerts that exist. Plan:
   query (UNVERIFIED: no backend was queried for this page).
 - Every label value is lowercase, as registered. The plan's Given/When/Then
   examples write `APPROVE` and `APPLIED`; the code writes `approve` and `applied`
-  (`server/services/notification_action_service.go:509`, `outcomeLabel` at line 550).
+  (`server/services/notifyactions/notification_action_service.go`, `outcomeLabel`).
 - The label `kind` always means the action kind (`ActionKind`), never a session
   role or a notification type (plan, "The word kind").
 - Client events (`background_activity_rows`, `notification_pane_open_ms`,
@@ -29,7 +29,7 @@ exports, the queries that judge a flag flip, and the alerts that exist. Plan:
 
 | Metric | Type, unit | Labels and values | Registered in |
 |---|---|---|---|
-| `notification_inline_action_total` | counter | `kind`: `open`, `approve`, `deny`, `answer_question`, `backlog_decision`, `answer_guidance`, `cancel_wake`, `cancel_peer_help` (`unspecified` for an unset kind). `tier`: `a`, `b`, `unknown` (`unknown` when an `answer_question` route cannot be resolved). `outcome`: `applied`, `already_resolved`, `stale`, `not_sent`, `send_indeterminate`, `rate_limited`, `forbidden`, `flag_off`, `invalid`, plus `error` for an infrastructure fault. `channel`: `web_local`, `web_remote`, `unknown` (the comment in the metrics file also names `mcp`, but no code sets it). | `server/services/notification_action_metrics.go` (`defaultActionMetrics`) |
+| `notification_inline_action_total` | counter | `kind`: `open`, `approve`, `deny`, `answer_question`, `backlog_decision`, `answer_guidance`, `cancel_wake`, `cancel_peer_help` (`unspecified` for an unset kind). `tier`: `a`, `b`, `unknown` (`unknown` when an `answer_question` route cannot be resolved). `outcome`: `applied`, `already_resolved`, `stale`, `not_sent`, `send_indeterminate`, `rate_limited`, `forbidden`, `flag_off`, `invalid`, plus `error` for an infrastructure fault. `channel`: `web_local`, `web_remote`, `unknown` (the comment in the metrics file also names `mcp`, but no code sets it). | `server/services/notifyactions/notification_action_metrics.go` (`defaultActionMetrics`) |
 | `notification_inline_action_duration_seconds` | histogram, seconds; buckets 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 | `kind` (same values) | same |
 | `inline_action_undo_total` | counter | `kind`: `approve`, `deny`, `answer_question`, `backlog_decision`; anything else is `unknown` | `server/analytics/quality_metrics.go` |
 | `reopen_after_action_total` | counter | `kind`: always `answer_question` | `server/services/questionkit/notification_quality_metrics.go` |
@@ -66,7 +66,7 @@ Notes:
 |---|---|---|---|
 | `guidance_answer_delivery_total` | counter | `route`: `hook_reply`, `live_keystroke`, `resume`, `read_only`. `state`: `pending`, `sent`, `acknowledged`, `delivery_failed`, `saved_for_later`, `stale`, `aborted_partial`. | `session/guidancestore/metrics.go` (counted in `SetDelivery`, `session/guidancestore/mirror.go`) |
 | `guidance_question_answer_latency_seconds` | histogram, seconds (default buckets) | `source`: `agent_mcp`, `ask_user_question_hook`, `peer`. `route`: as above. | `session/guidancestore/metrics.go` |
-| `guidance_answer_unconfirmed_total` | counter | none | `server/services/questionkit/notification_quality_metrics.go`, incremented in `server/services/guidance_ack_detector.go` |
+| `guidance_answer_unconfirmed_total` | counter | none | `server/services/questionkit/notification_quality_metrics.go`, incremented in `server/services/guidance/guidance_ack_detector.go` |
 | `guidance_mirror_cleared_total` | counter | `reason`: `session_ended`, `answered_in_terminal`, `dialog_gone`, `dialog_replaced` | `server/deliverygate/metrics.go` |
 | `guidance_mirror_failed_total` | counter | `reason`: `timeout`, `error`, `cap_exceeded`, `no_payload`, `invalid_payload` | same |
 | `question_dialog_match_total` | counter | `result`: `match`, `mismatch`. `claude_version`: always `unknown` today. | same |
@@ -269,7 +269,7 @@ scripts/wake-baseline.sh --self-test
 ### Receipt coverage
 
 The receipt is the `PostToolUse` hook that the `post_tool_logging` hook injects
-(`HookPostToolLogging`, `server/services/hook_injector.go:26`). Its endpoint is
+(`HookPostToolLogging`, `server/services/approvals/hook_injector.go:26`). Its endpoint is
 `/api/hooks/post-tool-use`, and `ObservePostToolUse` counts the `ScheduleWakeup`
 tool name (`server/services/guidance_ack_wiring.go:82`).
 

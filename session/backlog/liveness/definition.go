@@ -79,7 +79,7 @@ func (d LivenessDefinition) StalenessThreshold() time.Duration {
 
 // LivenessDefinitionOption configures a LivenessDefinition under construction
 // via NewLivenessDefinition, following this repo's functional-options
-// convention (see server/services/hook_injector.go's InjectHookOption).
+// convention (see server/services/approvals/hook_injector.go's InjectHookOption).
 type LivenessDefinitionOption func(*LivenessDefinition)
 
 // WithExpectedDuration sets the Shape-A ExpectedDuration field.

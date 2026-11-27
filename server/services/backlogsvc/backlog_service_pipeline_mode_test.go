@@ -279,7 +279,7 @@ func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidati
 	// parallel ones start, so this ordering is what keeps the swap from
 	// racing a concurrent Warn call — same fix as
 	// TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet's
-	// sibling comment in webhook_ssrf_test.go.
+	// sibling comment in webhooks/webhook_ssrf_test.go.
 	storage := svctest.CreateTestStorage(t)
 	realRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 	// failAfter=2: call 1 is the engine's construction-time Load (must

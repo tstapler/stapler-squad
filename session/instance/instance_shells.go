@@ -61,7 +61,8 @@ func (i *Instance) shellWgDone() {
 // Format: "{parentSessionName}_shell_{shellID}"
 func (i *Instance) shellTmuxSessionName(shellID string) string {
 	parentName := i.GetTmuxSessionName()
-	return fmt.Sprintf("%s_shell_%s", parentName, shellID)
+	// An adopted parent's exact name may hold "." or ":", which the shell handle replaces.
+	return tmux.SafeSessionName(fmt.Sprintf("%s_shell_%s", parentName, shellID))
 }
 
 // GetShellTmuxSessionName returns the sibling tmux session name for a running shell,

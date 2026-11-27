@@ -2,6 +2,7 @@
 /** An unknown path renders the dedicated "Page not found" view (app/NotFound.tsx) with status 200. */
 import { test, expect } from '@playwright/test';
 import { AppShellPage } from './pages/AppShellPage';
+import { recordTexts } from './pages/recordTexts';
 import { NOT_FOUND_META } from '../../web-app/src/app/route-meta';
 import { baseUrl } from './helpers/base-url';
 
@@ -34,9 +35,10 @@ test.describe('not found (UX G3)', () => {
     // never announces; drive the transition from another route instead, as a real nav-miss would.
     await shell.goto('/history');
     await expect(shell.drawerNav).toBeVisible();
+    const announced = await recordTexts(page.getByTestId('route-announcer'));
     await shell.clientNavigate(MISSING_PATH);
     await expect(page).toHaveTitle(NOT_FOUND_META.title);
-    await expect(page.getByTestId('route-announcer')).toHaveText(NOT_FOUND_META.title);
+    await expect.poll(announced).toContain(NOT_FOUND_META.title);
   });
 
   test('the nav still works and "Go back" shows only when there is history to go back to', async ({ page }) => {

@@ -1,0 +1,209 @@
+new store err=<nil>
+initial: 0 specs
+initial: 0 rules
+upsert[0] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: rule ID is required" validation=true notfound=false
+upsert[1] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: output tag is required" validation=true notfound=false
+upsert[2] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: rule ID is required" validation=true notfound=false
+upsert[3] -> {"id":"seed-lookalike","name":"lookalike","output_tag":"x","priority":0,"enabled":false,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+upsert[4] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: rule ID \"seed-tag-bugfix\" collides with a built-in seed rule" validation=true notfound=false
+upsert[5] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"[\": error parsing regexp: missing closing ]: `[`" validation=true notfound=false
+upsert[6] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"(\": error parsing regexp: missing closing ): `(`" validation=true notfound=false
+upsert[7] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"*\": error parsing regexp: missing argument to repetition operator: `*`" validation=true notfound=false
+upsert[8] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"a{2,1}\": error parsing regexp: invalid repeat count: `{2,1}`" validation=true notfound=false
+upsert[9] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"[\": error parsing regexp: missing closing ]: `[`" validation=true notfound=false
+upsert[10] -> {"id":"u-full","name":"Full \u003c\u0026\u003e ünï","name_pattern":"^n","branch_pattern":"^b/","path_pattern":"/p/","program_pattern":"cla.de","required_tags":["A","B"],"output_tag":"Full","priority":10,"enabled":true,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+upsert[11] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="save tagging rule to DB: ent: validator failed for field \"TaggingRule.name\": value is less than the required length" validation=false notfound=false
+upsert[12] -> {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+upsert[13] -> {"id":"u-full","name":"Full v2","name_pattern":"^n","branch_pattern":"^b/","path_pattern":"/p/","program_pattern":"cla.de","output_tag":"Full","priority":99,"enabled":true,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+upsert[14] -> {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+all: 4 specs
+  {"id":"seed-lookalike","name":"lookalike","output_tag":"x","priority":0,"enabled":false,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"}
+  {"id":"u-full","name":"Full v2","name_pattern":"^n","branch_pattern":"^b/","path_pattern":"/p/","program_pattern":"cla.de","output_tag":"Full","priority":99,"enabled":true,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"}
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"2024-03-02T01:00:00.123456Z"}
+  {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"2024-03-02T01:00:00.123456Z"}
+compiled: 4 rules
+  id="seed-lookalike" name="lookalike" prio=0 enabled=false source="user" n=- b=- p=- g=- req=[]string(nil) out="x"
+  id="u-full" name="Full v2" prio=99 enabled=true source="user" n="^n" b="^b/" p="/p/" g="cla.de" req=[]string(nil) out="Full"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="u-min" name="min v2" prio=0 enabled=true source="" n=- b=- p=- g=- req=[]string(nil) out="Min2"
+db: 4 rows err=<nil>
+  createdSet=true updatedSet=true
+  {"RuleID":"u-empty-req","Name":"empty req","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"E","Priority":-5,"Enabled":false,"Source":"seed","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
+  createdSet=true updatedSet=true
+  {"RuleID":"seed-lookalike","Name":"lookalike","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"x","Priority":0,"Enabled":false,"Source":"user","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
+  createdSet=true updatedSet=true
+  {"RuleID":"u-min","Name":"min v2","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"Min2","Priority":0,"Enabled":true,"Source":"","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
+  createdSet=true updatedSet=true
+  {"RuleID":"u-full","Name":"Full v2","NamePattern":"^n","BranchPattern":"^b/","PathPattern":"/p/","ProgramPattern":"cla.de","RequiredTags":[],"OutputTag":"Full","Priority":99,"Enabled":true,"Source":"user","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
+All returns a copy: true
+delete unknown err="tagging rule \"nope\": tagging rule not found" validation=false notfound=true
+delete empty err="tagging rule \"\": tagging rule not found" validation=false notfound=true
+delete u-full err=<nil>
+delete u-full again err="tagging rule \"u-full\": tagging rule not found" validation=false notfound=true
+after delete: 3 specs
+  {"id":"seed-lookalike","name":"lookalike","output_tag":"x","priority":0,"enabled":false,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"}
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"2024-03-02T01:00:00.123456Z"}
+  {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"2024-03-02T01:00:00.123456Z"}
+db after delete: 3 rows err=<nil>
+  createdSet=true updatedSet=true
+  {"RuleID":"u-empty-req","Name":"empty req","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"E","Priority":-5,"Enabled":false,"Source":"seed","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
+  createdSet=true updatedSet=true
+  {"RuleID":"seed-lookalike","Name":"lookalike","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"x","Priority":0,"Enabled":false,"Source":"user","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
+  createdSet=true updatedSet=true
+  {"RuleID":"u-min","Name":"min v2","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"Min2","Priority":0,"Enabled":true,"Source":"","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
+reload err=<nil>
+reloaded: 5 specs
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:01Z"}
+  {"id":"seed-lookalike","name":"lookalike","output_tag":"x","priority":0,"enabled":false,"source":"user","created_at":"0001-01-01T00:00:01Z"}
+  {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"0001-01-01T00:00:01Z"}
+  {"id":"raw-ok","name":"raw-ok","path_pattern":"^/x","output_tag":"R","priority":1,"enabled":false,"source":"user","created_at":"0001-01-01T00:00:01Z"}
+  {"id":"raw-bad","name":"raw-bad","branch_pattern":"(","output_tag":"R","priority":3,"enabled":false,"source":"user","created_at":"0001-01-01T00:00:01Z"}
+reloaded compiled: 4 rules
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="seed-lookalike" name="lookalike" prio=0 enabled=false source="user" n=- b=- p=- g=- req=[]string{} out="x"
+  id="u-min" name="min v2" prio=0 enabled=true source="" n=- b=- p=- g=- req=[]string{} out="Min2"
+  id="raw-ok" name="raw-ok" prio=1 enabled=false source="user" n=- b=- p="^/x" g=- req=[]string{} out="R"
+closed upsert -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="save tagging rule to DB: sql: database is closed" validation=false notfound=false
+closed delete known err="delete tagging rule from DB: sql: database is closed" validation=false notfound=false
+closed delete unknown err="tagging rule \"nope\": tagging rule not found" validation=false notfound=true
+closed all unchanged: 5 specs
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:01Z"}
+  {"id":"seed-lookalike","name":"lookalike","output_tag":"x","priority":0,"enabled":false,"source":"user","created_at":"0001-01-01T00:00:01Z"}
+  {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"0001-01-01T00:00:01Z"}
+  {"id":"raw-ok","name":"raw-ok","path_pattern":"^/x","output_tag":"R","priority":1,"enabled":false,"source":"user","created_at":"0001-01-01T00:00:01Z"}
+  {"id":"raw-bad","name":"raw-bad","branch_pattern":"(","output_tag":"R","priority":3,"enabled":false,"source":"user","created_at":"0001-01-01T00:00:01Z"}
+closed new store err="tagging_rules_store: load from storage: sql: database is closed" validation=false notfound=false
+seed only: list 7 err=<nil>
+  {"id":"seed-tag-bugfix","name":"Bugfix branch","branch_pattern":"^(bugfix|fix)/","output_tag":"Bugfix","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-feature","name":"Feature branch","branch_pattern":"^(feature|feat)/","output_tag":"Feature","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-hotfix","name":"Hotfix branch","branch_pattern":"^hotfix/","output_tag":"Urgent","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-claude","name":"Claude-driven session","program_pattern":"^claude$","output_tag":"Claude","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-frontend","name":"Frontend working directory","path_pattern":"(^|/)web-app/","output_tag":"Frontend","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-backend","name":"Backend working directory","path_pattern":"(^|/)server/","output_tag":"Backend","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-bugfix-needs-review","name":"Bugfix needs review","required_tags":["Bugfix"],"output_tag":"NeedsReview","priority":10,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+svc upsert[0] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: rule ID is required" validation=true notfound=false
+svc upsert[1] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: output tag is required" validation=true notfound=false
+svc upsert[2] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: rule ID is required" validation=true notfound=false
+svc upsert[3] -> {"id":"seed-lookalike","name":"lookalike","output_tag":"x","priority":0,"enabled":false,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+svc upsert[4] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: rule ID \"seed-tag-bugfix\" collides with a built-in seed rule" validation=true notfound=false
+svc upsert[5] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"[\": error parsing regexp: missing closing ]: `[`" validation=true notfound=false
+svc upsert[6] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"(\": error parsing regexp: missing closing ): `(`" validation=true notfound=false
+svc upsert[7] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"*\": error parsing regexp: missing argument to repetition operator: `*`" validation=true notfound=false
+svc upsert[8] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"a{2,1}\": error parsing regexp: invalid repeat count: `{2,1}`" validation=true notfound=false
+svc upsert[9] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="tagging rule validation failed: invalid regex \"[\": error parsing regexp: missing closing ]: `[`" validation=true notfound=false
+svc upsert[10] -> {"id":"u-full","name":"Full \u003c\u0026\u003e ünï","name_pattern":"^n","branch_pattern":"^b/","path_pattern":"/p/","program_pattern":"cla.de","required_tags":["A","B"],"output_tag":"Full","priority":10,"enabled":true,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+svc upsert[11] -> {"id":"","name":"","output_tag":"","priority":0,"enabled":false,"source":"","created_at":"0001-01-01T00:00:00Z"} err="save tagging rule to DB: ent: validator failed for field \"TaggingRule.name\": value is less than the required length" validation=false notfound=false
+svc upsert[12] -> {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+svc upsert[13] -> {"id":"u-full","name":"Full v2","name_pattern":"^n","branch_pattern":"^b/","path_pattern":"/p/","program_pattern":"cla.de","output_tag":"Full","priority":99,"enabled":true,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+svc upsert[14] -> {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"2024-03-02T01:00:00.123456Z"} err=<nil>
+engine: 13 rules
+  id="seed-tag-bugfix" name="Bugfix branch" prio=100 enabled=true source="seed" n=- b="^(bugfix|fix)/" p=- g=- req=[]string(nil) out="Bugfix"
+  id="seed-tag-feature" name="Feature branch" prio=100 enabled=true source="seed" n=- b="^(feature|feat)/" p=- g=- req=[]string(nil) out="Feature"
+  id="seed-tag-hotfix" name="Hotfix branch" prio=100 enabled=true source="seed" n=- b="^hotfix/" p=- g=- req=[]string(nil) out="Urgent"
+  id="u-full" name="Full v2" prio=99 enabled=true source="user" n="^n" b="^b/" p="/p/" g="cla.de" req=[]string(nil) out="Full"
+  id="seed-tag-claude" name="Claude-driven session" prio=50 enabled=true source="seed" n=- b=- p=- g="^claude$" req=[]string(nil) out="Claude"
+  id="seed-tag-frontend" name="Frontend working directory" prio=50 enabled=true source="seed" n=- b=- p="(^|/)web-app/" g=- req=[]string(nil) out="Frontend"
+  id="seed-tag-backend" name="Backend working directory" prio=50 enabled=true source="seed" n=- b=- p="(^|/)server/" g=- req=[]string(nil) out="Backend"
+  id="seed-tag-bugfix-needs-review" name="Bugfix needs review" prio=10 enabled=true source="seed" n=- b=- p=- g=- req=[]string{"Bugfix"} out="NeedsReview"
+  id="seed-lookalike" name="lookalike" prio=0 enabled=false source="user" n=- b=- p=- g=- req=[]string(nil) out="x"
+  id="u-min" name="min v2" prio=0 enabled=true source="" n=- b=- p=- g=- req=[]string(nil) out="Min2"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+with counts: list 14 err=<nil>
+  {"id":"seed-lookalike","name":"lookalike","output_tag":"x","priority":0,"enabled":false,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} fires=0
+  {"id":"u-full","name":"Full v2","name_pattern":"^n","branch_pattern":"^b/","path_pattern":"/p/","program_pattern":"cla.de","output_tag":"Full","priority":99,"enabled":true,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} fires=2
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"2024-03-02T01:00:00.123456Z"} fires=0
+  {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"2024-03-02T01:00:00.123456Z"} fires=2
+  {"id":"seed-tag-bugfix","name":"Bugfix branch","branch_pattern":"^(bugfix|fix)/","output_tag":"Bugfix","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=1
+  {"id":"seed-tag-feature","name":"Feature branch","branch_pattern":"^(feature|feat)/","output_tag":"Feature","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-hotfix","name":"Hotfix branch","branch_pattern":"^hotfix/","output_tag":"Urgent","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-claude","name":"Claude-driven session","program_pattern":"^claude$","output_tag":"Claude","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-frontend","name":"Frontend working directory","path_pattern":"(^|/)web-app/","output_tag":"Frontend","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-backend","name":"Backend working directory","path_pattern":"(^|/)server/","output_tag":"Backend","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-bugfix-needs-review","name":"Bugfix needs review","required_tags":["Bugfix"],"output_tag":"NeedsReview","priority":10,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+nil counter: list 14 err=<nil>
+  {"id":"seed-lookalike","name":"lookalike","output_tag":"x","priority":0,"enabled":false,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} fires=0
+  {"id":"u-full","name":"Full v2","name_pattern":"^n","branch_pattern":"^b/","path_pattern":"/p/","program_pattern":"cla.de","output_tag":"Full","priority":99,"enabled":true,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"2024-03-02T01:00:00.123456Z"} fires=0
+  {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"2024-03-02T01:00:00.123456Z"} fires=0
+  {"id":"seed-tag-bugfix","name":"Bugfix branch","branch_pattern":"^(bugfix|fix)/","output_tag":"Bugfix","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-feature","name":"Feature branch","branch_pattern":"^(feature|feat)/","output_tag":"Feature","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-hotfix","name":"Hotfix branch","branch_pattern":"^hotfix/","output_tag":"Urgent","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-claude","name":"Claude-driven session","program_pattern":"^claude$","output_tag":"Claude","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-frontend","name":"Frontend working directory","path_pattern":"(^|/)web-app/","output_tag":"Frontend","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-backend","name":"Backend working directory","path_pattern":"(^|/)server/","output_tag":"Backend","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-bugfix-needs-review","name":"Bugfix needs review","required_tags":["Bugfix"],"output_tag":"NeedsReview","priority":10,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+svc delete unknown err="delete tagging rule: tagging rule \"nope\": tagging rule not found" validation=false notfound=true
+svc delete u-full err=<nil>
+engine after delete: 13 rules
+  id="seed-tag-bugfix" name="Bugfix branch" prio=100 enabled=true source="seed" n=- b="^(bugfix|fix)/" p=- g=- req=[]string(nil) out="Bugfix"
+  id="seed-tag-feature" name="Feature branch" prio=100 enabled=true source="seed" n=- b="^(feature|feat)/" p=- g=- req=[]string(nil) out="Feature"
+  id="seed-tag-hotfix" name="Hotfix branch" prio=100 enabled=true source="seed" n=- b="^hotfix/" p=- g=- req=[]string(nil) out="Urgent"
+  id="seed-tag-claude" name="Claude-driven session" prio=50 enabled=true source="seed" n=- b=- p=- g="^claude$" req=[]string(nil) out="Claude"
+  id="seed-tag-frontend" name="Frontend working directory" prio=50 enabled=true source="seed" n=- b=- p="(^|/)web-app/" g=- req=[]string(nil) out="Frontend"
+  id="seed-tag-backend" name="Backend working directory" prio=50 enabled=true source="seed" n=- b=- p="(^|/)server/" g=- req=[]string(nil) out="Backend"
+  id="seed-tag-bugfix-needs-review" name="Bugfix needs review" prio=10 enabled=true source="seed" n=- b=- p=- g=- req=[]string{"Bugfix"} out="NeedsReview"
+  id="seed-lookalike" name="lookalike" prio=0 enabled=false source="user" n=- b=- p=- g=- req=[]string(nil) out="x"
+  id="u-min" name="min v2" prio=0 enabled=true source="" n=- b=- p=- g=- req=[]string(nil) out="Min2"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+closed svc upsert err="save tagging rule to DB: sql: database is closed" validation=false notfound=false
+closed svc delete err="delete tagging rule: delete tagging rule from DB: sql: database is closed" validation=false notfound=false
+closed (count error): list 14 err=<nil>
+  {"id":"seed-lookalike","name":"lookalike","output_tag":"x","priority":0,"enabled":false,"source":"user","created_at":"2024-03-02T01:00:00.123456Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"2024-03-02T01:00:00.123456Z"} fires=0
+  {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"2024-03-02T01:00:00.123456Z"} fires=0
+  {"id":"seed-tag-bugfix","name":"Bugfix branch","branch_pattern":"^(bugfix|fix)/","output_tag":"Bugfix","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-feature","name":"Feature branch","branch_pattern":"^(feature|feat)/","output_tag":"Feature","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-hotfix","name":"Hotfix branch","branch_pattern":"^hotfix/","output_tag":"Urgent","priority":100,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-claude","name":"Claude-driven session","program_pattern":"^claude$","output_tag":"Claude","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-frontend","name":"Frontend working directory","path_pattern":"(^|/)web-app/","output_tag":"Frontend","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-backend","name":"Backend working directory","path_pattern":"(^|/)server/","output_tag":"Backend","priority":50,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"seed-tag-bugfix-needs-review","name":"Bugfix needs review","required_tags":["Bugfix"],"output_tag":"NeedsReview","priority":10,"enabled":true,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+  {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"0001-01-01T00:00:00Z"} fires=0
+engine after closed: 13 rules
+  id="seed-tag-bugfix" name="Bugfix branch" prio=100 enabled=true source="seed" n=- b="^(bugfix|fix)/" p=- g=- req=[]string(nil) out="Bugfix"
+  id="seed-tag-feature" name="Feature branch" prio=100 enabled=true source="seed" n=- b="^(feature|feat)/" p=- g=- req=[]string(nil) out="Feature"
+  id="seed-tag-hotfix" name="Hotfix branch" prio=100 enabled=true source="seed" n=- b="^hotfix/" p=- g=- req=[]string(nil) out="Urgent"
+  id="seed-tag-claude" name="Claude-driven session" prio=50 enabled=true source="seed" n=- b=- p=- g="^claude$" req=[]string(nil) out="Claude"
+  id="seed-tag-frontend" name="Frontend working directory" prio=50 enabled=true source="seed" n=- b=- p="(^|/)web-app/" g=- req=[]string(nil) out="Frontend"
+  id="seed-tag-backend" name="Backend working directory" prio=50 enabled=true source="seed" n=- b=- p="(^|/)server/" g=- req=[]string(nil) out="Backend"
+  id="seed-tag-bugfix-needs-review" name="Bugfix needs review" prio=10 enabled=true source="seed" n=- b=- p=- g=- req=[]string{"Bugfix"} out="NeedsReview"
+  id="seed-lookalike" name="lookalike" prio=0 enabled=false source="user" n=- b=- p=- g=- req=[]string(nil) out="x"
+  id="u-min" name="min v2" prio=0 enabled=true source="" n=- b=- p=- g=- req=[]string(nil) out="Min2"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+  id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
+rpc list seed: 0a420a0f736565642d7461672d627567666978120d427567666978206272616e6368220e5e286275676669787c666978292f4206427567666978486450015a04736565640a470a10736565642d7461672d66656174757265120e46656174757265206272616e636822105e28666561747572657c66656174292f420746656174757265486450015a04736565640a3c0a0f736565642d7461672d686f74666978120d486f74666978206272616e636822085e686f746669782f4206557267656e74486450015a04736565640a440a0f736565642d7461672d636c617564651215436c617564652d64726976656e2073657373696f6e32085e636c61756465244206436c61756465483250015a04736565640a520a11736565642d7461672d66726f6e74656e64121a46726f6e74656e6420776f726b696e67206469726563746f72792a0d285e7c2f297765622d6170702f420846726f6e74656e64483250015a04736565640a4e0a10736565642d7461672d6261636b656e6412194261636b656e6420776f726b696e67206469726563746f72792a0c285e7c2f297365727665722f42074261636b656e64483250015a04736565640a520a1c736565642d7461672d6275676669782d6e656564732d7265766965771213427567666978206e65656473207265766965773a06427567666978420b4e65656473526576696577480a50015a0473656564
+rpc nil rule: err="invalid_argument: rule is required" validation=false notfound=false code=invalid_argument
+rpc no output tag: err="invalid_argument: rule.output_tag is required" validation=false notfound=false code=invalid_argument
+rpc bad regex: err="invalid_argument: tagging rule validation failed: invalid regex \"(\": error parsing regexp: missing closing ): `(`" validation=true notfound=false code=invalid_argument
+rpc seed id: err="invalid_argument: tagging rule validation failed: rule ID \"seed-tag-bugfix\" collides with a built-in seed rule" validation=true notfound=false code=invalid_argument
+rpc update with id: 0a510a06752d66756c6c120e46756c6c203c263e20c3bc6ec3af1a025e6e22035e622f2a032f702f3206636c612e64653a01413a0142420446756c6c480a50015a0475736572620b0890f489af06108094ef3a
+  id=<uuid>
+  created_at=<now>
+rpc create: 0a250a063c757569643e120367656e420367656e48ffffffffffffffffff0150015a04757365721001
+  id=<uuid>
+  created_at=<now>
+rpc list: 0a530a06752d66756c6c120e46756c6c203c263e20c3bc6ec3af1a025e6e22035e622f2a032f702f3206636c612e64653a01413a0142420446756c6c480a50015a0475736572620b0890f489af06108094ef3a68010a250a063c757569643e120367656e420367656e48ffffffffffffffffff0150015a04757365720a420a0f736565642d7461672d627567666978120d427567666978206272616e6368220e5e286275676669787c666978292f4206427567666978486450015a04736565640a470a10736565642d7461672d66656174757265120e46656174757265206272616e636822105e28666561747572657c66656174292f420746656174757265486450015a04736565640a3c0a0f736565642d7461672d686f74666978120d486f74666978206272616e636822085e686f746669782f4206557267656e74486450015a04736565640a440a0f736565642d7461672d636c617564651215436c617564652d64726976656e2073657373696f6e32085e636c61756465244206436c61756465483250015a04736565640a520a11736565642d7461672d66726f6e74656e64121a46726f6e74656e6420776f726b696e67206469726563746f72792a0d285e7c2f297765622d6170702f420846726f6e74656e64483250015a04736565640a4e0a10736565642d7461672d6261636b656e6412194261636b656e6420776f726b696e67206469726563746f72792a0c285e7c2f297365727665722f42074261636b656e64483250015a04736565640a520a1c736565642d7461672d6275676669782d6e656564732d7265766965771213427567666978206e65656473207265766965773a06427567666978420b4e65656473526576696577480a50015a0473656564
+rpc delete empty: err="invalid_argument: id is required" validation=false notfound=false code=invalid_argument
+rpc delete unknown: err="not_found: delete tagging rule: tagging rule \"nope\": tagging rule not found" validation=false notfound=true code=not_found
+rpc delete ok: 0801121352756c6520752d66756c6c2064656c65746564
+rpc closed upsert: err="internal: save tagging rule to DB: sql: database is closed" validation=false notfound=false code=internal
+rpc closed delete: code=internal err="delete tagging rule: delete tagging rule from DB: sql: database is closed"
+  id=<uuid>
+  created_at=<now>
+rpc closed list: 0a250a063c757569643e120367656e420367656e48ffffffffffffffffff0150015a04757365720a420a0f736565642d7461672d627567666978120d427567666978206272616e6368220e5e286275676669787c666978292f4206427567666978486450015a04736565640a470a10736565642d7461672d66656174757265120e46656174757265206272616e636822105e28666561747572657c66656174292f420746656174757265486450015a04736565640a3c0a0f736565642d7461672d686f74666978120d486f74666978206272616e636822085e686f746669782f4206557267656e74486450015a04736565640a440a0f736565642d7461672d636c617564651215436c617564652d64726976656e2073657373696f6e32085e636c61756465244206436c61756465483250015a04736565640a520a11736565642d7461672d66726f6e74656e64121a46726f6e74656e6420776f726b696e67206469726563746f72792a0d285e7c2f297765622d6170702f420846726f6e74656e64483250015a04736565640a4e0a10736565642d7461672d6261636b656e6412194261636b656e6420776f726b696e67206469726563746f72792a0c285e7c2f297365727665722f42074261636b656e64483250015a04736565640a520a1c736565642d7461672d6275676669782d6e656564732d7265766965771213427567666978206e65656473207265766965773a06427567666978420b4e65656473526576696577480a50015a0473656564

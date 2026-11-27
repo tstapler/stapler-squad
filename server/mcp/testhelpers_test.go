@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -21,15 +22,15 @@ import (
 type realSession struct{ *services.SessionService }
 
 func (realSession) InjectHooksConfig(rootDir, sessionTitle string, hooks []string) error {
-	names := make([]services.HookName, len(hooks))
+	names := make([]approvals.HookName, len(hooks))
 	for i, h := range hooks {
-		names[i] = services.HookName(h)
+		names[i] = approvals.HookName(h)
 	}
-	return services.InjectHooksConfig(rootDir, sessionTitle, names)
+	return approvals.InjectHooksConfig(rootDir, sessionTitle, names)
 }
 
 func (realSession) RefreshInstanceHookProof(inst *instance.Instance) {
-	services.RefreshInstanceHookProof(inst)
+	approvals.RefreshInstanceHookProof(inst)
 }
 
 var _ SessionRPC = realSession{}

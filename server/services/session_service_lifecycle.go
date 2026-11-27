@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -65,7 +66,7 @@ func (s *SessionService) HibernateSession(
 
 	// Stop any running autonomous driver so it does not continue injecting prompts
 	// into a session whose process is about to be killed.
-	s.AutonomousSvc.stopAndDeregisterDriver(instance.Title)
+	s.AutonomousSvc.StopDriverForSession(instance.Title)
 
 	// Set reason before transitioning so the After hook can read it
 	reason := req.Msg.Reason
@@ -321,11 +322,11 @@ func (s *SessionService) DeleteSession(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list instances: %w", err))
 	}
-	sessionTitle := ""
+	sessionTitle, tmuxTitle := "", ""
 	sessionUUID := req.Msg.Id // fallback: use the supplied ID if UUID not found
 	for _, d := range dataSlice {
 		if d.Title == req.Msg.Id || d.UUID == req.Msg.Id {
-			sessionTitle = d.Title
+			sessionTitle, tmuxTitle = d.Title, d.TmuxNameTitle()
 			if d.UUID != "" {
 				sessionUUID = d.UUID
 			}
@@ -339,7 +340,7 @@ func (s *SessionService) DeleteSession(
 	// Stop any running autonomous driver before destroying resources.
 	// This prevents the driver goroutine from calling inst.Preview() or SendCommandImmediate
 	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
-	s.AutonomousSvc.stopAndDeregisterDriver(sessionTitle)
+	s.AutonomousSvc.StopDriverForSession(sessionTitle)
 
 	// Capture the live instance BEFORE removing from pollers. removeFromAllPollers
 	// (below) evicts this session from the ReviewQueuePoller's instance list — the
@@ -425,7 +426,7 @@ func (s *SessionService) DeleteSession(
 		// its deterministic name so the Claude process inside it doesn't survive as
 		// an orphan after the DB record is gone.
 		s.trackCleanup(func() {
-			if err := killTmuxSessionByTitle(context.Background(), sessionTitle, true, []string{sessionUUID}); err != nil {
+			if err := killTmuxSessionByTitle(context.Background(), tmuxTitle, true, []string{sessionUUID}); err != nil {
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
 			}
 			// See the liveInst-present branch's comment above: release any
@@ -453,7 +454,7 @@ func (s *SessionService) DeleteSession(
 
 	// Publish SessionDeleted event to all watchers. Use UUID so the frontend
 	// entity adapter (keyed by UUID) matches and tombstones the correct entry.
-	s.onSessionDeletedForReply(sessionUUID)
+	s.replyService().SessionDeleted(sessionUUID)
 	s.eventBus.Publish(events.NewSessionDeletedEvent(sessionUUID))
 
 	return connect.NewResponse(&sessionv1.DeleteSessionResponse{
@@ -706,7 +707,7 @@ func (s *SessionService) RestartSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session: %w", err))
 	}
 
-	RefreshInstanceHookProof(instance)
+	approvals.RefreshInstanceHookProof(instance)
 
 	// Persist the updated instance state.
 	if err := s.storage.SaveInstances([]*instancepkg.Instance{instance}); err != nil {
@@ -1088,6 +1089,7 @@ func (s *SessionService) maybeAutoArchive(inst *instancepkg.Instance) {
 		log.Warn("[SessionService] failed to auto-archive workflow session",
 			"session", inst.Title, "workflow_id", inst.WorkflowID, "err", err)
 	}
+	s.releaseArchivedProcesses(context.Background(), inst)
 }
 
 // ReapPausedTmuxSessions kills any tmux session that is still running for a paused

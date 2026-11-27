@@ -5,8 +5,8 @@
   "method": "GetLauncherPresets",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/launcher_presets_service.go",
+  "handlerFile": "server/services/sessiondefaults/launcher_presets_service.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-08-13T22:30:53.634633115-07:00"
+  "lastModified": "2026-11-27T04:49:15.272767671-08:00"
 }

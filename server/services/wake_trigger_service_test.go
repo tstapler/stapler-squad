@@ -13,7 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -48,7 +48,7 @@ type wakeRig struct {
 	storage *session.Storage
 	svc     *WakeTriggerService
 	d       *wakes.Dispatcher
-	guidSvc *GuidanceRequestService
+	guidSvc *guidance.GuidanceRequestService
 	enabled bool
 }
 
@@ -57,7 +57,7 @@ func newWakeRig(t *testing.T, withDispatcher bool, limits wakes.LimitSettings) *
 	storage, err := session.NewStorageWithRepository(session.NewTestEntRepository(t))
 	require.NoError(t, err)
 	r := &wakeRig{storage: storage, enabled: true, owners: stubOwners{}}
-	r.guidSvc = NewGuidanceRequestService(storage, nil, nil)
+	r.guidSvc = guidance.NewGuidanceRequestService(storage, nil, nil)
 	r.svc = NewWakeTriggerService(WakeTriggerDeps{
 		Store: storage, Owners: r.owners, Guidance: r.guidSvc,
 		Titles:  func(id string) string { return "title-" + id },
@@ -276,7 +276,7 @@ func TestWakeTriggerService_CancelPeerHelp_should_CancelRowAndWakeTheAsker(t *te
 func TestWakeTriggerService_CancelPeerHelp_should_ReportAlreadyAnsweredBySession_When_PeerAnsweredFirst(t *testing.T) {
 	r := newWakeRig(t, false, wakes.LimitSettings{})
 	row := peerRequest(t, r, "asker", "peer")
-	_, applied, err := r.guidSvc.AnswerAs(context.Background(), row.ID, "use option B", SessionAnswerer("peer"))
+	_, applied, err := r.guidSvc.AnswerAs(context.Background(), row.ID, "use option B", guidance.SessionAnswerer("peer"))
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -304,7 +304,7 @@ func TestWakeTriggerService_ListPeerHelpRequests_should_DeriveWaitingAnsweredAnd
 	r := newWakeRig(t, false, wakes.LimitSettings{})
 	waiting := peerRequest(t, r, "asker", "peer")
 	answered := peerRequest(t, r, "asker2", "peer2")
-	_, applied, err := r.guidSvc.AnswerAs(context.Background(), answered.ID, "go with B", HumanAnswerer())
+	_, applied, err := r.guidSvc.AnswerAs(context.Background(), answered.ID, "go with B", guidance.HumanAnswerer())
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -319,27 +319,6 @@ func TestWakeTriggerService_ListPeerHelpRequests_should_DeriveWaitingAnsweredAnd
 	assert.Equal(t, "answered", byID[answered.ID].State)
 	assert.Equal(t, "operator", byID[answered.ID].AnsweredBy)
 	assert.Equal(t, "title-peer2", byID[answered.ID].OnBehalfOf, "the operator answered in the peer's place")
-}
-
-func TestGuidanceDescriptors_should_OfferCancelRequestWithConfirmAndPeerLabel_When_PeerHelpIsOpen(t *testing.T) {
-	b := &DescriptorBuilder{
-		sources: DescriptorSources{Guidance: &fakeGuidance{open: map[string]OpenGuidance{"g1": {PeerHelp: true}}}},
-		flag:    func(string) bool { return true },
-	}
-	rec := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g1", MetaPeerTitle: "diagnose:abc"}}
-
-	b.Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassLocal)
-
-	kinds := make([]sessionv1.ActionKind, 0, len(rec.Actions))
-	for _, a := range rec.Actions {
-		kinds = append(kinds, a.Kind)
-	}
-	assert.Equal(t, []sessionv1.ActionKind{
-		sessionv1.ActionKind_ACTION_KIND_ANSWER_GUIDANCE, sessionv1.ActionKind_ACTION_KIND_CANCEL_PEER_HELP, sessionv1.ActionKind_ACTION_KIND_OPEN,
-	}, kinds)
-	assert.Equal(t, "Answer for diagnose:abc", rec.Actions[0].Label)
-	assert.True(t, rec.Actions[1].RequiresConfirm)
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_A, rec.Actions[1].Tier)
 }
 
 func mustParseUUID(t *testing.T, id string) uuid.UUID {

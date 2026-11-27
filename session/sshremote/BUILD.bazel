@@ -60,6 +60,7 @@ filegroup(
     srcs = glob(["*.go"]),
     visibility = [
         "//server/services:__pkg__",
+        "//server/services/approvals:__pkg__",
         "//session:__pkg__",
     ],
 )

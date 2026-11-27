@@ -157,6 +157,7 @@ go_test(
         "get_pane_dimensions_priority_test.go",
         "kill_orphaned_control_mode_clients_test.go",
         "leaked_control_mode_sweeper_test.go",
+        "new_session_size_test.go",
         "program_kind_test.go",
         "prompt_detection_test.go",
         "remote_env_test.go",

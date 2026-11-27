@@ -11,12 +11,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
 
-func TestContentSearch_ShouldNotMatchAtomicTempFiles(t *testing.T) {
-	_, root := writeTree(t, map[string]string{"a.txt": "needle\n", ".a.txt.ssq-tmp-abc": "needle\n"})
-	got, _ := runSearch(t, root, literalOpts("needle"))
-	assert.Equal(t, []string{"a.txt"}, matchedPaths(got))
-}
-
 func TestFileServiceListFiles_ShouldHideAtomicTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644))

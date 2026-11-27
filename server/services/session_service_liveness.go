@@ -164,6 +164,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if err := s.storage.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return fmt.Errorf("failed to save archived session %s: %w", sessionUUID, err)
 	}
+	s.releaseArchivedProcesses(ctx, inst)
 	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale
 	// review-queue entry) that this session left the live/visible set, mirroring
 	// DeleteSession's EventSessionDeleted publish below.

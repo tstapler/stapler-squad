@@ -23,6 +23,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -5254,7 +5255,7 @@ func settingsHasDriftHook(t *testing.T, worktreePath string) bool {
 	if !ok {
 		return false
 	}
-	var groups []services.HookMatcherGroup
+	var groups []approvals.HookMatcherGroup
 	if err := json.Unmarshal(postToolRaw, &groups); err != nil {
 		t.Fatalf("parse PostToolUse groups: %v", err)
 	}

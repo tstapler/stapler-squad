@@ -55,8 +55,10 @@ test.describe("multi-pr-session-mobile", () => {
   });
 
   test.afterEach(async () => {
+    // Assert before deleting: a terminal handshake still in flight finds its session gone and logs an error.
+    // Soft, so the deletes still run; the page stays open, or an error found here would leave no screenshot.
+    expect.soft(consoleErrors, "no console or page errors").toEqual([]);
     for (const id of created.splice(0)) await client.deleteSession(id, true).catch(() => undefined);
-    expect(consoleErrors, "no console or page errors").toEqual([]);
   });
 
   test("precondition_should_beACoarsePointerTouchDevice", async ({ page }) => {
@@ -65,14 +67,15 @@ test.describe("multi-pr-session-mobile", () => {
     expect(facts.coarse).toBe(true);
     expect(facts.touchPoints).toBeGreaterThan(0);
     expect(facts.ua).toMatch(/Mobile|Android/);
+    // The window hover preview relies on this to ignore the emulated mouse parked at (0,0).
+    expect(await page.evaluate(() => matchMedia("(any-hover: none)").matches)).toBe(true);
   });
 
   test("plusN_should_beTappableAt44pxAndOpenTheListFocusingItsHeading", async ({ page }) => {
     const title = `e2e-multipr-m-chip-${Date.now()}`;
     await seedSession(page, title, threePrs());
     await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
-    // On a phone only one pane shows; the list is the "Sessions" pane tab beside the empty detail pane.
-    await page.getByRole("tab", { name: "Sessions", exact: true }).or(page.getByRole("button", { name: "Sessions", exact: true })).first().tap();
+    await new SessionsPage(page).showSessionListPaneOnPhone();
     const detail = new SessionDetailPage(page);
     const row = new SessionsPage(page).getSessionCard(title);
     await expect(row).toBeVisible();

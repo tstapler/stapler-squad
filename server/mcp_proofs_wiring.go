@@ -8,7 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -25,7 +25,7 @@ type liveInstanceFinder interface {
 // simply unverified.
 func newMCPIdentityMiddleware(next http.Handler, sessions liveInstanceFinder) http.Handler {
 	verify := func(sessionUUID, proof string) bool {
-		p := services.DefaultMcpProofs()
+		p := approvals.DefaultMcpProofs()
 		return p != nil && p.Verify(sessionUUID, proof)
 	}
 	exists := func(sessionUUID string) bool { return sessions.FindLiveInstance(sessionUUID) != nil }
@@ -38,7 +38,7 @@ func newMCPIdentityMiddleware(next http.Handler, sessions liveInstanceFinder) ht
 // deleted. If the self-check fails nothing is installed, so every session
 // stays unverified (fail closed) and the log says why.
 func wireMCPProofs(ctx context.Context, deps *ServerDependencies, goBackground func(func())) {
-	keys := services.DefaultHookProofs()
+	keys := approvals.DefaultHookProofs()
 	if keys == nil {
 		log.Warn("mcp credential disabled: hook proof secret unavailable; identity-gated tools will refuse every session")
 		return
@@ -48,13 +48,13 @@ func wireMCPProofs(ctx context.Context, deps *ServerDependencies, goBackground f
 		log.Warn("mcp credential disabled: config dir unavailable", "err", err)
 		return
 	}
-	proofs := services.NewMcpProofs(keys, dir)
+	proofs := approvals.NewMcpProofs(keys, dir)
 	if err := proofs.SelfCheck(); err != nil {
 		log.Error("mcp credential self-check FAILED; identity-gated tools will refuse every session", "err", err)
 		return
 	}
 	log.Info("mcp credential self-check ok")
-	services.SetDefaultMcpProofs(proofs)
+	approvals.SetDefaultMcpProofs(proofs)
 	instance.SetMCPProofProvider(proofs.Provider())
 
 	known := make(map[string]struct{}, len(deps.Instances))
@@ -74,7 +74,7 @@ func wireMCPProofs(ctx context.Context, deps *ServerDependencies, goBackground f
 
 // watchSessionDeletions deletes a session's proof files when it is deleted, so
 // its still-HMAC-valid proof stops being usable from disk.
-func watchSessionDeletions(ctx context.Context, bus *events.EventBus, proofs *services.McpProofs, goBackground func(func())) {
+func watchSessionDeletions(ctx context.Context, bus *events.EventBus, proofs *approvals.McpProofs, goBackground func(func())) {
 	ch, _ := bus.Subscribe(ctx)
 	goBackground(func() {
 		for {
@@ -91,7 +91,7 @@ func watchSessionDeletions(ctx context.Context, bus *events.EventBus, proofs *se
 	})
 }
 
-func removeProofsOnDelete(proofs *services.McpProofs, ev *events.Event) {
+func removeProofsOnDelete(proofs *approvals.McpProofs, ev *events.Event) {
 	if ev != nil && ev.Type == events.EventSessionDeleted {
 		proofs.RemoveFiles(ev.SessionID)
 	}

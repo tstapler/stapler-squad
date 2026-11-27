@@ -8,8 +8,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -201,4 +203,26 @@ func TestSteerOutcome_String_should_NameEveryOutcome(t *testing.T) {
 	} {
 		assert.Equal(t, want, o.String())
 	}
+}
+
+const guardedSteerWatchPR = githubpkg.LinkKey("github.com/o/r#7")
+
+func TestSteerSessionGuarded_should_ReturnDuplicate_When_PRWatchSignatureRepeatsWithinWindow(t *testing.T) {
+	svc, inst, rec, _ := newGuardedSteerFixture(t, notReadyNone)
+	sig := prs.PRWatchGuardSignature(guardedSteerWatchPR, prs.PRWatchKindCI)
+
+	out, err := svc.SteerSessionGuarded(context.Background(), inst.GetStableID(), sig, "msg")
+	require.NoError(t, err)
+	assert.Equal(t, SteerDelivered, out)
+
+	out, err = svc.SteerSessionGuarded(context.Background(), inst.GetStableID(), sig, "msg")
+	require.NoError(t, err)
+	assert.Equal(t, SteerDuplicate, out)
+	assert.Equal(t, 1, rec.writes)
+
+	// A manual-nudge style signature for the same PR and reason also dedupes.
+	out, err = svc.SteerSessionGuarded(context.Background(), inst.GetStableID(),
+		access.GuardSignature(guardedSteerWatchPR, access.ReasonSetSignature("FAILING_CHECKS")), "msg")
+	require.NoError(t, err)
+	assert.Equal(t, SteerDuplicate, out)
 }

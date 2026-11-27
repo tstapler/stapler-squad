@@ -1,0 +1,190 @@
+package qareply
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"connectrpc.com/connect"
+	"github.com/google/uuid"
+
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/panereply"
+)
+
+// pane_reply_sequence.go is the multi-key sibling of PaneReplyCore.Run for the
+// tabbed multi-question AskUserQuestion (Story 3.5). Same rails and audit
+// order (limiters, audit line, lease, before-first-byte checks, write, closed
+// check); the write is panereply.SubmitReplySequence with a frame check before
+// every key. It serves visible sessions only; a hidden session keeps the
+// single-digit Reply path.
+
+// replyStageAbortedPartial is the audit stage of an answer typed in part.
+const replyStageAbortedPartial = "aborted_partial"
+
+// sequenceInput is one validated multi-key answer.
+type sequenceInput struct {
+	sessionID   string
+	sessionUUID string
+	questionID  string
+	replyID     string
+	steps       []panereply.ReplyStep
+	// summary is the audited, truncated text of the answer.
+	summary  string
+	question string
+}
+
+// sequenceOutcome is what a sequence attempt returns.
+type sequenceOutcome struct {
+	questionkit.ReplyOutcomeResult
+	// Partial is true when some keys were typed and the answer was not finished.
+	Partial bool
+	Written int
+	Total   int
+}
+
+// RunSequence is the leader's path for a multi-key answer. consumed is true
+// when a key may have reached the pane.
+func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in sequenceInput, inst *instance.Instance, facts access.SteerRequestFacts) sequenceOutcome {
+	if inst.IsArchived() {
+		c.count(replyOutcomeLabel(sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING))
+		return sequenceOutcome{ReplyOutcomeResult: questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING}}
+	}
+	reservation, retryAfter, ok := c.limiters.reserve(in.sessionUUID)
+	if !ok {
+		secs := int32((retryAfter + time.Second - 1) / time.Second)
+		c.count(replyOutcomeLabel(sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED))
+		return sequenceOutcome{ReplyOutcomeResult: questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED, RetryAfter: max(secs, 1)}}
+	}
+	line := c.sequenceAuditLine(in, inst, facts)
+	if aerr := c.appendRequest(ctx, line); aerr != nil {
+		reservation.cancel()
+		c.count(replyLabelAuditFailed)
+		log.Error("[Reply] audit append failed; nothing written", "session", in.sessionUUID, "err", aerr)
+		return sequenceOutcome{ReplyOutcomeResult: questionkit.ReplyOutcomeResult{Err: connect.NewError(connect.CodeInternal, errors.New("audit log unavailable, reply not sent"))}}
+	}
+	out, stage, consumed := c.writeSequenceUnderLease(ctx, target, in, inst)
+	if !consumed {
+		reservation.cancel()
+	}
+	c.appendResult(line, out.ReplyOutcomeResult, stage)
+	c.count(replyOutcomeLabel(out.Outcome))
+	log.Info("hidden_session_reply", "outcome", replyOutcomeLabel(out.Outcome), "stage", stage,
+		"steps_written", out.Written, "steps_total", out.Total, "session", in.sessionUUID)
+	return out
+}
+
+func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *instance.Instance, facts access.SteerRequestFacts) auditkit.AuditLine {
+	return auditkit.AuditLine{
+		Kind: auditkit.AuditKindReply, ChangeID: uuid.NewString(),
+		SessionUUID: in.sessionUUID, SessionTitle: inst.Snapshot().Title,
+		QuestionID: in.questionID, ReplyID: in.replyID, OptionLabel: truncateRunes(in.summary, 80),
+		QuestionToken: questionkit.QuestionToken(in.question),
+		Listener:      facts.Refusal.Listener, PeerAddr: facts.Refusal.Peer, Host: facts.Refusal.Host, Origin: facts.Refusal.Origin,
+		UserAgent: facts.UserAgent, AuthMode: facts.Refusal.AuthMode,
+		PeerLoopback: flagsvc.BoolRef(facts.Refusal.PeerLoopback), Proxied: flagsvc.BoolRef(facts.Refusal.Proxied),
+	}
+}
+
+// writeSequenceUnderLease is the sequence chain's acquirer.
+func (c *PaneReplyCore) writeSequenceUnderLease(ctx context.Context, target AnswerTarget, in sequenceInput, inst *instance.Instance) (sequenceOutcome, string, bool) {
+	notSent := func(o sessionv1.ReplyOutcome, stage string) (sequenceOutcome, string, bool) {
+		return sequenceOutcome{ReplyOutcomeResult: questionkit.ReplyOutcomeResult{Outcome: o}}, stage, false
+	}
+	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
+	if !ok {
+		return notSent(sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT, replyStageLeaseBusy)
+	}
+	if !target.admits(access.AccessFor(inst)) {
+		lease.Release()
+		o, stage := target.mismatchOutcome()
+		return notSent(o, stage)
+	}
+	res := panereply.SubmitReplySequence(ctx, inst, lease, in.steps, panereply.SequenceOptions{
+		StillOpen:       panereply.TabbedStillOpen,
+		BeforeFirstByte: c.sequenceChecks(target, in, inst),
+		BeforeEachWrite: refuseArchived(inst),
+		After:           c.after,
+	})
+	return mapSequenceResult(res)
+}
+
+// sequenceChecks run under the lease before the first key: still the target
+// kind, the session is the question's, and a status controller is active. The
+// first step's frame check is the structural match.
+func (c *PaneReplyCore) sequenceChecks(target AnswerTarget, in sequenceInput, inst *instance.Instance) func() error {
+	return func() error {
+		if !target.admits(access.AccessFor(inst)) {
+			out, stage := target.mismatchOutcome()
+			return &replyWriteError{out, stage}
+		}
+		if inst.GetStableID() != in.sessionUUID {
+			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING, replyStageClaimDeleted}
+		}
+		if !c.controllerActive(inst) {
+			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING, replyStageNotWaiting}
+		}
+		return nil
+	}
+}
+
+// refuseArchived is the archived check of the single-digit path, for every key.
+func refuseArchived(inst *instance.Instance) func() error {
+	return func() error {
+		if inst.IsArchived() {
+			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING, replyStageArchived}
+		}
+		return nil
+	}
+}
+
+// mapSequenceResult turns a driver result into the reply outcome vocabulary:
+// NOT_SENT only when no key was handed over, SEND_INDETERMINATE when a key may
+// have landed, STALE_PROMPT when a frame check failed (Partial when keys were
+// already typed).
+func mapSequenceResult(r panereply.SequenceResult) (sequenceOutcome, string, bool) {
+	out := sequenceOutcome{Written: r.Written, Total: r.Total, Partial: r.Partial()}
+	set := func(o sessionv1.ReplyOutcome) { out.Outcome = o }
+	var refused *replyWriteError
+	switch {
+	case r.Stage == panereply.StageDialogClosed:
+		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT)
+		return out, replyStageDialogClosed, true
+	case r.Stage == panereply.StageDialogStillOpen:
+		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE)
+		return out, replyStageDialogStillOpen, true
+	case r.Stale && r.Written > 0:
+		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT)
+		return out, replyStageAbortedPartial, true
+	case errors.As(r.Err, &refused) && r.Written > 0:
+		set(refused.outcome)
+		return out, refused.stage, true
+	case r.Stage == panereply.StageWriteEntered:
+		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE)
+		return out, replyStageIndeterminate, true
+	case r.Stale:
+		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT)
+		return out, replyStageStalePrompt, false
+	case errors.As(r.Err, &refused):
+		set(refused.outcome)
+		return out, refused.stage, false
+	}
+	set(sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT)
+	return out, replyStageNotSent, false
+}
+
+// sequenceSummary is the audited text of picks, one question per segment.
+func sequenceSummary(picks [][]string) string {
+	parts := make([]string, len(picks))
+	for i, p := range picks {
+		parts[i] = strings.Join(p, ", ")
+	}
+	return strings.Join(parts, " | ")
+}

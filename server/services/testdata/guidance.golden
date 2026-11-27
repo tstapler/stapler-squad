@@ -1,0 +1,712 @@
+=== create and read
+create bad scope => connect invalid_argument: invalid scope "planet"
+create bad type => connect invalid_argument: invalid question_type "essay"
+create bad item id => connect invalid_argument: invalid item_id: invalid UUID length: 4
+create item scope without item => connect invalid_argument: item_id is required for scope=backlog-item
+create unknown item => connect not_found: backlog item "<id1>" not found: This item id does not exist — do not retry any backlog MCP tool call against it. If you were given this item id at session start, report it in your final summary; it may have been deleted or archived out from under this session.
+create unlinked caller => connect permission_denied: session <id2> is not linked to backlog item <id3>: Call link_session_to_item with item_id=<id3> to link this session before retrying. If you don't fix this, stop calling ANY backlog MCP tool for this item — report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, report_blocked, report_duplicate, resume_work will all fail identically for the same reason.
+create session scope without session => connect invalid_argument: session_uuid is required for scope=session
+create session mismatch => connect permission_denied: caller session <id2> may not create a guidance request scoped to a different session <id4>
+create empty text => {"request":{"answererKind":"human","createdAt":"<time>","id":"<id5>","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"}}
+create linked item => {"request":{"answererKind":"human","createdAt":"<time>","id":"<id6>","itemId":"<id3>","options":["yes","no \u003c\u0026\u003e"],"questionText":"merge first?","questionType":"multiple-choice","scope":"backlog-item","source":"agent_mcp","status":"pending"}}
+create linked item duplicate => {"request":{"answererKind":"human","createdAt":"<time>","id":"<id6>","itemId":"<id3>","options":["yes","no \u003c\u0026\u003e"],"questionText":"merge first?","questionType":"multiple-choice","scope":"backlog-item","source":"agent_mcp","status":"pending"}}
+create session ok => {"request":{"answererKind":"human","createdAt":"<time>","id":"<id7>","questionText":"approach?","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"pending"}}
+create standalone 0 => {"request":{"answererKind":"human","createdAt":"<time>","id":"<id8>","questionText":"standalone question 0","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"}}
+create standalone 1 => {"request":{"answererKind":"human","createdAt":"<time>","id":"<id9>","questionText":"standalone question 1","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"}}
+create standalone 2 => {"request":{"answererKind":"human","createdAt":"<time>","id":"<id10>","questionText":"standalone question 2","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"}}
+create standalone 3 => connect resource_exhausted: create guidance request: guidance request pending cap exceeded: scope=standalone source=agent_mcp current count=5 cap=4
+create standalone 4 => connect resource_exhausted: create guidance request: guidance request pending cap exceeded: scope=standalone source=agent_mcp current count=5 cap=4
+get nope => connect invalid_argument: invalid id: invalid UUID length: 4
+answer nope => connect invalid_argument: invalid id: invalid UUID length: 4
+get <id1> => connect not_found: not found: guidance request <id1>
+answer <id1> => connect not_found: not found: guidance request <id1>
+list session answered=false => {"cap":4,"pendingCount":1,"requests":[{"answererKind":"human","createdAt":"<time>","id":"<id7>","questionText":"approach?","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"pending"}]}
+list session answered=true => {"cap":4,"pendingCount":1,"requests":[{"answererKind":"human","createdAt":"<time>","id":"<id7>","questionText":"approach?","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"pending"}]}
+list backlog-item answered=false => {"cap":4,"pendingCount":1,"requests":[{"answererKind":"human","createdAt":"<time>","id":"<id6>","itemId":"<id3>","options":["yes","no \u003c\u0026\u003e"],"questionText":"merge first?","questionType":"multiple-choice","scope":"backlog-item","source":"agent_mcp","status":"pending"}]}
+list backlog-item answered=true => {"cap":4,"pendingCount":1,"requests":[{"answererKind":"human","createdAt":"<time>","id":"<id6>","itemId":"<id3>","options":["yes","no \u003c\u0026\u003e"],"questionText":"merge first?","questionType":"multiple-choice","scope":"backlog-item","source":"agent_mcp","status":"pending"}]}
+list standalone answered=false => {"cap":4,"pendingCount":4,"requests":[{"answererKind":"human","createdAt":"<time>","id":"<id5>","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id8>","questionText":"standalone question 0","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id9>","questionText":"standalone question 1","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id10>","questionText":"standalone question 2","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"}]}
+list standalone answered=true => {"cap":4,"pendingCount":4,"requests":[{"answererKind":"human","createdAt":"<time>","id":"<id5>","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id8>","questionText":"standalone question 0","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id9>","questionText":"standalone question 1","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id10>","questionText":"standalone question 2","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"}]}
+list planet answered=false => {"cap":4}
+list planet answered=true => {"cap":4}
+list all => {"requests":[{"answererKind":"human","createdAt":"<time>","id":"<id5>","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id7>","questionText":"approach?","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id6>","itemId":"<id3>","options":["yes","no \u003c\u0026\u003e"],"questionText":"merge first?","questionType":"multiple-choice","scope":"backlog-item","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id8>","questionText":"standalone question 0","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id9>","questionText":"standalone question 1","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"},{"answererKind":"human","createdAt":"<time>","id":"<id10>","questionText":"standalone question 2","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"pending"}]}
+=== answer and notify
+answer session truncation +0 => {"applied":true,"request":{"answer":"ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","id":"<id11>","questionText":"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"answered"}}
+session truncation +0 event type=session.notification session=<id4> context="" ntype=2 prio=4 title="Your guidance request was answered" message="ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé → ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß" meta={"item_id":"<id4>"}
+session truncation +0 listener=[<id11>]
+answer session truncation +1 => {"applied":true,"request":{"answer":"ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","id":"<id12>","questionText":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééü","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"answered"}}
+session truncation +1 event type=session.notification session=<id4> context="" ntype=2 prio=4 title="Your guidance request was answered" message="éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééü → ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß" meta={"item_id":"<id4>"}
+session truncation +1 listener=[<id12>]
+answer session truncation +2 => {"applied":true,"request":{"answer":"ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","id":"<id13>","questionText":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééüü","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"answered"}}
+session truncation +2 event type=session.notification session=<id4> context="" ntype=2 prio=4 title="Your guidance request was answered" message="éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééü... → ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß..." meta={"item_id":"<id4>"}
+session truncation +2 listener=[<id13>]
+answer first => {"applied":true,"request":{"answer":"yes","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","id":"<id14>","questionText":"twice?","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"answered"}}
+first event type=session.notification session=<id4> context="" ntype=2 prio=4 title="Your guidance request was answered" message="twice? → yes" meta={"item_id":"<id4>"}
+first listener=[<id14>]
+answer second => {"request":{"answer":"yes","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","id":"<id14>","questionText":"twice?","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"answered"}}
+second listener=[]
+answer empty => {"applied":true,"request":{"answeredAt":"<time>","answererKind":"human","createdAt":"<time>","id":"<id15>","questionText":"empty answer?","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"answered"}}
+empty event type=session.notification session=<id4> context="" ntype=2 prio=4 title="Your guidance request was answered" message="empty answer? → " meta={"item_id":"<id4>"}
+empty listener=[<id15>]
+answer hook source => {"applied":true,"request":{"answer":"Red","answeredAt":"<time>","answererKind":"human","askerSessionUuid":"<id4>","createdAt":"<time>","deliveryRoute":"live_keystroke","hookCallId":"toolu_hook","id":"<id16>","options":["Red","Blue"],"questionText":"hook","questionType":"multiple-choice","questions":[{"header":"H","options":[{"label":"Red"},{"label":"Blue"}],"question":"hook"}],"scope":"session","sessionUuid":"<id4>","source":"ask_user_question_hook","status":"answered"}}
+hook source listener=[<id16>]
+answer peer source by human => {"applied":true,"request":{"answer":"on behalf","answeredAt":"<time>","answererKind":"human","answererSessionUuid":"<id17>","askerSessionUuid":"<id4>","createdAt":"<time>","expiresAt":"<time>","id":"<id18>","questionText":"peer?","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"peer","status":"answered"}}
+peer source by human listener=[<id18>]
+answer standalone => {"applied":true,"request":{"answer":"yes","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","id":"<id19>","questionText":"alone?","questionType":"yes-no","scope":"standalone","source":"agent_mcp","status":"answered"}}
+standalone listener=[<id19>]
+answer cancelled => {"request":{"answererKind":"human","cancelReason":"test","cancelledAt":"<time>","createdAt":"<time>","id":"<id20>","questionText":"cancelled?","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"cancelled"}}
+cancelled listener=[]
+answer backlog item => {"applied":true,"request":{"answer":"yes","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","id":"<id21>","itemId":"<id22>","questionText":"mobile too?","questionType":"yes-no","scope":"backlog-item","source":"agent_mcp","status":"answered"}}
+backlog item event type=session.notification session=<id22> context="" ntype=2 prio=4 title="Your guidance request was answered" message="mobile too? → yes" meta={"item_id":"<id22>"}
+backlog item listener=[<id21>]
+respawn <id22>
+note "Guidance request answered — \"mobile too?\" → \"yes\""
+=== authorize
+answerAs <id23> zero: applied=false data=true forbidden=true error: answerer is not permitted to answer this request
+answerAs <id23> empty session: applied=false data=true forbidden=true error: answerer is not permitted to answer this request
+answerAs <id23> other: applied=false data=true forbidden=true error: answerer is not permitted to answer this request
+answerAs <id23> asker: applied=false data=true forbidden=true error: answerer is not permitted to answer this request
+answerAs <id23> peer: applied=false data=true forbidden=true error: answerer is not permitted to answer this request
+answerAs <id24> zero: applied=false data=true forbidden=true error: answerer is not permitted to answer this request
+answerAs <id24> empty session: applied=false data=true forbidden=true error: answerer is not permitted to answer this request
+answerAs <id24> other: applied=false data=true forbidden=true error: answerer is not permitted to answer this request
+answerAs <id24> asker: applied=false data=true forbidden=true error: answerer is not permitted to answer this request
+answerAs <id24> peer: applied=true data=true forbidden=false ok
+answerAs bad zero: applied=false data=false forbidden=false error: invalid guidance request id: invalid UUID length: 3
+answerAs bad empty session: applied=false data=false forbidden=false error: invalid guidance request id: invalid UUID length: 3
+answerAs bad other: applied=false data=false forbidden=false error: invalid guidance request id: invalid UUID length: 3
+answerAs bad asker: applied=false data=false forbidden=false error: invalid guidance request id: invalid UUID length: 3
+answerAs bad peer: applied=false data=false forbidden=false error: invalid guidance request id: invalid UUID length: 3
+answerAs <id1> zero: applied=false data=false forbidden=false error: not found: guidance request <id1>
+answerAs <id1> empty session: applied=false data=false forbidden=false error: not found: guidance request <id1>
+answerAs <id1> other: applied=false data=false forbidden=false error: not found: guidance request <id1>
+answerAs <id1> asker: applied=false data=false forbidden=false error: not found: guidance request <id1>
+answerAs <id1> peer: applied=false data=false forbidden=false error: not found: guidance request <id1>
+peer after row status=answered answer="by peer" route="" state="" attempts=0 cancel="" answerer=session/<id17>
+answerAsSession applied=true ok
+human on peer applied=true answer="stand in" ok
+human on peer row status=answered answer="stand in" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+=== saved and derived
+saved probes=none src=agent ended=false archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/
+saved probes=none src=agent ended=true archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/
+saved probes=none src=agent ended=false archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/
+saved probes=none src=agent ended=true archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/
+saved probes=none src=peer ended=false archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=none src=peer ended=true archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=none src=peer ended=false archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=none src=peer ended=true archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=none src=hook ended=false archived=false applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=none src=hook ended=true archived=false applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=none src=hook ended=false archived=true applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=none src=hook ended=true archived=true applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=empty src=agent ended=false archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/
+saved probes=empty src=agent ended=true archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/
+saved probes=empty src=agent ended=false archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/
+saved probes=empty src=agent ended=true archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/
+saved probes=empty src=peer ended=false archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=empty src=peer ended=true archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=empty src=peer ended=false archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=empty src=peer ended=true archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=empty src=hook ended=false archived=false applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=empty src=hook ended=true archived=false applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=empty src=hook ended=false archived=true applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=empty src=hook ended=true archived=true applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=set src=agent ended=false archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/
+saved probes=set src=agent ended=true archived=false applied=true ok
+saved row status=answered answer="a" route="resume" state="saved_for_later" attempts=0 cancel="" answerer=human/
+saved probes=set src=agent ended=false archived=true applied=true ok
+saved row status=answered answer="a" route="read_only" state="saved_for_later" attempts=0 cancel="" answerer=human/
+saved probes=set src=agent ended=true archived=true applied=true ok
+saved row status=answered answer="a" route="read_only" state="saved_for_later" attempts=0 cancel="" answerer=human/
+saved probes=set src=peer ended=false archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=set src=peer ended=true archived=false applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=set src=peer ended=false archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=set src=peer ended=true archived=true applied=true ok
+saved row status=answered answer="a" route="" state="" attempts=0 cancel="" answerer=human/<id17>
+saved probes=set src=hook ended=false archived=false applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=set src=hook ended=true archived=false applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=set src=hook ended=false archived=true applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+saved probes=set src=hook ended=true archived=true applied=true ok
+saved row status=answered answer="a" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+derived src=agent state="" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=agent state="" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=agent state="" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=agent state="" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=true
+cancelled => {"request":{"answererKind":"human","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","id":"<id25>","questionText":"derived agent  37","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"cancelled"}}
+set pending applied=true ok
+derived src=agent state="pending" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=agent state="pending" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=agent state="pending" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=agent state="pending" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=true
+cancelled => {"request":{"answererKind":"human","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":1,"deliveryRoute":"live_keystroke","deliveryState":"pending","id":"<id26>","questionText":"derived agent pending 38","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"cancelled"}}
+set pending applied=true ok
+set sent applied=true ok
+derived src=agent state="sent" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=agent state="sent" probes={ended:true archived:false unconfirmed:true} => unack=true ended=true archived=false
+derived src=agent state="sent" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=agent state="sent" probes={ended:true archived:true unconfirmed:true} => unack=true ended=true archived=true
+cancelled => {"request":{"answererKind":"human","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":2,"deliveryRoute":"live_keystroke","deliveryState":"sent","id":"<id27>","questionText":"derived agent sent 39","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"cancelled"}}
+set pending applied=true ok
+set sent applied=true ok
+set delivery_failed applied=true ok
+derived src=agent state="delivery_failed" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=agent state="delivery_failed" probes={ended:true archived:false unconfirmed:true} => unack=false ended=true archived=false
+derived src=agent state="delivery_failed" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=agent state="delivery_failed" probes={ended:true archived:true unconfirmed:true} => unack=false ended=true archived=true
+cancelled => {"request":{"answererKind":"human","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":3,"deliveryRoute":"live_keystroke","deliveryState":"delivery_failed","id":"<id28>","questionText":"derived agent delivery_failed 40","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"cancelled"}}
+set pending applied=true ok
+set sent applied=true ok
+set acknowledged applied=true ok
+derived src=agent state="acknowledged" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=agent state="acknowledged" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=agent state="acknowledged" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=agent state="acknowledged" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=true
+cancelled => {"request":{"answererKind":"human","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":3,"deliveryRoute":"live_keystroke","deliveryState":"acknowledged","id":"<id29>","questionText":"derived agent acknowledged 41","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"cancelled"}}
+derived src=peer state="" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=peer state="" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=false
+cancelled => {"request":{"answererKind":"session","answererSessionUuid":"<id17>","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","expiresAt":"<time>","id":"<id30>","questionText":"derived peer  42","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"peer","status":"cancelled"}}
+set pending applied=true ok
+derived src=peer state="pending" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="pending" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=peer state="pending" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="pending" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=false
+cancelled => {"request":{"answererKind":"session","answererSessionUuid":"<id17>","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":1,"deliveryRoute":"live_keystroke","deliveryState":"pending","expiresAt":"<time>","id":"<id31>","questionText":"derived peer pending 43","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"peer","status":"cancelled"}}
+set pending applied=true ok
+set sent applied=true ok
+derived src=peer state="sent" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="sent" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=peer state="sent" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="sent" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=false
+cancelled => {"request":{"answererKind":"session","answererSessionUuid":"<id17>","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":2,"deliveryRoute":"live_keystroke","deliveryState":"sent","expiresAt":"<time>","id":"<id32>","questionText":"derived peer sent 44","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"peer","status":"cancelled"}}
+set pending applied=true ok
+set sent applied=true ok
+set delivery_failed applied=true ok
+derived src=peer state="delivery_failed" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="delivery_failed" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=peer state="delivery_failed" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="delivery_failed" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=false
+cancelled => {"request":{"answererKind":"session","answererSessionUuid":"<id17>","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":3,"deliveryRoute":"live_keystroke","deliveryState":"delivery_failed","expiresAt":"<time>","id":"<id33>","questionText":"derived peer delivery_failed 45","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"peer","status":"cancelled"}}
+set pending applied=true ok
+set sent applied=true ok
+set acknowledged applied=true ok
+derived src=peer state="acknowledged" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="acknowledged" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=peer state="acknowledged" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=false
+derived src=peer state="acknowledged" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=false
+cancelled => {"request":{"answererKind":"session","answererSessionUuid":"<id17>","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":3,"deliveryRoute":"live_keystroke","deliveryState":"acknowledged","expiresAt":"<time>","id":"<id34>","questionText":"derived peer acknowledged 46","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"peer","status":"cancelled"}}
+derived src=hook state="" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=hook state="" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=hook state="" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=hook state="" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=true
+cancelled => {"request":{"answererKind":"human","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryRoute":"live_keystroke","hookCallId":"toolu_derived hook  47","id":"<id35>","options":["Red","Blue"],"questionText":"derived hook  47","questionType":"multiple-choice","questions":[{"header":"H","options":[{"label":"Red"},{"label":"Blue"}],"question":"derived hook  47"}],"scope":"session","sessionUuid":"<id4>","source":"ask_user_question_hook","status":"cancelled"}}
+set pending applied=true ok
+derived src=hook state="pending" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=hook state="pending" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=hook state="pending" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=hook state="pending" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=true
+cancelled => {"request":{"answererKind":"human","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":1,"deliveryRoute":"live_keystroke","deliveryState":"pending","hookCallId":"toolu_derived hook pending 48","id":"<id36>","options":["Red","Blue"],"questionText":"derived hook pending 48","questionType":"multiple-choice","questions":[{"header":"H","options":[{"label":"Red"},{"label":"Blue"}],"question":"derived hook pending 48"}],"scope":"session","sessionUuid":"<id4>","source":"ask_user_question_hook","status":"cancelled"}}
+set pending applied=true ok
+set sent applied=true ok
+derived src=hook state="sent" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=hook state="sent" probes={ended:true archived:false unconfirmed:true} => unack=true ended=true archived=false
+derived src=hook state="sent" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=hook state="sent" probes={ended:true archived:true unconfirmed:true} => unack=true ended=true archived=true
+cancelled => {"request":{"answererKind":"human","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":2,"deliveryRoute":"live_keystroke","deliveryState":"sent","hookCallId":"toolu_derived hook sent 49","id":"<id37>","options":["Red","Blue"],"questionText":"derived hook sent 49","questionType":"multiple-choice","questions":[{"header":"H","options":[{"label":"Red"},{"label":"Blue"}],"question":"derived hook sent 49"}],"scope":"session","sessionUuid":"<id4>","source":"ask_user_question_hook","status":"cancelled"}}
+set pending applied=true ok
+set sent applied=true ok
+set delivery_failed applied=true ok
+derived src=hook state="delivery_failed" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=hook state="delivery_failed" probes={ended:true archived:false unconfirmed:true} => unack=false ended=true archived=false
+derived src=hook state="delivery_failed" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=hook state="delivery_failed" probes={ended:true archived:true unconfirmed:true} => unack=false ended=true archived=true
+cancelled => {"request":{"answererKind":"human","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":3,"deliveryRoute":"live_keystroke","deliveryState":"delivery_failed","hookCallId":"toolu_derived hook delivery_failed 50","id":"<id38>","options":["Red","Blue"],"questionText":"derived hook delivery_failed 50","questionType":"multiple-choice","questions":[{"header":"H","options":[{"label":"Red"},{"label":"Blue"}],"question":"derived hook delivery_failed 50"}],"scope":"session","sessionUuid":"<id4>","source":"ask_user_question_hook","status":"cancelled"}}
+set pending applied=true ok
+set sent applied=true ok
+set acknowledged applied=true ok
+derived src=hook state="acknowledged" probes={ended:false archived:false unconfirmed:false} => unack=false ended=false archived=false
+derived src=hook state="acknowledged" probes={ended:true archived:false unconfirmed:true} => unack=false ended=false archived=false
+derived src=hook state="acknowledged" probes={ended:false archived:true unconfirmed:false} => unack=false ended=false archived=true
+derived src=hook state="acknowledged" probes={ended:true archived:true unconfirmed:true} => unack=false ended=false archived=true
+cancelled => {"request":{"answererKind":"human","askerSessionUuid":"<id4>","cancelReason":"cleanup","cancelledAt":"<time>","createdAt":"<time>","deliveryAttempts":3,"deliveryRoute":"live_keystroke","deliveryState":"acknowledged","hookCallId":"toolu_derived hook acknowledged 51","id":"<id39>","options":["Red","Blue"],"questionText":"derived hook acknowledged 51","questionType":"multiple-choice","questions":[{"header":"H","options":[{"label":"Red"},{"label":"Blue"}],"question":"derived hook acknowledged 51"}],"scope":"session","sessionUuid":"<id4>","source":"ask_user_question_hook","status":"cancelled"}}
+list saved => {"requests":[{"answer":"a","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","deliveryRoute":"resume","deliveryState":"saved_for_later","id":"<id40>","questionText":"agent set 26","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"answered"},{"answer":"a","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","deliveryRoute":"read_only","deliveryState":"saved_for_later","id":"<id41>","questionText":"agent set 27","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"answered"},{"answer":"a","answeredAt":"<time>","answererKind":"human","createdAt":"<time>","deliveryRoute":"read_only","deliveryState":"saved_for_later","id":"<id42>","questionText":"agent set 28","questionType":"short-answer","scope":"session","sessionUuid":"<id4>","source":"agent_mcp","status":"answered"}]}
+=== waiver and peer cancel
+waive idx=1 answer="Keep" applied=true ok ac=pending,pending resumed=[]
+waive notes=[]
+waive idx=1 answer="Waive criterion" applied=true ok ac=pending,waived resumed=[<id43>]
+waive notes=["Owner waived acceptance criterion 1 via owner-action request <id44>"]
+waive idx=1 answer="Waive criterion" applied=true ok ac=pending,waived resumed=[]
+waive notes=["Owner chose to waive criterion 1 (request <id45>) but the waiver was not applied: acceptance criterion is already waived" "Owner waived acceptance criterion 1 via owner-action request <id44>"]
+waive idx=9 answer="Waive criterion" applied=true ok ac=pending,waived resumed=[]
+waive notes=["Owner chose to waive criterion 1 (request <id45>) but the waiver was not applied: acceptance criterion is already waived" "Owner chose to waive criterion 9 (request <id46>) but the waiver was not applied: acceptance criterion index out of range: index 9 (len=2)" "Owner waived acceptance criterion 1 via owner-action request <id44>"]
+cancelPeer bad applied=false notPeer=false status= heard=[] error: invalid guidance request id: invalid UUID length: 3
+cancelPeer <id1> applied=false notPeer=false status= heard=[] error: not found: guidance request <id1>
+cancelPeer <id47> applied=false notPeer=true status=pending reason= heard=[] error: not a peer help request
+cancelPeer <id48> applied=false notPeer=true status=pending reason= heard=[] error: not a peer help request
+cancelPeer <id49> applied=true notPeer=false status=cancelled reason=operator_cancelled heard=[<id49>] ok
+cancelPeer <id49> applied=false notPeer=false status=cancelled reason=operator_cancelled heard=[] ok
+cancelPeer <id50> applied=false notPeer=false status=answered reason= heard=[] ok
+=== reaper
+reaper deleted <id4> 0 row status=cancelled answer="" route="live_keystroke" state="" attempts=0 cancel="session_ended" answerer=human/
+reaper deleted <id4> 1 row status=cancelled answer="" route="" state="" attempts=0 cancel="session_ended" answerer=session/<id17>
+reaper deleted <id4> 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper deleted <id4> cleared=[session_ended session_ended]
+reaper archived <id4> 0 row status=cancelled answer="" route="live_keystroke" state="" attempts=0 cancel="session_ended" answerer=human/
+reaper archived <id4> 1 row status=cancelled answer="" route="" state="" attempts=0 cancel="session_ended" answerer=session/<id17>
+reaper archived <id4> 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper archived <id4> cleared=[session_ended session_ended]
+reaper deleted <id17> 0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper deleted <id17> 1 row status=cancelled answer="" route="" state="" attempts=0 cancel="session_ended" answerer=session/<id17>
+reaper deleted <id17> 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper deleted <id17> cleared=[session_ended]
+reaper archived <id17> 0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper archived <id17> 1 row status=cancelled answer="" route="" state="" attempts=0 cancel="session_ended" answerer=session/<id17>
+reaper archived <id17> 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper archived <id17> cleared=[session_ended]
+reaper deleted <id2> 0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper deleted <id2> 1 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=session/<id17>
+reaper deleted <id2> 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper deleted <id2> cleared=[]
+reaper archived <id2> 0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper archived <id2> 1 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=session/<id17>
+reaper archived <id2> 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper archived <id2> cleared=[]
+reaper deleted asker-title 0 row status=cancelled answer="" route="live_keystroke" state="" attempts=0 cancel="session_ended" answerer=human/
+reaper deleted asker-title 1 row status=cancelled answer="" route="" state="" attempts=0 cancel="session_ended" answerer=session/<id17>
+reaper deleted asker-title 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper deleted asker-title cleared=[session_ended session_ended]
+reaper archived asker-title 0 row status=cancelled answer="" route="live_keystroke" state="" attempts=0 cancel="session_ended" answerer=human/
+reaper archived asker-title 1 row status=cancelled answer="" route="" state="" attempts=0 cancel="session_ended" answerer=session/<id17>
+reaper archived asker-title 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper archived asker-title cleared=[session_ended session_ended]
+reaper deleted unknown 0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper deleted unknown 1 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=session/<id17>
+reaper deleted unknown 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper deleted unknown cleared=[]
+reaper archived unknown 0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper archived unknown 1 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=session/<id17>
+reaper archived unknown 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper archived unknown cleared=[]
+reaper other event 0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper other event 1 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=session/<id17>
+reaper other event 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper other event cleared=[]
+reaper startup  0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper startup  1 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=session/<id17>
+reaper startup  2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper startup  cleared=[]
+reaper startup <id4> 0 row status=cancelled answer="" route="live_keystroke" state="" attempts=0 cancel="session_ended" answerer=human/
+reaper startup <id4> 1 row status=cancelled answer="" route="" state="" attempts=0 cancel="session_ended" answerer=session/<id17>
+reaper startup <id4> 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper startup <id4> cleared=[session_ended session_ended]
+reaper startup <id17> 0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper startup <id17> 1 row status=cancelled answer="" route="" state="" attempts=0 cancel="session_ended" answerer=session/<id17>
+reaper startup <id17> 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper startup <id17> cleared=[session_ended]
+reaper startup <id2> 0 row status=pending answer="" route="live_keystroke" state="" attempts=0 cancel="" answerer=human/
+reaper startup <id2> 1 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=session/<id17>
+reaper startup <id2> 2 row status=pending answer="" route="" state="" attempts=0 cancel="" answerer=human/
+reaper startup <id2> cleared=[]
+=== ack detector
+ack "t3:idle t3:idle" ok start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t3:idle t3:idle" indeterminate start unconfirmed=true
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t3:idle t3:idle" refused start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t3:idle t3:idle" storeerr start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t3:idle t3:idle" badrow start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+ack "t3:idle t3:idle" nonotes start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t3:idle t3:own t3:idle t3:idle" ok start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:own unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t3:idle t3:own t3:idle t3:idle" indeterminate start unconfirmed=true
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:own unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t3:idle t3:own t3:idle t3:idle" refused start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:own unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t3:idle t3:own t3:idle t3:idle" storeerr start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:own unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t3:idle t3:own t3:idle t3:idle" badrow start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:own unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+ack "t3:idle t3:own t3:idle t3:idle" nonotes start unconfirmed=false
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:own unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t3:junk t3:junk t3:err" ok start unconfirmed=false
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+ack "t3:junk t3:junk t3:err" indeterminate start unconfirmed=true
+  t3:junk unconfirmed=true leased=[false] effects=[]
+  t3:junk unconfirmed=true leased=[false] effects=[]
+  t3:err unconfirmed=true leased=[false] effects=[]
+ack "t3:junk t3:junk t3:err" refused start unconfirmed=false
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+ack "t3:junk t3:junk t3:err" storeerr start unconfirmed=false
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+ack "t3:junk t3:junk t3:err" badrow start unconfirmed=false
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+ack "t3:junk t3:junk t3:err" nonotes start unconfirmed=false
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:junk unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+ack "t1:idle t1:idle t1:idle" ok start unconfirmed=false
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[false] effects=[]
+ack "t1:idle t1:idle t1:idle" indeterminate start unconfirmed=true
+  t1:idle unconfirmed=true leased=[] effects=[]
+  t1:idle unconfirmed=true leased=[] effects=[]
+  t1:idle unconfirmed=true leased=[false] effects=[]
+ack "t1:idle t1:idle t1:idle" refused start unconfirmed=false
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[false] effects=[]
+ack "t1:idle t1:idle t1:idle" storeerr start unconfirmed=false
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[false] effects=[]
+ack "t1:idle t1:idle t1:idle" badrow start unconfirmed=false
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[false] effects=[]
+ack "t1:idle t1:idle t1:idle" nonotes start unconfirmed=false
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[] effects=[]
+  t1:idle unconfirmed=false leased=[false] effects=[]
+ack "t61:own" ok start unconfirmed=false
+  t61:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0 reopen <id51>]
+ack "t61:own" indeterminate start unconfirmed=true
+  t61:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0 reopen <id51>]
+ack "t61:own" refused start unconfirmed=false
+  t61:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0]
+ack "t61:own" storeerr start unconfirmed=false
+  t61:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0]
+ack "t61:own" badrow start unconfirmed=false
+  t61:own unconfirmed=false leased=[true] effects=[]
+ack "t61:own" nonotes start unconfirmed=false
+  t61:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0]
+ack "t61:other" ok start unconfirmed=false
+  t61:other unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:other" indeterminate start unconfirmed=true
+  t61:other unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:other" refused start unconfirmed=false
+  t61:other unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:other" storeerr start unconfirmed=false
+  t61:other unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:other" badrow start unconfirmed=false
+  t61:other unconfirmed=true leased=[true] effects=[reopen not-a-uuid]
+ack "t61:other" nonotes start unconfirmed=false
+  t61:other unconfirmed=true leased=[true] effects=[]
+ack "t61:idle" ok start unconfirmed=false
+  t61:idle unconfirmed=false leased=[true] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t61:idle" indeterminate start unconfirmed=true
+  t61:idle unconfirmed=false leased=[true] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t61:idle" refused start unconfirmed=false
+  t61:idle unconfirmed=false leased=[true] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t61:idle" storeerr start unconfirmed=false
+  t61:idle unconfirmed=false leased=[true] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t61:idle" badrow start unconfirmed=false
+  t61:idle unconfirmed=false leased=[true] effects=[]
+ack "t61:idle" nonotes start unconfirmed=false
+  t61:idle unconfirmed=false leased=[true] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t61:junk" ok start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:junk" indeterminate start unconfirmed=true
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:junk" refused start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:junk" storeerr start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:junk" badrow start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen not-a-uuid]
+ack "t61:junk" nonotes start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[]
+ack "t61:err" ok start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:err" indeterminate start unconfirmed=true
+  t61:err unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:err" refused start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:err" storeerr start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[reopen <id51>]
+ack "t61:err" badrow start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[reopen not-a-uuid]
+ack "t61:err" nonotes start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[]
+ack "t61:err t3:idle t3:idle" ok start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[reopen <id51>]
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t61:err t3:idle t3:idle" indeterminate start unconfirmed=true
+  t61:err unconfirmed=true leased=[true] effects=[reopen <id51>]
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t61:err t3:idle t3:idle" refused start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[reopen <id51>]
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t61:err t3:idle t3:idle" storeerr start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[reopen <id51>]
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t61:err t3:idle t3:idle" badrow start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[reopen not-a-uuid]
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+ack "t61:err t3:idle t3:idle" nonotes start unconfirmed=false
+  t61:err unconfirmed=true leased=[true] effects=[]
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t61:junk receipt" ok start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t61:junk receipt" indeterminate start unconfirmed=true
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "t61:junk receipt" refused start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t61:junk receipt" storeerr start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "t61:junk receipt" badrow start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen not-a-uuid]
+  receipt unconfirmed=false leased=[] effects=[]
+ack "t61:junk receipt" nonotes start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "receipt-other receipt-session receipt" ok start unconfirmed=false
+  receipt-other unconfirmed=false leased=[] effects=[]
+  receipt-session unconfirmed=false leased=[] effects=[]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "receipt-other receipt-session receipt" indeterminate start unconfirmed=true
+  receipt-other unconfirmed=true leased=[] effects=[]
+  receipt-session unconfirmed=true leased=[] effects=[]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0 resolve <id51>]
+ack "receipt-other receipt-session receipt" refused start unconfirmed=false
+  receipt-other unconfirmed=false leased=[] effects=[]
+  receipt-session unconfirmed=false leased=[] effects=[]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "receipt-other receipt-session receipt" storeerr start unconfirmed=false
+  receipt-other unconfirmed=false leased=[] effects=[]
+  receipt-session unconfirmed=false leased=[] effects=[]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "receipt-other receipt-session receipt" badrow start unconfirmed=false
+  receipt-other unconfirmed=false leased=[] effects=[]
+  receipt-session unconfirmed=false leased=[] effects=[]
+  receipt unconfirmed=false leased=[] effects=[]
+ack "receipt-other receipt-session receipt" nonotes start unconfirmed=false
+  receipt-other unconfirmed=false leased=[] effects=[]
+  receipt-session unconfirmed=false leased=[] effects=[]
+  receipt unconfirmed=false leased=[] effects=[set <id51> live_keystroke acknowledged add=0]
+ack "end t3:own" ok start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "end t3:own" indeterminate start unconfirmed=true
+  end unconfirmed=true leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "end t3:own" refused start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "end t3:own" storeerr start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "end t3:own" badrow start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve not-a-uuid]
+ack "end t3:own" nonotes start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[]
+ack "end t61:own" ok start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t61:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "end t61:own" indeterminate start unconfirmed=true
+  end unconfirmed=true leased=[] effects=[]
+  t61:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "end t61:own" refused start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t61:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "end t61:own" storeerr start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t61:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "end t61:own" badrow start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t61:own unconfirmed=false leased=[] effects=[resolve not-a-uuid]
+ack "end t61:own" nonotes start unconfirmed=false
+  end unconfirmed=false leased=[] effects=[]
+  t61:own unconfirmed=false leased=[] effects=[]
+ack "t3:err t3:idle t3:err t3:idle" ok start unconfirmed=false
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+ack "t3:err t3:idle t3:err t3:idle" indeterminate start unconfirmed=true
+  t3:err unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=true leased=[false] effects=[]
+  t3:err unconfirmed=true leased=[false] effects=[]
+  t3:idle unconfirmed=true leased=[false] effects=[]
+ack "t3:err t3:idle t3:err t3:idle" refused start unconfirmed=false
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+ack "t3:err t3:idle t3:err t3:idle" storeerr start unconfirmed=false
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+ack "t3:err t3:idle t3:err t3:idle" badrow start unconfirmed=false
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+ack "t3:err t3:idle t3:err t3:idle" nonotes start unconfirmed=false
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+  t3:err unconfirmed=false leased=[false] effects=[]
+  t3:idle unconfirmed=false leased=[false] effects=[]
+ack "t59:own t1:own t3:own" ok start unconfirmed=false
+  t59:own unconfirmed=false leased=[false] effects=[]
+  t1:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0 reopen <id51>]
+  t3:own unconfirmed=false leased=[] effects=[]
+ack "t59:own t1:own t3:own" indeterminate start unconfirmed=true
+  t59:own unconfirmed=true leased=[false] effects=[]
+  t1:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0 reopen <id51>]
+  t3:own unconfirmed=false leased=[] effects=[]
+ack "t59:own t1:own t3:own" refused start unconfirmed=false
+  t59:own unconfirmed=false leased=[false] effects=[]
+  t1:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0]
+  t3:own unconfirmed=false leased=[] effects=[]
+ack "t59:own t1:own t3:own" storeerr start unconfirmed=false
+  t59:own unconfirmed=false leased=[false] effects=[]
+  t1:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0]
+  t3:own unconfirmed=false leased=[] effects=[]
+ack "t59:own t1:own t3:own" badrow start unconfirmed=false
+  t59:own unconfirmed=false leased=[false] effects=[]
+  t1:own unconfirmed=false leased=[true] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[]
+ack "t59:own t1:own t3:own" nonotes start unconfirmed=false
+  t59:own unconfirmed=false leased=[false] effects=[]
+  t1:own unconfirmed=false leased=[true] effects=[set <id51> live_keystroke delivery_failed add=0]
+  t3:own unconfirmed=false leased=[] effects=[]
+ack "t61:junk t61:junk" ok start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  t61:junk unconfirmed=true leased=[false] effects=[]
+ack "t61:junk t61:junk" indeterminate start unconfirmed=true
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  t61:junk unconfirmed=true leased=[false] effects=[]
+ack "t61:junk t61:junk" refused start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  t61:junk unconfirmed=true leased=[false] effects=[]
+ack "t61:junk t61:junk" storeerr start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  t61:junk unconfirmed=true leased=[false] effects=[]
+ack "t61:junk t61:junk" badrow start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen not-a-uuid]
+  t61:junk unconfirmed=true leased=[false] effects=[]
+ack "t61:junk t61:junk" nonotes start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[]
+  t61:junk unconfirmed=true leased=[false] effects=[]
+ack "t61:junk end t3:own" ok start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  end unconfirmed=true leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "t61:junk end t3:own" indeterminate start unconfirmed=true
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  end unconfirmed=true leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "t61:junk end t3:own" refused start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  end unconfirmed=true leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "t61:junk end t3:own" storeerr start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen <id51>]
+  end unconfirmed=true leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve <id51>]
+ack "t61:junk end t3:own" badrow start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[reopen not-a-uuid]
+  end unconfirmed=true leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[resolve not-a-uuid]
+ack "t61:junk end t3:own" nonotes start unconfirmed=false
+  t61:junk unconfirmed=true leased=[true] effects=[]
+  end unconfirmed=true leased=[] effects=[]
+  t3:own unconfirmed=false leased=[] effects=[]
+restore err=<nil> effects=[list "" "sent" set <id51> live_keystroke acknowledged add=0]
+restore err=list failed effects=[list "" "sent"]
+=== seed route
+seed get GET /api/debug/guidance/seed-question => 405 "text/plain; charset=utf-8" "method not allowed\n"
+seed put PUT /api/debug/guidance/seed-question => 405 "text/plain; charset=utf-8" "method not allowed\n"
+seed neighbour POST /api/debug/guidance/seed-question/x => 404 "text/plain; charset=utf-8" "404 page not found\n"
+seed malformed POST /api/debug/guidance/seed-question => 400 "text/plain; charset=utf-8" "invalid request body: unexpected EOF\n"
+seed unknown session POST /api/debug/guidance/seed-question => 404 "text/plain; charset=utf-8" "session not found\n"
+seed no questions POST /api/debug/guidance/seed-question => 400 "text/plain; charset=utf-8" "invalid questions: invalid question payload: need 1-4 questions, got 0\n"
+seed no mirror POST /api/debug/guidance/seed-question => 503 "text/plain; charset=utf-8" "guidance mirror not wired\n"
+seed hook POST /api/debug/guidance/seed-question => 200 "application/json" "{\"id\":\"<id52>\",\"sessionUuid\":\"<id4>\"}\n"
+seed hook by uuid again POST /api/debug/guidance/seed-question => 200 "application/json" "{\"id\":\"<id52>\",\"sessionUuid\":\"<id4>\"}\n"
+seed agent POST /api/debug/guidance/seed-question => 200 "application/json" "{\"id\":\"<id53>\",\"sessionUuid\":\"<id4>\"}\n"
+seed unknown source POST /api/debug/guidance/seed-question => 200 "application/json" "{\"id\":\"<id54>\",\"sessionUuid\":\"<id4>\"}\n"
+seed row <id53> scope=session src=agent_mcp session=<id4> asker= text="Agent?" type=multiple-choice options="[\"x\"]" multi=true route="" call="" questions="[{\"question\":\"Agent?\",\"header\":\"A\",\"options\":[{\"label\":\"x\"}],\"multiSelect\":true}]" registered=false
+seed row <id54> scope=session src=ask_user_question_hook session=<id4> asker=<id4> text="Peerish?" type=multiple-choice options="[\"x\",\"y\"]" multi=false route="live_keystroke" call="toolu_p" questions="[{\"question\":\"Peerish?\",\"header\":\"P\",\"options\":[{\"label\":\"x\"},{\"label\":\"y\"}],\"multiSelect\":false}]" registered=true
+seed row <id52> scope=session src=ask_user_question_hook session=<id4> asker=<id4> text="Pick?" type=multiple-choice options="[\"Red\",\"Blue\"]" multi=false route="live_keystroke" call="toolu_s" questions="[{\"question\":\"Pick?\",\"header\":\"H\",\"options\":[{\"label\":\"Red\"},{\"label\":\"Blue\"}],\"multiSelect\":false}]" registered=true

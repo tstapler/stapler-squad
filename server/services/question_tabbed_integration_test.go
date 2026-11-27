@@ -7,11 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // The measured Spike S1c dialog as a hook sends it: Q1 single (Redis/Memcached/None), Q2 multi (A/B/C).
@@ -88,81 +86,11 @@ func TestRegisterQuestion_should_KeepATabbedAskViewOnly_WhenTheSenderIsUnverifie
 	assert.False(t, ok)
 }
 
-func tabbedGuidance() OpenGuidance {
-	return OpenGuidance{Source: domain.QuestionSourceHook, Tabbed: []panereply.TabbedQuestion{
-		{Text: "Which cache?", Header: "Cache", Labels: []string{"Redis", "None"}},
-		{Text: "Which letters?", Header: "Letters", Labels: []string{"A", "B"}, MultiSelect: true},
-	}}
-}
-
-func tabbedRecord() *sessionv1.NotificationHistoryRecord {
-	return &sessionv1.NotificationHistoryRecord{Id: "n1", SessionId: "s1", Metadata: map[string]string{
-		questionkit.MetaGuidanceRequestID: "row1", questionkit.MetaQuestionID: "row1", metaQuestionShape: string(questionkit.QuestionShapeMulti), questionkit.MetaReplyUnavailable: replyCauseShape,
-	}}
-}
-
-func TestBuildDescriptors_should_OfferAnswerQuestionWithPerQuestionOptions_WhenATabbedHookRowIsOpen(t *testing.T) {
-	t.Parallel()
-	f := newDescriptorFixture()
-	f.guidance.open["row1"] = tabbedGuidance()
-	rec := tabbedRecord()
-
-	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassLocal)
-
-	assert.Equal(t, []string{"ANSWER_QUESTION", "OPEN"}, kinds(rec))
-	d := rec.Actions[0]
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, d.Tier)
-	assert.True(t, d.Available)
-	assert.Equal(t, "row1", d.TargetKey)
-	assert.Equal(t, "s1", d.SessionId)
-	got := make([]string, len(d.Options))
-	for i, o := range d.Options {
-		got[i] = o.Value + ":" + o.Label
-	}
-	assert.Equal(t, []string{"0:Redis", "0:None", "1:A", "1:B"}, got, "the option value is the index of its question")
-}
-
-func TestBuildDescriptors_should_ReduceATabbedRowToOpen_WhenItIsClosedOrNotAHookTabbedRow(t *testing.T) {
-	t.Parallel()
-	f := newDescriptorFixture()
-	closed := tabbedRecord() // the row is no longer open: absent from the lookup
-	notTabbed := tabbedRecord()
-	notTabbed.Metadata[questionkit.MetaGuidanceRequestID] = "row2"
-	f.guidance.open["row2"] = OpenGuidance{Source: domain.QuestionSourceAgentMCP}
-
-	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{closed, notTabbed}, ListenerClassLocal)
-
-	assert.Equal(t, []string{"OPEN"}, kinds(closed))
-	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, kinds(notTabbed), "an agent row keeps its stored-answer action and gains no keystroke one")
-}
-
-func TestBuildDescriptors_should_DegradeATabbedAnswer_WhenRemoteOrTheLayoutCanaryTripped(t *testing.T) {
-	t.Parallel()
-	f := newDescriptorFixture()
-	f.guidance.open["row1"] = tabbedGuidance()
-	remote := tabbedRecord()
-	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{remote}, ListenerClassRemote)
-	assert.False(t, remote.Actions[0].Available)
-	assert.Equal(t, "desktop_only", remote.Actions[0].UnavailableReason)
-
-	canary := questionkit.NewDialogMatchCanary(nil, nil, nil)
-	for range questionkit.CanaryMinAttempts {
-		canary.Record(questionkit.DialogMismatch)
-	}
-	b := f.builder()
-	b.sources.Canary = canary
-	b.hookReplyOn = func() bool { return false }
-	local := tabbedRecord()
-	b.Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{local}, ListenerClassLocal)
-	assert.False(t, local.Actions[0].Available)
-	assert.Equal(t, unavailableReadOnly, local.Actions[0].UnavailableReason)
-}
-
 func tabbedRowOf(t *testing.T) *domain.GuidanceRequestData {
 	t.Helper()
 	env := newRouterEnv(t)
-	inst, _ := env.addTabbed("tabbed-row", nil)
-	return env.row(env.twoQuestionRow(inst, false))
+	inst, _ := env.addVisible("tabbed-row")
+	return env.row(env.twoQuestionRow(inst))
 }
 
 func TestJudgeRow_should_MatchATabbedRowByItsTabBarNotByDialogMatch(t *testing.T) {
@@ -186,23 +114,6 @@ func TestHeadersMatch_should_RejectATabbedFrameOfAnotherQuestionSet(t *testing.T
 	qs[1].Header = "Colours"
 	assert.False(t, questionkit.TabbedHeadersMatch(qs)(frame))
 	assert.False(t, own(replyDialogFixture(t, "question_single_select_3opts.txt")))
-}
-
-func TestSequenceQuestions_should_RefuseARowThatIsNotAReplyableHookRow(t *testing.T) {
-	env := newRouterEnv(t)
-	inst, _ := env.addTabbed("agent-twoq", tabbedFrames(t))
-	_, ok := env.router.sequenceQuestions(context.Background(), env.twoQuestionRow(inst, false))
-	assert.True(t, ok)
-
-	row := *env.row(env.twoQuestionRow(inst, false))
-	row.Source = domain.QuestionSourceAgentMCP
-	_, ok = questionkit.TabbedFromRow(&row)
-	assert.False(t, ok, "an agent_mcp row has no dialog on the pane to type into")
-
-	row = *env.row(env.twoQuestionRow(inst, false))
-	row.DeliveryRoute = ""
-	_, ok = questionkit.TabbedFromRow(&row)
-	assert.False(t, ok, "a view-only hook row is never typed into")
 }
 
 func TestAckDetector_should_JudgeATabbedAnswerByItsTabBar_When_theDialogStaysOrLeaves(t *testing.T) {

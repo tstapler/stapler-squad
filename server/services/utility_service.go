@@ -21,6 +21,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 
@@ -464,7 +465,7 @@ func validateLocalhostOriginForFocus(ctx context.Context, req *connect.Request[s
 	// Check X-Real-IP header first (if behind a proxy)
 	realIP := req.Header().Get("X-Real-IP")
 	if realIP != "" {
-		if !isLocalhostIP(realIP) {
+		if !notify.IsLocalhostIP(realIP) {
 			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("FocusWindow can only be called from localhost"))
 		}
 		return nil
@@ -476,7 +477,7 @@ func validateLocalhostOriginForFocus(ctx context.Context, req *connect.Request[s
 		ips := strings.Split(forwardedFor, ",")
 		if len(ips) > 0 {
 			clientIP := strings.TrimSpace(ips[0])
-			if !isLocalhostIP(clientIP) {
+			if !notify.IsLocalhostIP(clientIP) {
 				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("FocusWindow can only be called from localhost"))
 			}
 			return nil

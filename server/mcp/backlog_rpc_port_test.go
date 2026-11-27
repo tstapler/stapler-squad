@@ -30,6 +30,7 @@ type recordingBacklogRPC struct {
 	addReqs        []*sessionv1.AddBacklogItemDependencyRequest
 	removeReqs     []*sessionv1.RemoveBacklogItemDependencyRequest
 	triggerReqs    []*sessionv1.TriggerTriageRequest
+	epicChildReqs  []*sessionv1.CreateEpicIntegrationChildRequest
 	transitionReqs []*sessionv1.TransitionBacklogItemStatusRequest
 	transitionActs []string
 	transitionResp *sessionv1.TransitionBacklogItemStatusResponse
@@ -65,6 +66,10 @@ func (f *recordingBacklogRPC) AddBacklogItemDependency(_ context.Context, r *con
 func (f *recordingBacklogRPC) RemoveBacklogItemDependency(_ context.Context, r *connect.Request[sessionv1.RemoveBacklogItemDependencyRequest]) (*connect.Response[sessionv1.RemoveBacklogItemDependencyResponse], error) {
 	f.removeReqs = append(f.removeReqs, r.Msg)
 	return connect.NewResponse(&sessionv1.RemoveBacklogItemDependencyResponse{}), nil
+}
+func (f *recordingBacklogRPC) CreateEpicIntegrationChild(_ context.Context, r *connect.Request[sessionv1.CreateEpicIntegrationChildRequest]) (*connect.Response[sessionv1.CreateEpicIntegrationChildResponse], error) {
+	f.epicChildReqs = append(f.epicChildReqs, r.Msg)
+	return connect.NewResponse(&sessionv1.CreateEpicIntegrationChildResponse{Item: &sessionv1.BacklogItem{Id: "child-1"}}), nil
 }
 func (f *recordingBacklogRPC) TriggerTriage(_ context.Context, r *connect.Request[sessionv1.TriggerTriageRequest]) (*connect.Response[sessionv1.TriggerTriageResponse], error) {
 	f.triggerReqs = append(f.triggerReqs, r.Msg)
@@ -176,4 +181,31 @@ func TestNewClaimModule_should_RegisterOnlyWhenBacklogRPCWired(t *testing.T) {
 	t.Parallel()
 	assert.Nil(t, newClaimModule(nil, nil), "a nil interface leaves the claim tool unregistered")
 	assert.NotNil(t, newClaimModule(&recordingBacklogRPC{}, nil))
+}
+
+func TestCreateEpicIntegrationChildTool_should_ForwardEpicAndSiblings(t *testing.T) {
+	t.Parallel()
+	const epic, a, b = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
+	fake := &recordingBacklogRPC{}
+	h := &backlogHandlers{backlogSvc: fake}
+
+	res := callTool(t, h.createEpicIntegrationChild, map[string]any{"epic_item_id": epic, "sibling_item_ids": []any{a, b}})
+	require.Contains(t, toolText(t, res), "Integration child child-1 is in place")
+	require.Len(t, fake.epicChildReqs, 1)
+	assert.Equal(t, epic, fake.epicChildReqs[0].EpicItemId)
+	assert.Equal(t, []string{a, b}, fake.epicChildReqs[0].SiblingItemIds)
+
+	bad := callTool(t, h.createEpicIntegrationChild, map[string]any{"epic_item_id": epic, "sibling_item_ids": []any{"not-a-uuid"}})
+	assert.Contains(t, toolText(t, bad), ErrInvalidArgument)
+	empty := callTool(t, h.createEpicIntegrationChild, map[string]any{"epic_item_id": epic})
+	assert.Contains(t, toolText(t, empty), ErrInvalidArgument)
+	assert.Len(t, fake.epicChildReqs, 1, "invalid calls never reach the service")
+}
+
+func TestIntegrationChildResultText_should_SayPassed_When_ChildAlreadyPassed(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"done", "archived"} {
+		assert.Contains(t, integrationChildResultText(&sessionv1.BacklogItem{Id: "c", Status: status}, "e", 2), "already passed")
+	}
+	assert.Contains(t, integrationChildResultText(&sessionv1.BacklogItem{Id: "c", Status: "idea"}, "e", 2), "cannot be marked done")
 }

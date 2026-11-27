@@ -1001,7 +1001,7 @@ func transitionConnectError(err error, itemID, what string) error {
 		return connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", itemID))
 	case errors.Is(err, domain.ErrPreconditionFailed):
 		return connect.NewError(connect.CodeAborted, err)
-	case isFailedPreconditionGuardError(err):
+	case isFailedPreconditionGuardError(err), errors.Is(err, backlogdto.ErrIntegrationCheckPending):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case isTransitionDenial(err):
 		return connect.NewError(connect.CodeInvalidArgument, err)

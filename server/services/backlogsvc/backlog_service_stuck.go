@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -364,7 +365,7 @@ func (s *BacklogService) notifyBulkResetParked(reasonFilter *domain.StuckReason,
 	s.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		services.DerivePriority(false, false), // urgent, important — a bulk-reset confirmation, purely informational
+		notify.DerivePriority(false, false), // urgent, important — a bulk-reset confirmation, purely informational
 		"Parked items reset",
 		fmt.Sprintf("Reset %d parked item%s (%s) — they'll get automated attempts again.",
 			resetCount, pluralSuffix(resetCount), scope),

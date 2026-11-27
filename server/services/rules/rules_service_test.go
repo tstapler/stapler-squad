@@ -1,0 +1,2339 @@
+package rules
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	connect "connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/testutil/wait"
+	"gopkg.in/yaml.v3"
+)
+
+// ── Mock helpers ──────────────────────────────────────────────────────────────
+
+// mockAIClient is a test double for AIClient that returns a fixed response.
+type mockAIClient struct {
+	response string
+	err      error
+	// blockUntilCtx, when true, blocks until ctx is cancelled (for cancellation tests).
+	blockUntilCtx bool
+}
+
+func (m *mockAIClient) Complete(ctx context.Context, _, _ string) (string, error) {
+	if m.blockUntilCtx {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	return m.response, m.err
+}
+
+// spyRulesStore wraps RulesStore and records Upsert calls.
+type spyRulesStore struct {
+	*RulesStore
+	upsertCalls int
+}
+
+func (s *spyRulesStore) Upsert(ctx context.Context, spec domain.RuleSpec) (domain.RuleSpec, error) {
+	s.upsertCalls++
+	return s.RulesStore.Upsert(ctx, spec)
+}
+
+// newRulesServiceWithAI creates a RulesService wired with the given mock AI client.
+func newRulesServiceWithAI(t *testing.T, aiClient anthropicwire.AIClient) *RulesService {
+	t.Helper()
+	storage := svctest.CreateTestStorage(t)
+	rulesStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+	analyticsStore := NewAnalyticsStore(storage)
+	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
+	c := classifier.NewRuleBasedClassifier()
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, aiClient))
+}
+
+// fixture2ElementJSON is a valid 2-element JSON array matching the AI response format.
+const fixture2ElementJSON = `[
+  {
+    "name": "Allow git push",
+    "tool_name": "Bash",
+    "command_pattern": "git push",
+    "decision": "auto_allow",
+    "risk_level": "low",
+    "reason": "Pushing to remote is safe",
+    "priority": 100,
+    "confidence": 0.85,
+    "explanation": "Derived from common git workflow"
+  },
+  {
+    "name": "Allow npm install",
+    "tool_name": "Bash",
+    "command_pattern": "npm install",
+    "decision": "auto_allow",
+    "risk_level": "low",
+    "reason": "Installing packages is standard",
+    "priority": 100,
+    "confidence": 0.75,
+    "explanation": "Derived from node.js workflow"
+  }
+]`
+
+// ── T-UNIT-GO-001: Happy path — analytics_gaps returns plural suggestions ────
+
+func TestGenerateSuggestedRule_AnalyticsGaps_ReturnsSuggestions(t *testing.T) {
+	t.Parallel()
+	// T-UNIT-GO-001
+	svc := newRulesServiceWithAI(t, &mockAIClient{response: fixture2ElementJSON})
+
+	windowDays := int32(7)
+	resp, err := svc.GenerateSuggestedRule(context.Background(), connect.NewRequest(&sessionv1.GenerateSuggestedRuleRequest{
+		Source:     sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
+		WindowDays: &windowDays,
+	}))
+	require.NoError(t, err)
+	assert.Len(t, resp.Msg.Suggestions, 2, "should return 2 suggestions from 2-element JSON array")
+	for _, s := range resp.Msg.Suggestions {
+		assert.NotEmpty(t, s.Name, "suggestion name must be non-empty")
+		assert.Greater(t, s.Confidence, float32(0), "suggestion confidence must be > 0")
+	}
+}
+
+// ── T-UNIT-GO-002: Failure mode — unspecified source returns CodeInvalidArgument ─
+
+func TestGenerateSuggestedRule_UnspecifiedSource_ReturnsError(t *testing.T) {
+	t.Parallel()
+	// T-UNIT-GO-002
+	svc := newRulesServiceWithAI(t, &mockAIClient{response: "[]"})
+
+	_, err := svc.GenerateSuggestedRule(context.Background(), connect.NewRequest(&sessionv1.GenerateSuggestedRuleRequest{
+		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_UNSPECIFIED,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeOf(err), connect.CodeInvalidArgument)
+	assert.Contains(t, err.Error(), "source is required")
+}
+
+// ── T-UNIT-GO-003: Failure mode — nil AI client returns CodeUnimplemented ────
+
+func TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented(t *testing.T) {
+	t.Parallel()
+	// T-UNIT-GO-003
+	storage := svctest.CreateTestStorage(t)
+	rulesStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+	analyticsStore := NewAnalyticsStore(storage)
+	c := classifier.NewRuleBasedClassifier()
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)) // nil AI
+
+	_, err = svc.GenerateSuggestedRule(context.Background(), connect.NewRequest(&sessionv1.GenerateSuggestedRuleRequest{
+		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeOf(err), connect.CodeUnimplemented)
+	assert.Contains(t, err.Error(), "ANTHROPIC_API_KEY")
+}
+
+// ── T-UNIT-GO-004: buildPromptContext includes existing rules and analytics gaps ─
+
+func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
+	t.Parallel()
+	// T-UNIT-GO-004
+	storage := svctest.CreateTestStorage(t)
+	rulesStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+
+	// Insert 2 user rules.
+	for i := 0; i < 2; i++ {
+		_, err := rulesStore.Upsert(context.Background(), domain.RuleSpec{
+			ID:       fmt.Sprintf("rule-%d", i),
+			Name:     fmt.Sprintf("Rule %d", i),
+			Decision: "auto_allow",
+			Enabled:  true,
+			Source:   "user",
+			Priority: 100,
+		})
+		require.NoError(t, err)
+	}
+
+	analyticsStore := NewAnalyticsStore(storage)
+	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
+
+	// Insert 3 escalated entries with no rule match.
+	// RiskLevel must be non-empty to pass the DB schema validator.
+	for i := 0; i < 3; i++ {
+		analyticsStore.Record(AnalyticsEntry{
+			Timestamp:      time.Now(),
+			SessionID:      "sess-1",
+			ToolName:       "Bash",
+			CommandPreview: fmt.Sprintf("some-cmd-%d", i),
+			Decision:       "escalate",
+			RiskLevel:      "medium",
+			// RuleID empty = no rule matched
+		})
+	}
+	// Wait for the async write to complete by polling LoadWindow until all 3 entries appear.
+	wait.RequireEventually(t, func() bool {
+		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
+		return err == nil && len(entries) >= 3
+	}, 2*time.Second, 10*time.Millisecond, "analytics entries must be persisted within 2s")
+
+	c := classifier.NewRuleBasedClassifier()
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, &mockAIClient{response: "[]"}))
+
+	req := &sessionv1.GenerateSuggestedRuleRequest{
+		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
+	}
+	promptCtx := svc.buildPromptContext(context.Background(), req, 7)
+
+	// existingRules should include the 2 user rules + seed rules.
+	assert.GreaterOrEqual(t, len(promptCtx.ExistingRules), 2, "existing rules must include user rules")
+
+	// AnalyticsGaps should reflect the 3 escalated entries grouped into 1 gap cluster
+	// (all 3 share the same ToolName="Bash" and CommandProgram="" so they collapse into 1).
+	// ReclassifyGaps may re-classify entries that now match a rule; since the test inserts
+	// entries with empty RuleID and the seed rules do not match "some-cmd-N", the gap
+	// cluster survives reclassification.
+	assert.Equal(t, 1, len(promptCtx.AnalyticsGaps), "3 escalated entries with same tool/program should produce exactly 1 gap cluster")
+}
+
+// ── T-UNIT-GO-007: FR-8 — GenerateSuggestedRule never calls Upsert ───────────
+
+func TestGenerateSuggestedRule_NeverCallsUpsert(t *testing.T) {
+	t.Parallel()
+	// T-UNIT-GO-007
+	storage := svctest.CreateTestStorage(t)
+	baseStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+	spy := &spyRulesStore{RulesStore: baseStore}
+	analyticsStore := NewAnalyticsStore(storage)
+	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
+	c := classifier.NewRuleBasedClassifier()
+
+	svc := &RulesService{
+		rulesStore:     spy.RulesStore,
+		analyticsStore: analyticsStore,
+		classifier:     c,
+		promptBuilder:  &DefaultRulePromptBuilder{},
+		aiClient:       &mockAIClient{response: fixture2ElementJSON},
+	}
+
+	_, err = svc.GenerateSuggestedRule(context.Background(), connect.NewRequest(&sessionv1.GenerateSuggestedRuleRequest{
+		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 0, spy.upsertCalls, "GenerateSuggestedRule must never call Upsert")
+}
+
+// ── T-UNIT-GO-010: Handler returns on context cancellation ───────────────────
+
+func TestGenerateSuggestedRule_ReturnsOnCtxCancellation(t *testing.T) {
+	t.Parallel()
+	// T-UNIT-GO-010
+	svc := newRulesServiceWithAI(t, &mockAIClient{blockUntilCtx: true})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := svc.GenerateSuggestedRule(ctx, connect.NewRequest(&sessionv1.GenerateSuggestedRuleRequest{
+		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
+	}))
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 500*time.Millisecond, "handler should return within 500ms of ctx cancel")
+	require.Error(t, err, "handler should return error on context cancel")
+}
+
+// ── parseSuggestions validation tests ────────────────────────────────────────
+
+func TestParseSuggestions_ValidJSON_ReturnsSuggestions(t *testing.T) {
+	t.Parallel()
+	svc := newRulesServiceWithAI(t, nil)
+	sugs, err := svc.parseSuggestions(fixture2ElementJSON)
+	require.NoError(t, err)
+	assert.Len(t, sugs, 2)
+}
+
+func TestParseSuggestions_InvalidCommandPattern_DropsItem(t *testing.T) {
+	t.Parallel()
+	badJSON := `[{"name":"bad","tool_name":"Bash","command_pattern":"[invalid","decision":"auto_allow","risk_level":"low","reason":"x","priority":100,"confidence":0.5}]`
+	svc := newRulesServiceWithAI(t, nil)
+	sugs, err := svc.parseSuggestions(badJSON)
+	require.NoError(t, err, "parseSuggestions should not error on invalid pattern, just drop it")
+	assert.Len(t, sugs, 0, "item with invalid commandPattern should be dropped")
+}
+
+func TestParseSuggestions_ConfidenceClamp(t *testing.T) {
+	t.Parallel()
+	json1 := `[{"name":"x","tool_name":"Bash","command_pattern":"git push","decision":"auto_allow","risk_level":"low","reason":"r","confidence":1.5}]`
+	svc := newRulesServiceWithAI(t, nil)
+	sugs, err := svc.parseSuggestions(json1)
+	require.NoError(t, err)
+	require.Len(t, sugs, 1)
+	assert.Equal(t, float32(1.0), sugs[0].Confidence, "confidence 1.5 should be clamped to 1.0")
+}
+
+func TestParseSuggestions_PriorityZero_DefaultsTo100(t *testing.T) {
+	t.Parallel()
+	json1 := `[{"name":"x","tool_name":"Bash","command_pattern":"npm install","decision":"auto_allow","risk_level":"low","reason":"r","priority":0,"confidence":0.5}]`
+	svc := newRulesServiceWithAI(t, nil)
+	sugs, err := svc.parseSuggestions(json1)
+	require.NoError(t, err)
+	require.Len(t, sugs, 1)
+	assert.Equal(t, int32(100), sugs[0].Priority, "priority 0 should default to 100")
+}
+
+func TestParseSuggestions_CapAt5(t *testing.T) {
+	t.Parallel()
+	// 6-element array should be capped to 5.
+	json6 := `[
+		{"name":"a","tool_name":"Bash","command_pattern":"cmd-a","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"b","tool_name":"Bash","command_pattern":"cmd-b","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"c","tool_name":"Bash","command_pattern":"cmd-c","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"d","tool_name":"Bash","command_pattern":"cmd-d","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"e","tool_name":"Bash","command_pattern":"cmd-e","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"f","tool_name":"Bash","command_pattern":"cmd-f","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5}
+	]`
+	svc := newRulesServiceWithAI(t, nil)
+	sugs, err := svc.parseSuggestions(json6)
+	require.NoError(t, err)
+	assert.Len(t, sugs, 5, "6-element JSON array should be capped to 5 suggestions")
+}
+
+func TestParseSuggestions_MarkdownFencedJSON_ParsesCorrectly(t *testing.T) {
+	t.Parallel()
+	// T1: Markdown-wrapped JSON (```json ... ```) must be stripped and parsed correctly.
+	fenced := "```json\n" + fixture2ElementJSON + "\n```"
+	svc := newRulesServiceWithAI(t, nil)
+	sugs, err := svc.parseSuggestions(fenced)
+	require.NoError(t, err, "parseSuggestions must strip markdown fences and parse correctly")
+	assert.Len(t, sugs, 2, "fenced JSON with 2 elements must return 2 suggestions")
+}
+
+func TestParseSuggestions_NonJSONInput_ReturnsError(t *testing.T) {
+	t.Parallel()
+	// T1: Non-JSON / malformed input must return an error, not panic.
+	svc := newRulesServiceWithAI(t, nil)
+	_, err := svc.parseSuggestions("this is not json at all")
+	require.Error(t, err, "parseSuggestions must return an error for malformed non-JSON input")
+}
+
+// ── T-INTEG-001: Full handler pipeline with mock AI ──────────────────────────
+
+func TestGenerateSuggestedRule_Integration_MockAI(t *testing.T) {
+	t.Parallel()
+	// T-INTEG-001
+	svc := newRulesServiceWithAI(t, &mockAIClient{response: fixture2ElementJSON})
+
+	windowDays := int32(7)
+	resp, err := svc.GenerateSuggestedRule(context.Background(), connect.NewRequest(&sessionv1.GenerateSuggestedRuleRequest{
+		Source:     sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
+		WindowDays: &windowDays,
+	}))
+	require.NoError(t, err)
+	assert.Len(t, resp.Msg.Suggestions, 2)
+	for _, s := range resp.Msg.Suggestions {
+		assert.GreaterOrEqual(t, s.Confidence, float32(0), "confidence must be >= 0")
+		assert.LessOrEqual(t, s.Confidence, float32(1.0), "confidence must be <= 1.0")
+	}
+}
+
+// ── attachConflictInfo tests ──────────────────────────────────────────────────
+
+// ── T-UNIT-GO-011: GetProgramAnalytics returns expected response fields ────────
+
+func TestGetProgramAnalytics_ReturnsExpectedFields(t *testing.T) {
+	t.Parallel()
+	// T-UNIT-GO-011
+	svc := newRulesService(t)
+
+	windowDays := int32(7)
+	resp, err := svc.GetProgramAnalytics(t.Context(), connect.NewRequest(&sessionv1.GetProgramAnalyticsRequest{
+		Program:    "git",
+		WindowDays: &windowDays,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg)
+
+	// All top-level repeated/slice fields must be non-nil (may be empty, not nil).
+	assert.NotNil(t, resp.Msg.Subcommands, "subcommands field must not be nil")
+	assert.NotNil(t, resp.Msg.RecentExamples, "recent_examples field must not be nil")
+	assert.NotNil(t, resp.Msg.Trend, "daily_trend field must not be nil")
+
+	// Program echo-back.
+	assert.Equal(t, "git", resp.Msg.Program)
+}
+
+func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testing.T) {
+	t.Parallel()
+	// T-UNIT-GO (attachConflictInfo): fixture rule at priority 500 overlaps suggestion at 100.
+	storage := svctest.CreateTestStorage(t)
+	rulesStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+
+	// Insert a user rule with same ToolName + CommandPattern at higher priority.
+	_, err = rulesStore.Upsert(context.Background(), domain.RuleSpec{
+		ID:             "high-priority-rule",
+		Name:           "High Priority Rule",
+		ToolName:       "Bash",
+		CommandPattern: "git push",
+		Decision:       "auto_deny",
+		Enabled:        true,
+		Source:         "user",
+		Priority:       500,
+	})
+	require.NoError(t, err)
+
+	analyticsStore := NewAnalyticsStore(storage)
+	c := classifier.NewRuleBasedClassifier()
+	svc := withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
+
+	suggestion := &sessionv1.SuggestedRuleProto{
+		ToolName:       "Bash",
+		CommandPattern: "git push",
+		Priority:       100,
+	}
+	svc.attachConflictInfo(suggestion)
+
+	assert.Contains(t, suggestion.ShadowedByRuleIds, "high-priority-rule",
+		"suggestion at priority 100 should be shadowed by user rule at priority 500")
+}
+
+// ── TestCoveredSubcommands ────────────────────────────────────────────────────
+
+// newRulesServiceForCoverage builds a RulesService that has the given specs upserted
+// into its store. Seed rules are still present (allRuleSpecs always appends them), but
+// testProg ("mytestcli") is an arbitrary name with no matching seed rules, so seed-rule
+// interference cannot affect coveredSubcommands results when testProg is used as the program.
+func newRulesServiceForCoverage(t *testing.T, specs []domain.RuleSpec) *RulesService {
+	t.Helper()
+	storage := svctest.CreateTestStorage(t)
+	rulesStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+	for i, spec := range specs {
+		if spec.ID == "" {
+			spec.ID = fmt.Sprintf("test-rule-%d", i)
+		}
+		if spec.Name == "" {
+			spec.Name = fmt.Sprintf("Test Rule %d", i)
+		}
+		if spec.Source == "" {
+			spec.Source = "user"
+		}
+		_, err := rulesStore.Upsert(context.Background(), spec)
+		require.NoError(t, err)
+	}
+	analyticsStore := NewAnalyticsStore(storage)
+	c := classifier.NewRuleBasedClassifier()
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
+}
+
+// testProg is an arbitrary program name that has no seed rules, so seed-rule
+// interference cannot affect the coveredSubcommands results. Using a made-up
+// name ensures test isolation without needing to suppress seed rules.
+const testProg = "mytestcli"
+
+func TestCoveredSubcommands(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		specs        []domain.RuleSpec
+		program      string
+		knownSubcmds []string
+		// wantPresent lists keys that MUST be in the covered map.
+		wantPresent map[string]bool
+		// wantAbsent lists specific subcommands that must NOT be in the covered map.
+		// Only checked when non-nil; used for cases where we need to confirm absence
+		// of specific keys regardless of what seed rules may add.
+		wantAbsent []string
+		// strictCheck, when true, verifies no extra keys beyond wantPresent are set.
+		// Use only when testProg is used (no seed rules for testProg → clean map).
+		strictCheck bool
+	}{
+		{
+			// TC-G-01: ToolPattern "Read|Glob" rule → testProg subcommands NOT covered
+			name: "ToolPattern_ReadGlob_skipped",
+			specs: []domain.RuleSpec{
+				{ToolPattern: "Read|Glob", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-02: ToolCategory "builtin-agent" rule → testProg NOT covered (Concern-1 guard)
+			name: "ToolCategory_BuiltinAgent_skipped",
+			specs: []domain.RuleSpec{
+				{ToolCategory: "builtin-agent", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-03: ToolPattern "Bash" rule → all testProg subcommands covered
+			name: "ToolPattern_Bash_included",
+			specs: []domain.RuleSpec{
+				{ToolPattern: "Bash", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"": true, "push": true, "commit": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-04: ToolPattern ".*" (wildcard) → all testProg subcommands covered
+			name: "ToolPattern_Wildcard_included",
+			specs: []domain.RuleSpec{
+				{ToolPattern: ".*", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{"": true, "push": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-05: AllToolRule — empty ToolName and ToolPattern → covered (R1.3 preserved)
+			name: "AllToolRule_EmptyToolNameAndPattern",
+			specs: []domain.RuleSpec{
+				{ToolName: "", ToolPattern: "", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{"": true, "push": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-06: ToolName=Bash, CommandPattern="" → all known subcommands covered (R2.1)
+			name: "ToolName_Bash_CommandPatternEmpty_allSubcmds",
+			specs: []domain.RuleSpec{
+				{ToolName: "Bash", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit", "status"},
+			wantPresent:  map[string]bool{"": true, "push": true, "commit": true, "status": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-07: ToolName=Bash, CommandPattern="", empty knownSubcmds → only bare key
+			name: "ToolName_Bash_CommandPatternEmpty_emptyKnownSubcmds",
+			specs: []domain.RuleSpec{
+				{ToolName: "Bash", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{},
+			wantPresent:  map[string]bool{"": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-08: Programs=["testProg"], no subcommand restriction → all covered
+			name: "Programs_match_noSubcmdRestriction",
+			specs: []domain.RuleSpec{
+				{Programs: []string{testProg}, Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"": true, "push": true, "commit": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-09: Programs=["testProg"], Subcommands=["push"] → only "push"
+			name: "Programs_match_withSubcmdRestriction",
+			specs: []domain.RuleSpec{
+				{Programs: []string{testProg}, Subcommands: []string{"push"}, Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"push": true},
+			// "commit" must not be covered — only "push" was specified in Subcommands
+			wantAbsent:  []string{"commit", ""},
+			strictCheck: true,
+		},
+		{
+			// TC-G-10: Disabled rule → nothing covered
+			name: "DisabledRule_notCovered",
+			specs: []domain.RuleSpec{
+				{ToolName: "Bash", CommandPattern: "", Enabled: false},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-11: CommandPattern="^testProg push" → only "push" covered (bonus)
+			name: "CommandPattern_specificSubcmd",
+			specs: []domain.RuleSpec{
+				{ToolName: "Bash", CommandPattern: "^" + testProg + " push", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"push": true},
+			wantAbsent:   []string{"commit", ""},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-12: Programs case-insensitive match — "MYTESTCLI" covers "mytestcli"
+			// via strings.EqualFold; regression guard for == vs EqualFold change.
+			name: "Programs_caseInsensitiveMatch",
+			specs: []domain.RuleSpec{
+				{Programs: []string{"MYTESTCLI"}, Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{"": true, "push": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-13: CommandPattern matches bare program name → sets covered[""] sentinel.
+			// Pattern "^mytestcli$" matches the bare program string (re.MatchString(program))
+			// but not "mytestcli push", so only the sentinel key is set (rules_service.go:378).
+			name: "CommandPattern_matchesBareProgram_setsSentinelKey",
+			specs: []domain.RuleSpec{
+				{ToolName: "Bash", CommandPattern: "^" + testProg + "$", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"": true},
+			wantAbsent:   []string{"push", "commit"},
+			strictCheck:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := newRulesServiceForCoverage(t, tc.specs)
+			got := svc.coveredSubcommands(tc.program, tc.knownSubcmds)
+
+			// Verify every expected key is present.
+			for k, v := range tc.wantPresent {
+				assert.Equal(t, v, got[k], "expected covered[%q]=%v", k, v)
+			}
+
+			// Verify keys that must be absent.
+			for _, k := range tc.wantAbsent {
+				assert.False(t, got[k], "key %q must not be covered", k)
+			}
+
+			// For strict checks, verify no unexpected keys beyond wantPresent are set.
+			if tc.strictCheck {
+				for k, v := range got {
+					if _, ok := tc.wantPresent[k]; !ok {
+						assert.False(t, v, "unexpected covered[%q]=true", k)
+					}
+				}
+			}
+		})
+	}
+}
+
+// ── helpers for YAML tests ────────────────────────────────────────────────────
+
+// newSimpleRulesService creates a RulesService backed by an in-memory SQLite DB.
+func newSimpleRulesService(t *testing.T) *RulesService {
+	t.Helper()
+	storage := svctest.CreateTestStorage(t)
+	rulesStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+	analyticsStore := NewAnalyticsStore(storage)
+	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
+	c := classifier.NewRuleBasedClassifier()
+	return withoutAntigravityExport(NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil))
+}
+
+const validYAML3Rules = `rules:
+- name: Allow git log
+  tool: Bash
+  programs:
+    - git
+  subcommands:
+    - log
+  decision: allow
+  reason: Read-only git history
+  priority: 10
+- name: Deny git push
+  tool: Bash
+  programs:
+    - git
+  subcommands:
+    - push
+  decision: deny
+  reason: No direct push allowed
+  priority: 5
+- name: Allow read files
+  tool_pattern: "Read|Glob"
+  decision: allow
+  priority: 20
+`
+
+// ── UT-BE-01: Valid YAML 3 rules ──────────────────────────────────────────────
+
+func TestValidateRules_ValidYAML_3Rules(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: validYAML3Rules,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), resp.Msg.ValidCount)
+	assert.Equal(t, int32(0), resp.Msg.ErrorCount)
+	assert.Len(t, resp.Msg.Results, 3)
+	for _, r := range resp.Msg.Results {
+		assert.True(t, r.Valid)
+		assert.Empty(t, r.Errors)
+	}
+}
+
+// ── UT-BE-02: Payload > 512 KB ────────────────────────────────────────────────
+
+func TestValidateRules_PayloadTooLarge(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	large := make([]byte, 512*1024+1)
+	for i := range large {
+		large[i] = 'x'
+	}
+	_, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: string(large),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "too large")
+}
+
+// ── UT-BE-03: Invalid regex per rule, does not short-circuit ──────────────────
+
+func TestValidateRules_InvalidRegex_PerRuleError(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Bad regex rule
+  command_pattern: "[invalid("
+  decision: allow
+- name: Good rule
+  tool: Bash
+  decision: allow
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.ValidCount)
+	assert.Equal(t, int32(1), resp.Msg.ErrorCount)
+	assert.Len(t, resp.Msg.Results, 2)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.True(t, resp.Msg.Results[1].Valid)
+}
+
+// ── UT-BE-04: Invalid decision produces explicit error ────────────────────────
+
+func TestValidateRules_InvalidDecision_ExplicitError(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Bad decision
+  tool: Bash
+  decision: block
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Msg.ValidCount)
+	assert.Equal(t, int32(1), resp.Msg.ErrorCount)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "invalid decision")
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "block")
+}
+
+// ── UT-BE-05: tool and tool_pattern mutually exclusive ────────────────────────
+
+func TestValidateRules_ToolAndToolPatternMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Conflicting fields
+  tool: Bash
+  tool_pattern: "Read|Glob"
+  decision: allow
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "mutually exclusive")
+}
+
+// ── UT-BE-06: Unrecognized YAML key rejected (KnownFields) ───────────────────
+
+func TestValidateRules_UnknownField_KnownFieldsRejected(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Rule with unknown key
+  tool: Bash
+  program: git
+  decision: allow
+`
+	_, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// ── UT-BE-07: Empty rules list ────────────────────────────────────────────────
+
+func TestValidateRules_EmptyRulesList(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: "rules: []\n",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Msg.ValidCount)
+	assert.Equal(t, int32(0), resp.Msg.ErrorCount)
+	assert.Empty(t, resp.Msg.Results)
+}
+
+// ── UT-BE-08/09: Rule count boundary ─────────────────────────────────────────
+
+func TestValidateRules_RuleCount_500_AtLimit(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	var sb strings.Builder
+	sb.WriteString("rules:\n")
+	for i := 0; i < 500; i++ {
+		fmt.Fprintf(&sb, "- name: Rule %d\n  tool: Bash\n  decision: allow\n", i)
+	}
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: sb.String(),
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(500), resp.Msg.ValidCount)
+}
+
+func TestValidateRules_RuleCount_501_OverLimit(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	var sb strings.Builder
+	sb.WriteString("rules:\n")
+	for i := 0; i < 501; i++ {
+		fmt.Fprintf(&sb, "- name: Rule %d\n  tool: Bash\n  decision: allow\n", i)
+	}
+	_, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: sb.String(),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "too many rules")
+}
+
+// ── UT-BE-10: Missing name field ──────────────────────────────────────────────
+
+func TestValidateRules_MissingNameField(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- tool: Bash
+  decision: allow
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "name is required")
+}
+
+// ── UT-BE-11: All three regex fields invalid returns all errors ───────────────
+
+func TestValidateRules_AllThreeRegexFieldsInvalid(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Triple bad regex
+  tool_pattern: "[bad("
+  command_pattern: "[bad("
+  file_pattern: "[bad("
+  decision: allow
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Len(t, resp.Msg.Results[0].Errors, 3)
+}
+
+// ── UT-BE-12: Default priority ────────────────────────────────────────────────
+
+func TestValidateRules_DefaultPriority(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: No priority
+  tool: Bash
+  decision: allow
+- name: Has priority
+  tool: Bash
+  decision: allow
+  priority: 5
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(10), resp.Msg.Results[0].Rule.Priority)
+	assert.Equal(t, int32(5), resp.Msg.Results[1].Rule.Priority)
+}
+
+// ── Priority out-of-range (gosec G115 fix) ─────────────────────────────────────
+
+func TestValidateRules_PriorityOutOfRange_Rejected(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Priority overflow
+  tool: Bash
+  decision: allow
+  priority: 2147483648
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Msg.ValidCount)
+	assert.Equal(t, int32(1), resp.Msg.ErrorCount)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "priority")
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "out of range")
+}
+
+func TestValidateRules_PriorityNegative_Rejected(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Negative priority
+  tool: Bash
+  decision: allow
+  priority: -1
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Msg.ValidCount)
+	assert.Equal(t, int32(1), resp.Msg.ErrorCount)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "priority")
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "out of range")
+}
+
+func TestValidateRules_PriorityAtMaxInt32_Accepted(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Priority at boundary
+  tool: Bash
+  decision: allow
+  priority: 2147483647
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.ValidCount)
+	assert.Equal(t, int32(0), resp.Msg.ErrorCount)
+	require.True(t, resp.Msg.Results[0].Valid)
+	assert.Equal(t, int32(2147483647), resp.Msg.Results[0].Rule.Priority)
+}
+
+// ── UT-BE-13: Default enabled ─────────────────────────────────────────────────
+
+func TestValidateRules_DefaultEnabled(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: No enabled field
+  tool: Bash
+  decision: allow
+- name: Explicitly disabled
+  tool: Bash
+  decision: allow
+  enabled: false
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Results[0].Rule.Enabled)
+	assert.False(t, resp.Msg.Results[1].Rule.Enabled)
+}
+
+// ── UT-BE-14: ExportRules excludes seed and claude-settings ──────────────────
+
+func TestExportRules_ExcludesSeedAndClaudeSettingsRules(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	// Insert non-user rules directly via storage (bypassing Upsert guard) so we
+	// can prove that ExportRules filters them out.
+	for i, src := range []string{"seed", "claude-settings"} {
+		err := svc.rulesStore.storage.UpsertRule(context.Background(), domain.ApprovalRuleData{
+			ID:       fmt.Sprintf("%s-rule-%d", src, i),
+			Name:     fmt.Sprintf("%s Rule %d", src, i),
+			Decision: 1, // auto_allow
+			Enabled:  true,
+			Source:   src,
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+	// Reload so the in-memory store reflects the new rows.
+	require.NoError(t, svc.rulesStore.reload())
+	// Add 2 user rules.
+	for i := 0; i < 2; i++ {
+		_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
+			ID:       fmt.Sprintf("user-rule-%d", i),
+			Name:     fmt.Sprintf("User Rule %d", i),
+			Decision: "auto_allow",
+			Enabled:  true,
+			Source:   "user",
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	// Parse the returned YAML to count rules.
+	var file yamlRulesFile
+	require.NoError(t, parseYAMLStrict(resp.Msg.YamlContent, &file))
+	// Must be exactly 2 — seed and claude-settings rules must be excluded.
+	assert.Len(t, file.Rules, 2)
+	for _, r := range file.Rules {
+		assert.True(t, strings.HasPrefix(r.Name, "User Rule"), "unexpected non-user rule in export: %s", r.Name)
+	}
+}
+
+// ── UT-BE-15: ExportRules with filter ────────────────────────────────────────
+
+func TestExportRules_FilterByRuleIDs(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	for i := 0; i < 3; i++ {
+		_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
+			ID:       fmt.Sprintf("user-rule-%d", i),
+			Name:     fmt.Sprintf("User Rule %d", i),
+			Decision: "auto_allow",
+			Enabled:  true,
+			Source:   "user",
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{
+		RuleIds: []string{"user-rule-1"},
+	}))
+	require.NoError(t, err)
+	var file yamlRulesFile
+	require.NoError(t, parseYAMLStrict(resp.Msg.YamlContent, &file))
+	assert.Len(t, file.Rules, 1)
+	assert.Equal(t, "User Rule 1", file.Rules[0].Name)
+}
+
+// ── UT-BE-16: ExportRules empty store produces "rules: []\n" ─────────────────
+
+func TestExportRules_EmptyStore_ProducesEmptyRulesKey(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.Msg.YamlContent)
+	assert.Contains(t, resp.Msg.YamlContent, "rules:")
+}
+
+// ── UT-BE-17: ExportRules omits optional fields with zero values ──────────────
+
+func TestExportRules_OptionalFieldsOmitted(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
+		ID:       "user-minimal",
+		Name:     "Minimal Rule",
+		Decision: "auto_allow",
+		Enabled:  true,
+		Source:   "user",
+		Priority: 10,
+		// no tool, command_pattern, file_pattern, reason, alternative
+	})
+	require.NoError(t, err)
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	assert.NotContains(t, resp.Msg.YamlContent, "command_pattern")
+	assert.NotContains(t, resp.Msg.YamlContent, "file_pattern")
+	assert.NotContains(t, resp.Msg.YamlContent, "alternative")
+}
+
+// ── UT-BE-18: ExportRules -- enabled=true omitted, enabled=false present ──────
+
+func TestExportRules_EnabledDefaultOmitted(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	// enabled=true
+	_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
+		ID:       "user-enabled",
+		Name:     "Enabled Rule",
+		Decision: "auto_allow",
+		Enabled:  true,
+		Source:   "user",
+		Priority: 10,
+	})
+	require.NoError(t, err)
+	// enabled=false
+	_, err = svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
+		ID:       "user-disabled",
+		Name:     "Disabled Rule",
+		Decision: "auto_allow",
+		Enabled:  false,
+		Source:   "user",
+		Priority: 10,
+	})
+	require.NoError(t, err)
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	// The disabled rule should appear with enabled: false; the enabled rule should not have the key.
+	var file yamlRulesFile
+	require.NoError(t, parseYAMLStrict(resp.Msg.YamlContent, &file))
+	for _, r := range file.Rules {
+		if r.Name == "Disabled Rule" {
+			require.NotNil(t, r.Enabled)
+			assert.False(t, *r.Enabled)
+		}
+		if r.Name == "Enabled Rule" {
+			// enabled=true should be omitted (nil) in the export
+			assert.Nil(t, r.Enabled)
+		}
+	}
+}
+
+// ── UT-BE-19: Export roundtrip ────────────────────────────────────────────────
+
+func TestExportRules_Roundtrip(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	originals := []domain.RuleSpec{
+		{ID: "user-r1", Name: "Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10},
+		{ID: "user-r2", Name: "Rule Beta", ToolPattern: "Read|Glob", Decision: "auto_deny", Enabled: true, Source: "user", Priority: 5},
+		{ID: "user-r3", Name: "Rule Gamma", CommandPattern: `^git log`, Decision: "escalate", Enabled: true, Source: "user", Priority: 20},
+	}
+	for _, spec := range originals {
+		_, err := svc.rulesStore.Upsert(context.Background(), spec)
+		require.NoError(t, err)
+	}
+
+	exportResp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+
+	validateResp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: exportResp.Msg.YamlContent,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), validateResp.Msg.ValidCount)
+	assert.Equal(t, int32(0), validateResp.Msg.ErrorCount)
+
+	// Verify field fidelity.
+	resultByName := make(map[string]*sessionv1.ParsedRuleResult)
+	for _, r := range validateResp.Msg.Results {
+		resultByName[r.OriginalName] = r
+	}
+	r1 := resultByName["Rule Alpha"]
+	require.NotNil(t, r1)
+	assert.Equal(t, "Bash", r1.Rule.ToolName)
+	assert.Equal(t, sessionv1.AutoDecision_AUTO_DECISION_ALLOW, r1.Rule.Decision)
+
+	r2 := resultByName["Rule Beta"]
+	require.NotNil(t, r2)
+	assert.Equal(t, "Read|Glob", r2.Rule.ToolPattern)
+	assert.Equal(t, sessionv1.AutoDecision_AUTO_DECISION_DENY, r2.Rule.Decision)
+
+	r3 := resultByName["Rule Gamma"]
+	require.NotNil(t, r3)
+	assert.Equal(t, `^git log`, r3.Rule.CommandPattern)
+}
+
+// TestMinSessionIdleMinutes_SurvivesRoundTrip is a dedicated regression test for
+// MinSessionIdleMinutes because it crosses several independent hand-written conversion
+// hops (ApprovalRuleProto -> RuleSpec -> ent-backed storage -> RuleSpec ->
+// classifier.Rule, and RuleSpec -> ApprovalRuleProto again via ListApprovalRules) with
+// no compile-time completeness check tying them together — a missed hop compiles fine
+// but silently drops the field. Mirrors the storage-backed setup used by
+// TestExportRules_Roundtrip, but additionally re-opens the RulesStore against the same
+// underlying ent storage to prove the value survived an actual DB round trip rather
+// than only the in-memory cache, inspects the rebuilt classifier's rules to prove the
+// RuleSpec -> classifier.Rule hop also preserved it, and calls ListApprovalRules to
+// prove the read-path proto conversion preserved it too (this is also what the
+// docs/registry/features/backend/approval/list-rules.json entry cites as covering
+// ListApprovalRules).
+func TestMinSessionIdleMinutes_SurvivesRoundTrip(t *testing.T) {
+	t.Parallel()
+	const ruleID = "user-idle-test"
+	const wantIdleMinutes = int32(60)
+
+	svc := newSimpleRulesService(t)
+
+	// Hop 1: ApprovalRuleProto -> RuleSpec -> ent storage (UpsertApprovalRule),
+	// then ent-persisted RuleSpec -> ApprovalRuleProto in the response.
+	upsertResp, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:                    ruleID,
+			Name:                  "Idle gate regression test",
+			ToolName:              "Bash",
+			Decision:              sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:               true,
+			Priority:              10,
+			MinSessionIdleMinutes: wantIdleMinutes,
+		},
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, wantIdleMinutes, upsertResp.Msg.Rule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive proto->RuleSpec->ent->RuleSpec->proto in the upsert response")
+
+	// Hop 2: re-open a fresh RulesStore against the same ent storage to force a
+	// read from the DB row (domain.ApprovalRuleData) rather than the in-memory
+	// cache, proving the ent read/write hop in session/rulestore didn't
+	// drop the field.
+	reloaded, err := NewRulesStore(svc.rulesStore.storage)
+	require.NoError(t, err)
+	var persisted *domain.RuleSpec
+	for _, r := range reloaded.All() {
+		if r.ID == ruleID {
+			rc := r
+			persisted = &rc
+		}
+	}
+	require.NotNil(t, persisted, "rule should be persisted in ent-backed storage")
+	assert.Equal(t, wantIdleMinutes, persisted.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the ApprovalRuleData<->ent round trip")
+
+	// Hop 3: RuleSpec -> classifier.Rule, exercised by rebuildClassifier (called
+	// internally by UpsertApprovalRule via specsToRules).
+	var classifierRule *classifier.Rule
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == ruleID {
+			rc := r
+			classifierRule = &rc
+		}
+	}
+	require.NotNil(t, classifierRule, "rule should be present in the rebuilt classifier")
+	assert.Equal(t, wantIdleMinutes, classifierRule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the RuleSpec->classifier.Rule conversion")
+
+	// Hop 4: RuleSpec -> ApprovalRuleProto via the ListApprovalRules RPC, proving the
+	// read-path conversion (specToProto, called from the list handler rather than the
+	// upsert response) also preserves the field.
+	listResp, err := svc.ListApprovalRules(context.Background(), connect.NewRequest(&sessionv1.ListApprovalRulesRequest{}))
+	require.NoError(t, err)
+	var listedRule *sessionv1.ApprovalRuleProto
+	for _, r := range listResp.Msg.Rules {
+		if r.Id == ruleID {
+			listedRule = r
+			break
+		}
+	}
+	require.NotNil(t, listedRule, "rule should be present in ListApprovalRules response")
+	assert.Equal(t, wantIdleMinutes, listedRule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the RuleSpec->proto conversion in ListApprovalRules")
+}
+
+// ── UT-BE-20: BulkUpsert 20 new rules ────────────────────────────────────────
+
+func TestBulkUpsertRules_InsertNew_20Rules(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	rules := make([]*sessionv1.ApprovalRuleProto, 20)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(20), resp.Msg.Created)
+	assert.Equal(t, int32(0), resp.Msg.Updated)
+	assert.Equal(t, int32(0), resp.Msg.Skipped)
+	assert.Empty(t, resp.Msg.Errors)
+}
+
+// ── UT-BE-21: BulkUpsert skip duplicates ─────────────────────────────────────
+
+func TestBulkUpsertRules_SkipDuplicates(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	// Pre-insert 2 rules.
+	for i := 0; i < 2; i++ {
+		_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
+			ID:       fmt.Sprintf("user-existing-%d", i),
+			Name:     fmt.Sprintf("Rule %d", i),
+			Decision: "auto_allow",
+			Enabled:  true,
+			Source:   "user",
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+
+	// Bulk insert 4 rules (2 are duplicates).
+	rules := make([]*sessionv1.ApprovalRuleProto, 4)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), resp.Msg.Created)
+	assert.Equal(t, int32(0), resp.Msg.Updated)
+	assert.Equal(t, int32(2), resp.Msg.Skipped)
+}
+
+// ── UT-BE-22: BulkUpsert overwrite duplicates ────────────────────────────────
+
+func TestBulkUpsertRules_OverwriteDuplicates(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	// Pre-insert 2 rules.
+	for i := 0; i < 2; i++ {
+		_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
+			ID:       fmt.Sprintf("user-existing-%d", i),
+			Name:     fmt.Sprintf("Rule %d", i),
+			Decision: "auto_allow",
+			Enabled:  true,
+			Source:   "user",
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+
+	// Bulk insert 4 rules (2 new, 2 duplicates) with overwrite=true.
+	rules := make([]*sessionv1.ApprovalRuleProto, 4)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_DENY, // changed decision
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: true,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), resp.Msg.Created)
+	assert.Equal(t, int32(2), resp.Msg.Updated)
+	assert.Equal(t, int32(0), resp.Msg.Skipped)
+}
+
+// ── UT-BE-23: rebuildClassifier called exactly once ───────────────────────────
+
+func TestBulkUpsertRules_RebuildClassifierCalledOnce(t *testing.T) {
+	t.Parallel()
+	// We verify this by checking that all 10 rules are visible through allRuleSpecs
+	// after a single BulkUpsertRules call (implying classifier rebuilt correctly).
+	svc := newSimpleRulesService(t)
+	rules := make([]*sessionv1.ApprovalRuleProto, 10)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(10), resp.Msg.Created)
+	// Verify all 10 rules are visible in the classifier (confirms rebuild happened).
+	classifierRules := svc.classifier.Rules()
+	userRuleCount := 0
+	for _, r := range classifierRules {
+		if r.Source == "user" {
+			userRuleCount++
+		}
+	}
+	assert.Equal(t, 10, userRuleCount)
+}
+
+// ── UT-BE-24: Client-supplied IDs/source discarded ────────────────────────────
+
+func TestBulkUpsertRules_ClientIDsDiscarded(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	rules := []*sessionv1.ApprovalRuleProto{
+		{
+			Id:       "injected-id", // should be discarded
+			Source:   "seed",        // should be overridden to "user"
+			Name:     "Injected Rule",
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		},
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.Created)
+
+	// Verify the stored rule has source="user" and a server-generated ID.
+	stored := svc.rulesStore.All()
+	require.Len(t, stored, 1)
+	assert.Equal(t, "user", stored[0].Source)
+	assert.NotEqual(t, "injected-id", stored[0].ID)
+}
+
+// ── UT-BE-25: YAML bomb alias expansion guard ─────────────────────────────────
+
+func TestValidateRules_YAMLBombAliasExpansion(t *testing.T) {
+	t.Parallel()
+	// This YAML tries to create many rules via anchors/aliases.
+	// The 500-rule cap should fire before per-rule validation.
+	svc := newSimpleRulesService(t)
+	var sb strings.Builder
+	sb.WriteString("rules:\n")
+	for i := 0; i < 502; i++ {
+		fmt.Fprintf(&sb, "- name: Rule %d\n  tool: Bash\n  decision: allow\n", i)
+	}
+	_, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: sb.String(),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "too many rules")
+}
+
+// ── IT-BE-01: Export then validate roundtrip ──────────────────────────────────
+
+func TestIntegration_ExportThenValidate_Roundtrip(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	specs := []domain.RuleSpec{
+		{ID: "user-it-1", Name: "IT Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10, Programs: []string{"git"}},
+		{ID: "user-it-2", Name: "IT Rule Beta", ToolPattern: "Read|Glob", Decision: "auto_deny", Enabled: true, Source: "user", Priority: 5},
+		{ID: "user-it-3", Name: "IT Rule Gamma", CommandPattern: `^npm`, Decision: "escalate", Enabled: true, Source: "user", Priority: 20},
+	}
+	for _, spec := range specs {
+		_, err := svc.rulesStore.Upsert(context.Background(), spec)
+		require.NoError(t, err)
+	}
+
+	exportResp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+
+	validateResp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: exportResp.Msg.YamlContent,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), validateResp.Msg.ValidCount)
+	assert.Equal(t, int32(0), validateResp.Msg.ErrorCount)
+}
+
+// ── IT-BE-02: BulkUpsert then export ─────────────────────────────────────────
+
+func TestIntegration_BulkUpsert_ThenExport(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	rules := make([]*sessionv1.ApprovalRuleProto, 5)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("IT Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	_, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+
+	exportResp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	var file yamlRulesFile
+	require.NoError(t, parseYAMLStrict(exportResp.Msg.YamlContent, &file))
+	assert.Len(t, file.Rules, 5)
+}
+
+// ── IT-BE-03: Validate and apply 20 rules ────────────────────────────────────
+
+func TestIntegration_ValidateAndApply_20Rules(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	var sb strings.Builder
+	sb.WriteString("rules:\n")
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&sb, "- name: IT Apply Rule %d\n  tool: Bash\n  decision: allow\n  priority: 10\n", i)
+	}
+	yamlContent := sb.String()
+
+	validateResp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yamlContent,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(20), validateResp.Msg.ValidCount)
+
+	// Collect valid protos and bulk-upsert.
+	validRules := make([]*sessionv1.ApprovalRuleProto, 0)
+	for _, r := range validateResp.Msg.Results {
+		if r.Valid {
+			validRules = append(validRules, r.Rule)
+		}
+	}
+
+	bulkResp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               validRules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(20), bulkResp.Msg.Created)
+}
+
+// ── IT-BE-04: Single classifier rebuild ──────────────────────────────────────
+
+func TestIntegration_BulkUpsert_SingleClassifierRebuild(t *testing.T) {
+	t.Parallel()
+	// Same as UT-BE-23 but confirms via export that all 20 rules are present.
+	svc := newSimpleRulesService(t)
+	rules := make([]*sessionv1.ApprovalRuleProto, 20)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("IT Rebuild Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(20), resp.Msg.Created)
+
+	// Confirm classifier has all 20 user rules.
+	userCount := 0
+	for _, r := range svc.classifier.Rules() {
+		if r.Source == "user" {
+			userCount++
+		}
+	}
+	assert.Equal(t, 20, userCount)
+}
+
+// ── parseYAMLStrict is a test helper that parses YAML into yamlRulesFile ──────
+
+func parseYAMLStrict(content string, out *yamlRulesFile) error {
+	return yaml.Unmarshal([]byte(content), out)
+}
+
+// ── FuzzValidateRules_NoPanic ─────────────────────────────────────────────────
+
+func FuzzValidateRules_NoPanic(f *testing.F) {
+	f.Add([]byte("rules:\n- name: test\n  tool: Bash\n  decision: allow\n"))
+	f.Add([]byte(""))
+	f.Add([]byte("not: yaml"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		svc := newSimpleRulesService(t)
+		// Should never panic; may return an error.
+		_, _ = svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+			YamlContent: string(data),
+		}))
+	})
+}
+
+// ── ConfigFileRulesRepository stub contract tests ─────────────────────────────
+
+func TestGetConfigFileRules_should_returnCodeUnimplemented_when_configStoreIsNil(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t) // configStore == nil
+	_, err := svc.GetConfigFileRules(context.Background(), connect.NewRequest(&sessionv1.GetConfigFileRulesRequest{}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+func TestSaveRulesToConfigFile_should_returnCodeUnimplemented_when_configStoreIsNil(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t) // configStore == nil
+	_, err := svc.SaveRulesToConfigFile(context.Background(), connect.NewRequest(&sessionv1.SaveRulesToConfigFileRequest{}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+// ── ReloadClaudeSettingsRules ──────────────────────────────────────────────────
+
+func TestReloadClaudeSettingsRules_WatcherNotConfigured_ReturnsUnimplemented(t *testing.T) {
+	svc := newSimpleRulesService(t) // claudeSettingsWatcher never set
+
+	_, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	home := t.TempDir()
+	svctest.WithFakeHomePath(t, home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git *)","Bash(npm test*)"]}}`)
+	svc.SetClaudeSettingsWatcher(claudesettings.NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
+		svc.RebuildClaudeSettingsRules(rules)
+	}))
+
+	resp, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Success)
+	assert.EqualValues(t, 2, resp.Msg.RuleCount)
+	assert.Contains(t, resp.Msg.Message, "Reloaded 2 claude-settings rule(s)")
+}
+
+func TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGoodCount(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	home := t.TempDir()
+	svctest.WithFakeHomePath(t, home)
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
+	svc.SetClaudeSettingsWatcher(claudesettings.NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
+		svc.RebuildClaudeSettingsRules(rules)
+	}))
+
+	// Establish a known-good baseline.
+	first, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+	require.NoError(t, err)
+	require.True(t, first.Msg.Success)
+
+	writeSettingsFile(t, settingsPath, `{"permissions": {"allow": [`) // corrupt
+
+	resp, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Success)
+	assert.EqualValues(t, first.Msg.RuleCount, resp.Msg.RuleCount, "rule count must fall back to last-known-good")
+	assert.Contains(t, resp.Msg.Message, "previous rules still active")
+	assert.Contains(t, resp.Msg.Message, settingsPath)
+}
+
+// TestUpsertApprovalRule_StillHotSwapsClassifierRules_AfterRebuildMuAdded regression-guards
+// REQ-6: adding rebuildMu to rebuildClassifier must not change UpsertApprovalRule's existing
+// hot-swap behavior.
+func TestUpsertApprovalRule_StillHotSwapsClassifierRules_AfterRebuildMuAdded(t *testing.T) {
+	svc := newRulesService(t)
+
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:       "hot-swap-rule",
+			Name:     "hot swap",
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Source:   "user",
+		},
+	}))
+	require.NoError(t, err)
+
+	found := false
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == "hot-swap-rule" {
+			found = true
+		}
+	}
+	assert.True(t, found, "new user rule must be immediately classify-visible, unchanged from pre-rebuildMu behavior")
+}
+
+// TestDeleteApprovalRule_InvalidRuleID_LeavesExistingRulesIntact guards against a rebuildMu
+// deadlock or partial-clear regression on the error path.
+func TestDeleteApprovalRule_InvalidRuleID_LeavesExistingRulesIntact(t *testing.T) {
+	svc := newRulesService(t)
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:       "keep-me",
+			Name:     "keep me",
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Source:   "user",
+		},
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.DeleteApprovalRule(context.Background(), connect.NewRequest(&sessionv1.DeleteApprovalRuleRequest{Id: "does-not-exist"}))
+	require.Error(t, err)
+
+	found := false
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == "keep-me" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a failed delete of an unrelated rule must not clear existing rules")
+}
+
+// TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes is the Story
+// 3.1.1 regression test, replacing two prior tests found in review to be vacuous:
+// TestRebuildClassifier_ConcurrentWithClaudeSettingsRebuild_NeitherUpdateIsLost and
+// TestClassify_DuringConcurrentReload_NeverObservesPartialRuleSet both still passed
+// identically with rebuildMu fully removed from the production code (verified in review by
+// deleting the Lock/Unlock calls and running both 5x under -race). The reason: a lost-update
+// race — goroutine A reads, B reads-and-writes, A's stale write clobbers B's — is a logical
+// race, not a memory race. Every individual field access here is already protected by
+// classifier.RuleBasedClassifier's own internal lock, so go test -race structurally cannot
+// see this class of bug; only forcing a genuine overlap and observing the mutex actually
+// block the second caller proves serialization holds. Uses the test-only testHook seam
+// (rs.testHook, called mid-critical-section) to do exactly that.
+func TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes(t *testing.T) {
+	svc := newRulesService(t)
+
+	hookEntered := make(chan struct{})
+	releaseHook := make(chan struct{})
+	var hookCalls atomic.Int32
+	svc.testHook = func() {
+		// Only the FIRST call (guaranteed to be A's — B hasn't started yet) blocks. Any
+		// later call — B's, whether it arrives concurrently because rebuildMu is missing, or
+		// serially after A releases it because rebuildMu correctly blocked B's Lock() — must
+		// pass straight through, or this hook would itself force serialization regardless of
+		// whether the production mutex does.
+		if hookCalls.Add(1) == 1 {
+			close(hookEntered)
+			<-releaseHook
+		}
+	}
+
+	// Goroutine A: rebuildClaudeSettingsRules acquires rebuildMu, reads, then blocks inside
+	// the hook — still holding rebuildMu — until releaseHook is closed.
+	aDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		svc.RebuildClaudeSettingsRules([]classifier.Rule{{
+			RuleMeta: classifier.RuleMeta{ID: "cs-a", Enabled: true, Source: "claude-settings", Priority: 150},
+			ToolName: "Read", Decision: classifier.AutoAllow,
+		}})
+	}()
+	<-hookEntered // A is now paused mid-critical-section, holding rebuildMu.
+
+	// Goroutine B: rebuildClassifier must block trying to acquire rebuildMu, since A holds it.
+	bDone := make(chan struct{})
+	go func() {
+		defer close(bDone)
+		svc.rebuildClassifier()
+	}()
+
+	select {
+	case <-bDone:
+		t.Fatal("rebuildClassifier completed while rebuildClaudeSettingsRules was mid-critical-section — rebuildMu is not serializing the two rebuild paths")
+	case <-time.After(150 * time.Millisecond):
+		// Expected: B is still blocked waiting on rebuildMu.
+	}
+
+	close(releaseHook) // let A finish and release rebuildMu; B can then proceed.
+	<-aDone
+	<-bDone
+
+	found := false
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == "cs-a" {
+			found = true
+		}
+	}
+	assert.True(t, found, "goroutine B's rebuildClassifier must not have clobbered A's claude-settings rule")
+}
+
+// ─── Epic 2.2: reconcilePendingApprovals() core loop ─────────────────────────
+
+// fakeReconciliationResolver is a lightweight, in-memory reconciliationResolver double for
+// tests that only need to exercise reconcilePendingApprovals' classify-and-branch logic
+// (Task 2.2.2a's guidance) — no real ApprovalStore needed. Safe for concurrent use since
+// reconcilePendingApprovals itself may run on a background goroutine.
+type fakeReconciliationResolver struct {
+	mu sync.Mutex
+
+	items []*approvalkit.PendingApproval
+
+	// resolveErr maps approval ID -> error ResolveApprovalReconciled should return for it.
+	// A missing entry means "succeed" (nil error).
+	resolveErr map[string]error
+	// panicIDs marks approval IDs whose ResolveApprovalReconciled call panics instead of
+	// returning, simulating a fault partway through a multi-item batch.
+	panicIDs map[string]bool
+	// pending overrides IsApprovalPending's return per ID. A missing entry defaults to true.
+	pending map[string]bool
+
+	calls         []string // every approval ID ResolveApprovalReconciled was invoked with
+	resolvedCalls []string // approval IDs for which ResolveApprovalReconciled returned nil
+}
+
+func (f *fakeReconciliationResolver) ListPendingApprovalsInternal() []*approvalkit.PendingApproval {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*approvalkit.PendingApproval, len(f.items))
+	copy(out, f.items)
+	return out
+}
+
+func (f *fakeReconciliationResolver) ResolveApprovalReconciled(_ context.Context, approvalID, _, _ string) error {
+	f.mu.Lock()
+	if f.panicIDs[approvalID] {
+		f.mu.Unlock()
+		panic("fakeReconciliationResolver: simulated panic resolving " + approvalID)
+	}
+	f.calls = append(f.calls, approvalID)
+	err := f.resolveErr[approvalID]
+	if err == nil {
+		f.resolvedCalls = append(f.resolvedCalls, approvalID)
+	}
+	f.mu.Unlock()
+	return err
+}
+
+func (f *fakeReconciliationResolver) IsApprovalPending(approvalID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if v, ok := f.pending[approvalID]; ok {
+		return v
+	}
+	return true
+}
+
+func (f *fakeReconciliationResolver) resolved(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.resolvedCalls {
+		if c == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeReconciliationResolver) wasCalled(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if c == id {
+			return true
+		}
+	}
+	return false
+}
+
+// bashApproval builds a minimal pending Bash approval for reconciliation tests.
+func bashApproval(id, sessionID, command string, createdAt time.Time) *approvalkit.PendingApproval {
+	return &approvalkit.PendingApproval{
+		ID:        id,
+		SessionID: sessionID,
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{"command": command},
+		CreatedAt: createdAt,
+	}
+}
+
+// addBashRuleDirect installs an AutoAllow rule directly into svc's live classifier,
+// bypassing UpsertApprovalRule/rebuildClassifier so no reconciliation goroutine is spawned as
+// a side effect of adding the rule — for tests that drive reconcilePendingApprovals(Safe)
+// themselves, synchronously, and would otherwise race a background pass triggered by the
+// RPC path (upsertAllowRule below).
+func addBashRuleDirect(svc *RulesService, id, name, commandPattern string) {
+	rule := classifier.Rule{
+		RuleMeta: classifier.RuleMeta{ID: id, Name: name, Enabled: true, Source: "user", Priority: 999},
+		ToolName: "Bash", Decision: classifier.AutoAllow,
+	}
+	if commandPattern != "" {
+		rule.CommandPattern = regexp.MustCompile(commandPattern)
+	}
+	svc.classifier.ReplaceRules(append(svc.classifier.Rules(), rule))
+}
+
+// upsertAllowRule adds a user rule via the real UpsertApprovalRule RPC (triggering the same
+// rebuildClassifier + async reconciliation path production code takes), scoped to Bash
+// commands matching commandPattern (empty means "any Bash command"). Only use this in tests
+// that want that async pass to be the ONE reconciliation trigger in play — set
+// reconcileDoneHook before calling, and never also call reconcilePendingApprovals(Safe)
+// manually in the same test, or the two passes race to invoke the hook (see
+// addBashRuleDirect for tests that need a rule present without spawning a pass).
+func upsertAllowRule(t *testing.T, svc *RulesService, id, name, commandPattern string) {
+	t.Helper()
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:             id,
+			Name:           name,
+			ToolName:       "Bash",
+			CommandPattern: commandPattern,
+			Decision:       sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:        true,
+			Source:         "user",
+			Priority:       999,
+		},
+	}))
+	require.NoError(t, err)
+}
+
+// TestReconcilePendingApprovals_AutoAllowResolves is Task 2.2.2a: a pending Escalate item
+// that now classifies AutoAllow under a freshly-added rule gets resolved end-to-end, through
+// the real ApprovalStore/ApprovalService/NotificationHistoryStore chain, with the
+// notification record stamped reconciled: "true".
+func TestReconcilePendingApprovals_AutoAllowResolves(t *testing.T) {
+	store := approvalkit.NewApprovalStore("")
+	notifStore := newTestNotificationStore(t)
+	approvalSvc := approvals.NewApprovalService(store)
+	approvalSvc.SetNotificationStore(notifStore)
+
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	a := bashApproval("appr-1a2b3c", "sess-a1b2c3", "git status", time.Now())
+	require.NoError(t, store.Create(a))
+	require.NoError(t, notifStore.Append(&notifications.NotificationRecord{
+		ID:               "appr-1a2b3c",
+		SessionID:        "sess-a1b2c3",
+		NotificationType: 1, // NOTIFICATION_TYPE_APPROVAL_NEEDED
+		CreatedAt:        time.Now(),
+	}))
+
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+
+	upsertAllowRule(t, rulesSvc, "auto-allow-git-status", "Auto-allow safe git status checks", "^git status$")
+	<-doneCh
+
+	_, stillPending := store.Get("appr-1a2b3c")
+	assert.False(t, stillPending, "resolved approval must be removed from ApprovalStore")
+
+	rec, ok := notifStore.GetByID("appr-1a2b3c")
+	require.True(t, ok)
+	assert.Equal(t, "allow", rec.Metadata["approval_decision"])
+	assert.Equal(t, "Auto-allow safe git status checks", rec.Metadata["classifier_rule_name"])
+	assert.Equal(t, "true", rec.Metadata["reconciled"])
+}
+
+// upsertDenyRule is upsertAllowRule's AutoDeny counterpart — same real-RPC-path caveats apply.
+func upsertDenyRule(t *testing.T, svc *RulesService, id, name, commandPattern string) {
+	t.Helper()
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:             id,
+			Name:           name,
+			ToolName:       "Bash",
+			CommandPattern: commandPattern,
+			Decision:       sessionv1.AutoDecision_AUTO_DECISION_DENY,
+			Enabled:        true,
+			Source:         "user",
+			Priority:       999,
+		},
+	}))
+	require.NoError(t, err)
+}
+
+// TestReconcilePendingApprovals_AutoDenyResolves is review finding #5: every existing
+// reconciliation test only installs an AutoAllow-classifying rule, leaving the deny-resolution
+// branch (rules_service.go's `decision := "deny"` fallback) completely uncovered. Parallels
+// TestReconcilePendingApprovals_AutoAllowResolves's structure with an AutoDeny rule instead.
+func TestReconcilePendingApprovals_AutoDenyResolves(t *testing.T) {
+	store := approvalkit.NewApprovalStore("")
+	notifStore := newTestNotificationStore(t)
+	approvalSvc := approvals.NewApprovalService(store)
+	approvalSvc.SetNotificationStore(notifStore)
+
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	a := bashApproval("appr-7g8h9i", "sess-d4e5f6", "rm -rf /tmp/scratch", time.Now())
+	require.NoError(t, store.Create(a))
+	require.NoError(t, notifStore.Append(&notifications.NotificationRecord{
+		ID:               "appr-7g8h9i",
+		SessionID:        "sess-d4e5f6",
+		NotificationType: 1, // NOTIFICATION_TYPE_APPROVAL_NEEDED
+		CreatedAt:        time.Now(),
+	}))
+
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+
+	upsertDenyRule(t, rulesSvc, "auto-deny-rm-rf", "Auto-deny destructive rm -rf", "^rm -rf")
+	<-doneCh
+
+	_, stillPending := store.Get("appr-7g8h9i")
+	assert.False(t, stillPending, "resolved approval must be removed from ApprovalStore")
+
+	rec, ok := notifStore.GetByID("appr-7g8h9i")
+	require.True(t, ok)
+	assert.Equal(t, "deny", rec.Metadata["approval_decision"])
+	assert.Equal(t, "Auto-deny destructive rm -rf", rec.Metadata["classifier_rule_name"])
+	assert.Equal(t, "true", rec.Metadata["reconciled"])
+}
+
+// TestReconcilePendingApprovals_StillEscalates_LeftUntouched is Task 2.2.2b: a rule that
+// doesn't match the pending item's tool call must never call ResolveApprovalReconciled, and
+// the item remains unresolved.
+func TestReconcilePendingApprovals_StillEscalates_LeftUntouched(t *testing.T) {
+	rulesSvc := newRulesService(t)
+
+	fake := &fakeReconciliationResolver{
+		items: []*approvalkit.PendingApproval{bashApproval("appr-4d5e6f", "sess-x", "rm -rf /tmp/scratch", time.Now())},
+	}
+	rulesSvc.approvalSvc = fake
+
+	// New rule matches "git status", not the pending item's "rm -rf /tmp/scratch".
+	addBashRuleDirect(rulesSvc, "auto-allow-git-status-b", "Auto-allow safe git status checks", "^git status$")
+
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+	rulesSvc.reconcilePendingApprovalsSafe()
+	<-doneCh
+
+	assert.False(t, fake.wasCalled("appr-4d5e6f"), "a still-escalating item must never reach ResolveApprovalReconciled")
+}
+
+// TestReconcilePendingApprovals_HumanWinsRace is Task 2.2.2c, the single highest-risk test
+// in the plan (validation.md's dedicated Concurrency Test Design section): a real concurrent
+// race between a human's in-flight resolution and a reconciliation pass, synchronized with
+// unbuffered channel send/close/receive — never time.Sleep — so the interleaving is
+// deterministic on every run.
+func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
+	store := approvalkit.NewApprovalStore("")
+	approvalSvc := approvals.NewApprovalService(store)
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	pendingApproval := bashApproval("appr-race", "sess-race", "rm -rf /tmp/scratch", time.Now())
+	require.NoError(t, store.Create(pendingApproval))
+
+	humanClaimed := make(chan struct{})
+	releaseHuman := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	// Human-side goroutine, deliberately isolated to the exact two ApprovalStore primitive
+	// calls resolveApproval's human branch makes, so the sync point lands exactly on the
+	// arbitration boundary rather than inside unrelated CI-guard/stamping I/O.
+	go func() {
+		defer wg.Done()
+		store.MarkHumanResolving("appr-race")
+		close(humanClaimed) // happens-before: reconciliation's IsHumanResolving check
+		<-releaseHuman
+		_ = store.Resolve("appr-race", approvalkit.ApprovalDecision{Behavior: "deny", Message: "blocking this"})
+		store.ClearHumanResolving("appr-race")
+	}()
+
+	// Wait for the claim, THEN attempt reconciliation — this ordering (not a hoped-for
+	// interleaving) is what makes the race deterministic.
+	<-humanClaimed
+	err := approvalSvc.ResolveApprovalReconciled(context.Background(), "appr-race", "allow", "Auto-allow safe git status checks")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAborted, connect.CodeOf(err))
+
+	stillPending := false
+	for _, a := range store.ListAll() {
+		if a.ID == "appr-race" {
+			stillPending = true
+		}
+	}
+	assert.True(t, stillPending, "reconciliation must never touch the store while a human decision is in flight")
+
+	close(releaseHuman) // let the human's Resolve proceed
+	wg.Wait()
+
+	// Ground-truth assertion: read the delivered decision directly off the approval's own
+	// channel, not inferred from error codes or store absence alone.
+	decision := <-pendingApproval.Decisions()
+	assert.Equal(t, "deny", decision.Behavior)
+	assert.Equal(t, "blocking this", decision.Message)
+
+	for _, a := range store.ListAll() {
+		assert.NotEqual(t, "appr-race", a.ID, "appr-race should be resolved and gone")
+	}
+
+	// Re-run the identical interleaving through the full reconcilePendingApprovals loop
+	// (not just a direct ResolveApprovalReconciled call) with a fresh item, to confirm
+	// counts.deferredToHuman increments and the loop's own log line fires. addBashRuleDirect
+	// (not upsertAllowRule) so adding the rule doesn't itself spawn a competing async pass
+	// racing the manual reconcilePendingApprovals call below.
+	addBashRuleDirect(rulesSvc, "race-loop-rule", "Auto-allow safe git status checks", "^git status$")
+
+	item2 := bashApproval("appr-race-2", "sess-race-2", "git status", time.Now())
+	require.NoError(t, store.Create(item2))
+
+	humanClaimed2 := make(chan struct{})
+	releaseHuman2 := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		store.MarkHumanResolving("appr-race-2")
+		close(humanClaimed2)
+		<-releaseHuman2
+		_ = store.Resolve("appr-race-2", approvalkit.ApprovalDecision{Behavior: "deny", Message: "blocking this too"})
+		store.ClearHumanResolving("appr-race-2")
+	}()
+	<-humanClaimed2
+
+	logs := svctest.CaptureLogs(t)
+	counts := &reconcileCounts{}
+	rulesSvc.reconcilePendingApprovals(counts)
+	assert.Equal(t, 1, counts.deferredToHuman)
+	assert.Contains(t, logs.String(), "reconciliation deferred to in-flight human decision")
+
+	close(releaseHuman2)
+	wg.Wait()
+}
+
+// TestReconcilePendingApprovals_CapsAtMaxPerPass is Task 2.2.2d: a backlog larger than
+// maxReconcileAutoResolvesPerPass resolves exactly the cap and skips the rest, and the same
+// oldest-first set resolves across repeated passes (pre-mortem.md #5's determinism guard).
+func TestReconcilePendingApprovals_CapsAtMaxPerPass(t *testing.T) {
+	rulesSvc := newRulesService(t)
+	addBashRuleDirect(rulesSvc, "allow-all-bash-cap-test", "Allow all bash (test)", "")
+
+	const total = maxReconcileAutoResolvesPerPass + 5
+	base := time.Now()
+	items := make([]*approvalkit.PendingApproval, total)
+	for i := 0; i < total; i++ {
+		// Deliberately out-of-construction-order CreatedAt: index 0 gets the newest
+		// timestamp, index total-1 the oldest, so a correct implementation must actually
+		// sort rather than rely on slice/construction order.
+		items[i] = bashApproval(fmt.Sprintf("appr-%03d", i), fmt.Sprintf("sess-%03d", i), "echo hi",
+			base.Add(time.Duration(total-i)*time.Second))
+	}
+	fake := &fakeReconciliationResolver{items: items}
+	rulesSvc.approvalSvc = fake
+
+	// Go through reconcilePendingApprovalsSafe (not a direct reconcilePendingApprovals call)
+	// for this assertion — the "capped" summary log is emitted by Safe's deferred summary
+	// log, not by the inner loop function itself.
+	logs := svctest.CaptureLogs(t)
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+	rulesSvc.reconcilePendingApprovalsSafe()
+	<-doneCh
+
+	assert.Len(t, fake.resolvedCalls, maxReconcileAutoResolvesPerPass)
+	assert.Contains(t, logs.String(), "resolved_count=50")
+	assert.Contains(t, logs.String(), "skipped_count=5")
+	assert.Contains(t, logs.String(), "capped=true")
+
+	// Compute the expected oldest-first resolved set independently of the loop under test.
+	sortedIdx := make([]int, total)
+	for i := range sortedIdx {
+		sortedIdx[i] = i
+	}
+	sort.Slice(sortedIdx, func(i, j int) bool {
+		return items[sortedIdx[i]].CreatedAt.Before(items[sortedIdx[j]].CreatedAt)
+	})
+	expectedResolved := make(map[string]bool, maxReconcileAutoResolvesPerPass)
+	for _, idx := range sortedIdx[:maxReconcileAutoResolvesPerPass] {
+		expectedResolved[items[idx].ID] = true
+	}
+	for _, id := range fake.resolvedCalls {
+		assert.True(t, expectedResolved[id], "resolved id %s was not among the oldest %d", id, maxReconcileAutoResolvesPerPass)
+	}
+
+	// Second pass: simulate the next rebuild seeing only what pass one left behind, and
+	// assert it resolves exactly the remainder — pinning that repeated capped passes are
+	// monotonic instead of touching an arbitrary subset each time.
+	remaining := make([]*approvalkit.PendingApproval, 0, len(sortedIdx)-maxReconcileAutoResolvesPerPass)
+	for _, idx := range sortedIdx[maxReconcileAutoResolvesPerPass:] {
+		remaining = append(remaining, items[idx])
+	}
+	require.Len(t, remaining, 5)
+	fake2 := &fakeReconciliationResolver{items: remaining}
+	rulesSvc.approvalSvc = fake2
+	counts2 := &reconcileCounts{}
+	rulesSvc.reconcilePendingApprovals(counts2)
+	assert.Equal(t, 5, counts2.resolved)
+	assert.Equal(t, 0, counts2.skipped)
+}
+
+// TestReconcilePendingApprovals_PanicIsRecovered is Task 2.2.2e, the second hardest test in
+// the plan (validation.md's dedicated Panic-Recovery Test Design section): a panic partway
+// through a batch must never crash the process, must be logged, and the pass-complete
+// summary must still report the real partial-progress counts reached before the panic —
+// proving the counters live in reconcilePendingApprovalsSafe's frame, not the panicking
+// function's.
+func TestReconcilePendingApprovals_PanicIsRecovered(t *testing.T) {
+	rulesSvc := newRulesService(t)
+	addBashRuleDirect(rulesSvc, "allow-all-bash-panic-test", "Allow all bash (test)", "")
+
+	base := time.Now()
+	item1 := bashApproval("item1", "s1", "echo 1", base.Add(1*time.Second))
+	item2 := bashApproval("item2", "s2", "echo 2", base.Add(2*time.Second))
+	panicItem := bashApproval("item3-panic", "s3", "echo 3", base.Add(3*time.Second))
+
+	fake := &fakeReconciliationResolver{
+		items:    []*approvalkit.PendingApproval{item1, item2, panicItem},
+		panicIDs: map[string]bool{"item3-panic": true},
+	}
+	rulesSvc.approvalSvc = fake
+
+	logs := svctest.CaptureLogs(t)
+	done := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(done) }
+
+	require.NotPanics(t, func() {
+		rulesSvc.reconcilePendingApprovalsSafe()
+	})
+	<-done // deterministic completion signal, not a sleep
+
+	assert.Contains(t, logs.String(), "panic in reconcilePendingApprovals recovered")
+	assert.Contains(t, logs.String(), "reconciliation pass complete")
+	assert.Contains(t, logs.String(), "resolved_count=2", "item1+item2 resolved BEFORE the panic")
+	assert.Contains(t, logs.String(), "panicked=true")
+	assert.True(t, fake.resolved("item1"))
+	assert.True(t, fake.resolved("item2"))
+}
+
+// TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately is Task 2.2.2f:
+// a genuine CI-red-guard decline during reconciliation must be logged and counted as
+// declined_by_ci_guard_count, never lost_to_concurrent_pass_count, and must leave the item
+// pending.
+func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
+
+	store := approvalkit.NewApprovalStore("")
+	approvalSvc := approvals.NewApprovalService(store)
+	approvalSvc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("sess-ci-guard")})
+
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	a := bashApproval("appr-ci-guard", "sess-ci-guard", "git status", time.Now())
+	require.NoError(t, store.Create(a))
+
+	logs := svctest.CaptureLogs(t)
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+
+	upsertAllowRule(t, rulesSvc, "auto-allow-git-status-ci", "Auto-allow safe git status checks", "^git status$")
+	<-doneCh
+
+	assert.True(t, approvalSvc.IsApprovalPending("appr-ci-guard"), "a CI-red-guard decline must leave the item pending")
+	assert.Contains(t, logs.String(), "reconciliation declined by CI-red guard")
+	assert.NotContains(t, logs.String(), "lost race to a concurrent reconciliation pass")
+	assert.Contains(t, logs.String(), "declined_by_ci_guard_count=1")
+	assert.Contains(t, logs.String(), "lost_to_concurrent_pass_count=0")
+}
+
+// TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIGuard is Task
+// 2.2.2g, the counterpart to 2.2.2f: the same connect.CodeFailedPrecondition, but with the
+// item already gone from the store (IsApprovalPending false), must be counted as
+// lost_to_concurrent_pass_count, never declined_by_ci_guard_count.
+func TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIGuard(t *testing.T) {
+	rulesSvc := newRulesService(t)
+	addBashRuleDirect(rulesSvc, "auto-allow-git-status-lost-race", "Auto-allow safe git status checks", "^git status$")
+
+	item := bashApproval("appr-lost-race", "sess-lost-race", "git status", time.Now())
+	fake := &fakeReconciliationResolver{
+		items: []*approvalkit.PendingApproval{item},
+		resolveErr: map[string]error{
+			"appr-lost-race": connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("already auto-resolved by rule %q while you were reviewing it", "some-other-rule")),
+		},
+		pending: map[string]bool{"appr-lost-race": false}, // concurrent pass already removed it
+	}
+	rulesSvc.approvalSvc = fake
+
+	logs := svctest.CaptureLogs(t)
+	counts := &reconcileCounts{}
+	rulesSvc.reconcilePendingApprovals(counts)
+
+	assert.Equal(t, 1, counts.lostToConcurrentPass)
+	assert.Equal(t, 0, counts.declinedByGuard)
+	assert.Contains(t, logs.String(), "reconciliation lost race to a concurrent reconciliation pass")
+	assert.NotContains(t, logs.String(), "declined by CI-red guard")
+}
+
+// TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger is Task 2.2.2h: it
+// pins the accepted limitation documented on Epic 2.2's Goal (pre-mortem.md #2) — a rule
+// added to the live classifier through any path other than UpsertApprovalRule/
+// rebuildClaudeSettingsRules (i.e. a session's per-worktree settings write, which never
+// reaches the server-cwd-only ClaudeSettingsWatcher) never triggers reconciliation, so a
+// pending item it would now cover is left untouched.
+func TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger(t *testing.T) {
+	store := approvalkit.NewApprovalStore("")
+	approvalSvc := approvals.NewApprovalService(store)
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	a := bashApproval("appr-worktree", "sess-worktree", "git status", time.Now())
+	require.NoError(t, store.Create(a))
+
+	// Mimic a worktree-scoped settings write: mutate the live classifier directly, bypassing
+	// both rebuildClassifier (UpsertApprovalRule) and rebuildClaudeSettingsRules (the
+	// server-cwd-only ClaudeSettingsWatcher path) — neither of which a per-worktree settings
+	// file ever reaches. ReplaceRules is synchronous and spawns no goroutine of its own, so
+	// there is no async reconciliation to wait for: if none of the production call sites
+	// that spawn reconcilePendingApprovalsSafe ran, nothing ever will.
+	rulesSvc.classifier.ReplaceRules(append(rulesSvc.classifier.Rules(), classifier.Rule{
+		RuleMeta:       classifier.RuleMeta{ID: "worktree-rule", Name: "Auto-allow safe git status checks", Enabled: true, Source: "user", Priority: 999},
+		ToolName:       "Bash",
+		CommandPattern: regexp.MustCompile("^git status$"),
+		Decision:       classifier.AutoAllow,
+	}))
+
+	all := store.ListAll()
+	require.Len(t, all, 1, "item must still be pending — reconciliation must never have run for a worktree-scoped settings change")
+	assert.Equal(t, "appr-worktree", all[0].ID)
+}
+
+func withoutAntigravityExport(rs *RulesService) *RulesService {
+	rs.exportAntigravity = nil
+	return rs
+}

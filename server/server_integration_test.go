@@ -720,7 +720,7 @@ func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID strin
 }
 
 // waitForPermissionRequestHookCommand polls settingsPath until CreateSession's asynchronous
-// InjectHookConfig call (server/services/approval_handler.go) has written a PermissionRequest
+// InjectHookConfig call (server/services/approvals/approval_handler.go) has written a PermissionRequest
 // command-type hook entry, then returns its command string. Fails the test on timeout.
 //
 // Callers pass 60s, not the ~instant time InjectHookConfig itself takes: the write only

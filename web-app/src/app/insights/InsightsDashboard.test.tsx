@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, waitForElementToBeRemoved } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { InsightsDashboard } from "./InsightsDashboard";
 import {
@@ -54,22 +54,33 @@ function makeSummary() {
   });
 }
 
+function mockSummary(summary: ReturnType<typeof makeSummary>) {
+  (useInsightsSummary as jest.Mock).mockReturnValue({
+    summary,
+    loading: false,
+    isLiveUpdating: false,
+    error: null,
+    refetch: jest.fn(),
+  });
+}
+
 describe("InsightsDashboard bar-click cross-filter (Story 5.2.2)", () => {
-  // The cold import() of StageCostChart (recharts) transforms synchronously for
-  // seconds, so findBy*'s 1000ms deadline and its poll race. Paying it here
-  // keeps it out of every test's awaited path.
+  // The charts are React.lazy, so the first render require()s all four modules
+  // mid-test, which on a cold CI runner outlasts findBy*'s 1000ms. React caches a
+  // resolved lazy(), so resolving them once here keeps that off every test's clock.
   beforeAll(async () => {
-    await import("./StageCostChart");
+    mockSummary(makeSummary());
+    const { container, unmount } = render(<InsightsDashboard />);
+    // Throws if no skeleton is present, so this cannot silently become a no-op.
+    // Shorter than the hook's timeout so a hang reports which wait failed.
+    await waitForElementToBeRemoved(() => Array.from(container.querySelectorAll(".skeleton")), { timeout: 50000 });
+    // A rejected chart would also remove every skeleton, by unmounting the tree.
+    expect(screen.getByTestId("stage-cost-legend-work")).toBeInTheDocument();
+    unmount();
   }, 60000);
 
   beforeEach(() => {
-    (useInsightsSummary as jest.Mock).mockReturnValue({
-      summary: makeSummary(),
-      loading: false,
-      isLiveUpdating: false,
-      error: null,
-      refetch: jest.fn(),
-    });
+    mockSummary(makeSummary());
   });
 
   it("InsightsDashboard_should_FilterSessionsTableToWorkRole_When_WorkBarClicked", async () => {

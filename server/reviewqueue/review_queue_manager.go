@@ -31,13 +31,13 @@ type OneShotPRCreator interface {
 	RunOneShotForSession(ctx context.Context, sessionID, prompt string, timeoutSeconds int32) (string, error)
 }
 
-// CallbackDispatchWiring is the subset of *services.CallbackDispatcher the
+// CallbackDispatchWiring is the subset of *webhooks.CallbackDispatcher the
 // queue manager fires; a nil *CallbackDispatcher is a safe no-op receiver.
 type CallbackDispatchWiring interface {
 	Dispatch(eventType string, payload any)
 }
 
-// SlackNotifierWiring is the narrow subset of *services.SlackNotifier that
+// SlackNotifierWiring is the narrow subset of *notify.SlackNotifier that
 // ReactiveQueueManager needs. Defined here — the consumer — per this repo's
 // anti-interface-pollution convention (mirrors OneShotPRCreator above).
 type SlackNotifierWiring interface {
@@ -519,7 +519,7 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *queue.ReviewItem) {
 	// AC4-shaped on_queue_item_created callback (webhook-triggers Phase 5, FR7):
 	// Dispatch is itself non-blocking (bounded semaphore + go), so this adds no
 	// latency here. rqm.callbackDispatcher is nil-checked rather than relying on
-	// a nil *services.CallbackDispatcher receiver, matching this file's existing
+	// a nil *webhooks.CallbackDispatcher receiver, matching this file's existing
 	// nil-safety convention (e.g. oneShotRunner in maybeAutoCreatePR).
 	if rqm.callbackDispatcher != nil && rqm.allowQueueItem(deliverygate.ChannelWebhook, resolvedID, metadata, notifType) {
 		rqm.callbackDispatcher.Dispatch("queue_item_created", map[string]any{

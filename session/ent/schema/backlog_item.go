@@ -161,6 +161,16 @@ func (BacklogItem) Fields() []ent.Field {
 		field.Int("triggered_by_chain_depth").
 			Default(0).
 			Comment("webhook-triggers pipeline chaining (Epic 6.3): how many chain hops produced this item, propagated session->session and hard-capped at maxChainDepth as a runaway-loop backstop independent of the WIP-limit gate."),
+		field.Bool("is_integration_child").
+			Default(false).
+			Comment("epic-integration-child: true for the auto-created end-to-end check child that depends on every sibling of an epic."),
+		field.UUID("integration_child_id", uuid.UUID{}).
+			Optional().
+			Nillable().
+			Comment("epic-integration-child: on an epic item, the ID of its integration child. Until that child has passed (done, or archived out of done) the epic's done transition is blocked (ErrIntegrationCheckPending). Doubles as the idempotency marker for integration-child creation."),
+		field.Int("integration_fix_count").
+			Default(0).
+			Comment("epic-integration-child: how many fix children the epic's integration failures have spawned; capped by rework_cap_override."),
 		field.String("public_id").
 			Optional().
 			Unique().

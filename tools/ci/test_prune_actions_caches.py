@@ -34,8 +34,12 @@ class PruneTest(unittest.TestCase):
         self.assertEqual(f("bench-tier1-42587397140"), "bench-tier1")
         self.assertEqual(f("tmux-3.8-Linux-v1"), "tmux-3.8-Linux-v1")
 
+    def test_keeps_only_the_newest_go_entry_per_family(self):
+        rows = [cache(f"go-test-ubuntu24-x64-2026110{d}", age_days=10 - d) for d in range(1, 4)]
+        self.assertEqual(sorted(run(rows)), [rows[0].id, rows[1].id])
+
     def test_keeps_newest_two_per_family_and_never_the_newest(self):
-        rows = [cache(f"go-test-ubuntu24-x64-2026110{d}", age_days=10 - d) for d in range(1, 6)]
+        rows = [cache(f"web-node-modules-Linux-2026110{d}", age_days=10 - d) for d in range(1, 6)]
         doomed = run(rows)
         self.assertEqual(sorted(doomed), [rows[0].id, rows[1].id, rows[2].id])
         self.assertNotIn(rows[4].id, doomed)

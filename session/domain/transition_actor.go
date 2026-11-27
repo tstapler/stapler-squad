@@ -15,3 +15,18 @@ func TransitionActorFrom(ctx context.Context) string {
 	a, _ := ctx.Value(transitionActorKey{}).(string)
 	return a
 }
+
+type transitionCallerKey struct{}
+
+// WithTransitionCaller names the registered operator caller of an RPC that
+// another operator-facing component forwards to TransitionBacklogItemStatus.
+// The resolver honors only CallerOperatorNotificationAction, for the user actor.
+func WithTransitionCaller(ctx context.Context, caller TransitionCaller) context.Context {
+	return context.WithValue(ctx, transitionCallerKey{}, caller)
+}
+
+// TransitionCallerFrom returns the caller set by WithTransitionCaller, or "" when none was set.
+func TransitionCallerFrom(ctx context.Context) TransitionCaller {
+	c, _ := ctx.Value(transitionCallerKey{}).(TransitionCaller)
+	return c
+}

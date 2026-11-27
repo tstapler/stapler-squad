@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/envtest"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -28,12 +28,12 @@ func (p *identityProbe) ServeHTTP(_ http.ResponseWriter, r *http.Request) {
 	p.verified, p.verifiedOK = verifiedCallerSessionUUID(r.Context())
 }
 
-func newTestProofs(t *testing.T) *services.McpProofs {
+func newTestProofs(t *testing.T) *approvals.McpProofs {
 	t.Helper()
 	dir := t.TempDir()
-	keys, err := services.NewHookProofs(dir)
+	keys, err := approvals.NewHookProofs(dir)
 	require.NoError(t, err)
-	return services.NewMcpProofs(keys, dir)
+	return approvals.NewMcpProofs(keys, dir)
 }
 
 func probeRequest(t *testing.T, mw http.Handler, headers map[string]string) {

@@ -31,7 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	serverevents "github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prpoller"
@@ -42,7 +42,7 @@ import (
 // TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
 // is the regression test for commit 13ad9c260, which fixed a split-brain bug
 // where SessionService's SlackConfigService constructed and used its own
-// private *services.SlackNotifier instead of the shared instance wired into
+// private *notify.SlackNotifier instead of the shared instance wired into
 // ReactiveQueueManager/ApprovalHandler (server.go's wireDepsIntoServer,
 // server/server.go:559/563: approvalHandler.SetSlackNotifier(deps.SlackNotifier)
 // / deps.SessionService.SetSlackNotifier(deps.SlackNotifier)). Left
@@ -54,7 +54,7 @@ import (
 // BuildDependencies, which never constructs ApprovalHandler -- that only
 // happens inside wireDepsIntoServer). ApprovalHandler.SlackNotifierForTest and
 // SessionService.SlackNotifierForTest are minimal test-only accessors added
-// for exactly this assertion (server/services/approval_handler.go,
+// for exactly this assertion (server/services/approvals/approval_handler.go,
 // server/services/session_service.go) -- ReactiveQueueManager needs no such
 // accessor since it lives in this same package and its unexported
 // slackNotifier field is reachable directly from a same-package test.
@@ -392,7 +392,7 @@ func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_Wh
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
-	notifier := &services.EventBusNotifier{Bus: events.NewEventBus(100)}
+	notifier := &notify.EventBusNotifier{Bus: events.NewEventBus(100)}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -414,7 +414,7 @@ func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_Wh
 // backlogSvc.SetSyncFeatureEnabledCheck (Story 2.3.2) indirectly via
 // TriggerSync — not a reimplementation of the &&. Per plan.md Task 2.3.2b,
 // ShouldThrottleForeground's own sliding-window behavior is covered directly
-// in server/services/quota_gate_test.go; this test only confirms the
+// in server/services/quota/quota_gate_test.go; this test only confirms the
 // composed checker, when unthrottled, still behaves identically to today's
 // bare backlogCtrl.IsEnabled() (i.e. the throttle never fires when nothing
 // foreground is observed).
@@ -749,4 +749,70 @@ func TestWireDepsIntoServer_should_StartSessionPRLinkGC_When_StoragePresent(t *t
 
 	require.NotNil(t, srv.prLinkGC, "wireDepsIntoServer must construct the orphan session-PR link collector")
 	assert.True(t, srv.prLinkGC.Started(), "and start it")
+}
+
+// TestBuildRuntimeDeps_should_WireQuotaGatePorts_When_RateLimitPausesBacklog pins the
+// composition-root port: a quota pause publishes at the hub's urgent priority.
+func TestBuildRuntimeDeps_should_WireQuotaGatePorts_When_RateLimitPausesBacklog(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	cfg := config.LoadConfig()
+	cfg.Quota.Enabled = true
+	require.NoError(t, cfg.SetFeatureFlag("backlog", true))
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
+	require.True(t, deps.BacklogEnabledCheck(), "precondition: backlog enabled at boot")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := deps.EventBus.Subscribe(ctx)
+	deps.QuotaGate.RecordRateLimitEvent(time.Now())
+	deps.QuotaGate.Reconcile(ctx)
+
+	assert.False(t, deps.BacklogEnabledCheck(), "the gate disables the real BacklogController")
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.NotificationTitle != "Backlog Automation Paused" {
+				continue
+			}
+			assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), ev.NotificationPriority)
+			return
+		case <-deadline:
+			t.Fatal("no pause notification published")
+		}
+	}
+}
+
+// TestBuildRuntimeDeps_should_WireQuotaGateIntoServices_When_Booted pins the three
+// composition-root hookups whose loss is silent: SetQuotaGate (the hard rate-limit
+// signal), the boot-time Reconcile and the "backlog" flag's status detail.
+func TestBuildRuntimeDeps_should_WireQuotaGateIntoServices_When_Booted(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	cfg := config.LoadConfig()
+	cfg.Quota.Enabled = true // no token budget: reactive-only, which the gate reports and logs
+	require.NoError(t, config.SaveConfig(cfg))
+	logs := &logpkg.SyncBuffer{}
+	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
+
+	assert.Same(t, deps.QuotaGate, deps.SessionService.QuotaGateForTest(), "SessionService feeds rate limits to the gate")
+	assert.Contains(t, logs.String(), "QuotaGate: observed 5h token usage", "boot-time Reconcile ran")
+	resp, err := deps.SessionService.GetFeatureFlags(context.Background(),
+		connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	details := map[string]string{}
+	for _, f := range resp.Msg.GetFlags() {
+		details[f.GetName()] = f.GetStatusDetail()
+	}
+	assert.Equal(t, deps.QuotaGate.StatusDetail(), details["backlog"])
+	assert.Contains(t, details["backlog"], "Reactive-only mode")
 }

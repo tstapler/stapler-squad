@@ -14,7 +14,8 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { AnalyticsContext } from "@/lib/contexts/AnalyticsContext";
-import { SessionActionsOverflow, fitMenuTop, menuActionLabel } from "../SessionActionsOverflow";
+import { SessionActionsOverflow, menuActionLabel } from "../SessionActionsOverflow";
+import { fitMenuTop } from "@/lib/hooks/useAnchoredMenuPosition";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionStatus, InstanceType } from "@/gen/session/v1/types_pb";
 

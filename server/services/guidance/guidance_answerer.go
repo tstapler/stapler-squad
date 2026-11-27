@@ -1,0 +1,150 @@
+package guidance
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/google/uuid"
+
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
+)
+
+// Answerer is who answers a guidance request. The zero value is not valid; use
+// HumanAnswerer or SessionAnswerer.
+type Answerer struct {
+	kind        domain.AnswererKind
+	sessionUUID string
+}
+
+// HumanAnswerer is the operator, who may answer any request (including a
+// stalled peer request, on the peer's behalf).
+func HumanAnswerer() Answerer { return Answerer{kind: domain.AnswererKindHuman} }
+
+// SessionAnswerer is a session whose identity was verified by the caller.
+func SessionAnswerer(sessionUUID string) Answerer {
+	return Answerer{kind: domain.AnswererKindSession, sessionUUID: sessionUUID}
+}
+
+// authorize says whether who may answer data. A session may answer only a peer
+// request that names it; it can never answer one addressed to the human or to
+// another session (ADR-007 rule 3).
+func (who Answerer) authorize(data *domain.GuidanceRequestData) error {
+	switch who.kind {
+	case domain.AnswererKindHuman:
+		return nil
+	case domain.AnswererKindSession:
+		if who.sessionUUID != "" && data.Source == domain.QuestionSourcePeer &&
+			data.AnswererKind == domain.AnswererKindSession && data.AnswererSessionUUID == who.sessionUUID {
+			return nil
+		}
+	}
+	return domain.ErrAnswererForbidden
+}
+
+// AnswerAsSession is AnswerAs for a session whose identity the caller verified;
+// it is the surface server/mcp's HelpAnswerer port names, so that package need
+// not import Answerer.
+func (s *GuidanceRequestService) AnswerAsSession(ctx context.Context, id, answer, sessionUUID string) (*domain.GuidanceRequestData, bool, error) {
+	return s.AnswerAs(ctx, id, answer, SessionAnswerer(sessionUUID))
+}
+
+// AnswerAs records answer on request id if who is permitted to give it. applied
+// is false when the request was already answered or cancelled; the returned
+// data then reflects the current persisted state. On an applied answer it
+// notifies, resumes triage and calls the answer listener, as for a human answer.
+func (s *GuidanceRequestService) AnswerAs(ctx context.Context, id, answer string, who Answerer) (data *domain.GuidanceRequestData, applied bool, err error) {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return nil, false, fmt.Errorf("invalid guidance request id: %w", err)
+	}
+	data, err = s.storage.GetGuidanceRequest(ctx, parsed)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := who.authorize(data); err != nil {
+		return data, false, err
+	}
+	applied, err = s.recordAnswer(ctx, parsed, answer, who, data)
+	if err != nil {
+		return nil, false, err
+	}
+	data, err = s.storage.GetGuidanceRequest(ctx, parsed)
+	if err != nil {
+		return nil, false, err
+	}
+	if applied {
+		s.saveForLaterIfSessionEnded(ctx, data)
+		s.applyOwnerActionWaiver(ctx, data)
+		s.notifyAnswered(data)
+		s.resumeTriageIfHalted(data)
+		s.notifyAnswerListener(ctx, data.ID)
+	}
+	return data, applied, nil
+}
+
+// saveForLaterIfSessionEnded marks an answer to an agent-created session question
+// as saved for later when its session is stopped (resume route) or archived (read_only
+// route): the agent reads it with get_guidance_request once the operator resumes the
+// session. Nothing is delivered or revived here (ADR-005 rung 3). Hook and peer rows
+// die with their session and are never saved.
+func (s *GuidanceRequestService) saveForLaterIfSessionEnded(ctx context.Context, data *domain.GuidanceRequestData) {
+	p := s.probes.Load()
+	if p == nil || data.Source != domain.QuestionSourceAgentMCP || data.Scope != domain.RequestScopeSession {
+		return
+	}
+	sessionUUID := askerSessionOf(data)
+	route := domain.DeliveryRouteResume
+	switch {
+	case p.archived(sessionUUID):
+		route = domain.DeliveryRouteReadOnly
+	case !p.ended(sessionUUID):
+		return
+	}
+	id, err := uuid.Parse(data.ID)
+	if err != nil {
+		return
+	}
+	if _, err := s.storage.SetGuidanceDelivery(ctx, id, route, domain.DeliveryStateSavedForLater, 0); err != nil {
+		log.Warn("[GuidanceRequest] answer stored but not marked saved for later", "id", data.ID, "err", err)
+	}
+}
+
+// recordAnswer persists the answer. The operator answering a peer request
+// stands in for the peer, and the row records that so the asker is told.
+func (s *GuidanceRequestService) recordAnswer(ctx context.Context, id uuid.UUID, answer string, who Answerer, data *domain.GuidanceRequestData) (bool, error) {
+	if who.kind == domain.AnswererKindHuman && data.Source == domain.QuestionSourcePeer && data.AnswererSessionUUID != "" {
+		return s.storage.AnswerGuidanceRequestOnBehalf(ctx, id, answer)
+	}
+	return s.storage.AnswerGuidanceRequest(ctx, id, answer)
+}
+
+// applyOwnerActionWaiver waives the criterion a request_owner_action asked about when the
+// owner picked OwnerActionWaiveResponse. It runs before the answer wake fires so the woken
+// worker already sees the criterion waived. Only a human can answer such a request
+// (Answerer.authorize), and the waiver is audited with the request id as its reason.
+// Best-effort: a refused waiver (criterion already done, item archived) is logged and noted
+// on the item rather than failing the already-durable answer.
+func (s *GuidanceRequestService) applyOwnerActionWaiver(ctx context.Context, data *domain.GuidanceRequestData) {
+	idx, ok := domain.ParseOwnerActionWaiver(data.QuestionText)
+	if !ok || data.Answer != domain.OwnerActionWaiveResponse || data.ItemID == nil {
+		return
+	}
+	itemID := data.ItemID.String()
+	actor := domain.AcActor{Class: domain.AcActorSystem, Source: "owner_action_answer"}
+	reason := fmt.Sprintf("owner chose %q on owner-action request %s: %s", data.Answer, data.ID, data.QuestionText)
+	err := s.storage.WaiveAcCriterion(domain.WithAcActor(ctx, actor), itemID, idx, reason)
+	note := fmt.Sprintf("Owner waived acceptance criterion %d via owner-action request %s", idx, data.ID)
+	if err != nil {
+		log.WarningLog().Printf("[GuidanceRequestService] applyOwnerActionWaiver item=%s criterion=%d: %v", itemID, idx, err)
+		note = fmt.Sprintf("Owner chose to waive criterion %d (request %s) but the waiver was not applied: %v", idx, data.ID, err)
+	}
+	if noteErr := s.storage.AppendActivityNote(ctx, itemID, "", "Owner Action", note); noteErr != nil {
+		log.WarningLog().Printf("[GuidanceRequestService] applyOwnerActionWaiver: AppendActivityNote item=%s: %v", itemID, noteErr)
+	}
+	if err == nil {
+		if fn := s.waiverResumer.Load(); fn != nil && *fn != nil {
+			(*fn)(context.WithoutCancel(ctx), itemID)
+		}
+	}
+}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,8 +14,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"connectrpc.com/connect"
+	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
+	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
+	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/notifyactions"
+	"github.com/tstapler/stapler-squad/server/services/prs"
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
+	"github.com/tstapler/stapler-squad/server/services/sessiondefaults"
+	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
+	"github.com/tstapler/stapler-squad/server/services/webhooks"
+	"github.com/tstapler/stapler-squad/server/services/workspacedb"
+
 	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
@@ -35,7 +46,12 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/qareply"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/server/services/quota"
+	"github.com/tstapler/stapler-squad/server/services/rules"
+	"github.com/tstapler/stapler-squad/server/services/taggingrules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -118,27 +134,18 @@ type SessionService struct {
 	guards *access.UnaryGuardsFlag
 	// guardBypass counts and rate-limits the guards-off bypass writes.
 	guardBypass guardBypassState
-	// reply is the Reply machinery (pending questions, idempotency, limiters,
-	// flag), built on first use; replyNow injects the clock in tests.
+	// reply is the Reply path and answer router, built on first use (replyService).
 	replyOnce sync.Once
-	reply     *replyState
-	replyNow  func() time.Time
-	// replyPeerAddr and replyControllerActive are test seams; nil means
-	// req.Peer().Addr and "the instance has a started status controller".
-	replyPeerAddr         func(connect.AnyRequest) string
-	replyControllerActive func(*instance.Instance) bool
-	// replyAfter injects the timer behind the send timeout and the closed-check
-	// polls (nil is time.After).
-	replyAfter func(time.Duration) <-chan time.Time
+	reply     *qareply.Service
 	// backlogLinks decides whether a hidden session is a live backlog review
 	// session (the O7 steer exemption).
 	backlogLinks BacklogLinkResolver
 
 	// actionDispatcher serves InvokeNotificationAction; nil reports FLAG_OFF.
-	actionDispatcher *NotificationActionDispatcher
+	actionDispatcher *notifyactions.NotificationActionDispatcher
 	// guidanceAcks tracks sent keystroke answers; ackCancel/ackDone stop its loop.
-	guidanceAcks *GuidanceAckDetector
-	hookReply    atomic.Pointer[hookReplyResolver]
+	guidanceAcks *guidance.GuidanceAckDetector
+	hookReply    atomic.Pointer[qareply.HookReplyResolver]
 	// dialogCanary and guidanceMirror are installed after construction (Story 3.3).
 	dialogCanary   atomic.Pointer[questionkit.DialogMatchCanary]
 	guidanceMirror atomic.Pointer[questionkit.GuidanceHookMirror]
@@ -198,16 +205,16 @@ type SessionService struct {
 	searchSvc       *searchrpc.SearchService
 	githubSvc       *GitHubService
 	workspaceSvc    *WorkspaceService
-	configSvc       *ConfigService
-	notificationSvc *NotificationService
-	approvalSvc     *ApprovalService
+	configSvc       *claudeconfig.ConfigService
+	notificationSvc *notify.NotificationService
+	approvalSvc     *approvals.ApprovalService
 	utilitySvc      *UtilityService
-	rulesSvc        *RulesService
+	rulesSvc        *rules.RulesService
 	// taggingRulesSvc is exposed over ListTaggingRules/UpsertTaggingRule/DeleteTaggingRule
 	// (Phase 5 of the session-classifier-pipeline project). nil-safe: those RPC handlers
 	// guard with `if s.taggingRulesSvc == nil` and return CodeUnimplemented, mirroring the
 	// pattern documented for rulesSvc's own nil-safe accessors below.
-	taggingRulesSvc *TaggingRulesService
+	taggingRulesSvc *taggingrules.TaggingRulesService
 	// taggingEngine is the same live engine taggingRulesSvc mutates on CRUD — injected into
 	// every Instance (wireCallbacks) so session/instance_actor_setters.go's reclassifyTagsLocked
 	// fixpoint hook has a real rule set to evaluate (session-classifier-pipeline Epic 3.3/Task
@@ -231,7 +238,7 @@ type SessionService struct {
 	deleteSessionCleanupTimeout time.Duration
 
 	// databaseSvc handles workspace/database switcher RPCs.
-	databaseSvc *DatabaseService
+	databaseSvc *workspacedb.DatabaseService
 
 	// tmuxStreamerManager caches ExternalTmuxStreamer instances per tmux session
 	// name (main sessions and shell siblings alike). Wired in so StopShell can
@@ -254,10 +261,10 @@ type SessionService struct {
 	slashCommandSvc *SlashCommandService
 
 	// defaultsSvc handles session defaults configuration RPCs.
-	defaultsSvc *DefaultsService
+	defaultsSvc *sessiondefaults.DefaultsService
 
 	// slackConfigSvc handles GetSlackConfig/UpdateSlackConfig/TestSlackWebhook RPCs.
-	slackConfigSvc *SlackConfigService
+	slackConfigSvc *notify.SlackConfigService
 
 	// julesConfigSvc handles GetJulesConfig/UpdateJulesConfig/
 	// TestJulesConnection/ConfirmEgressConsent RPCs (google-jules-integration
@@ -278,14 +285,14 @@ type SessionService struct {
 
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
-	callbackConfigSvc *CallbackConfigService
+	callbackConfigSvc *webhooks.CallbackConfigService
 
 	// streamHubRolloutSvc handles the stream-hub staged-rollout RPCs
 	// (terminal-multi-connection-streaming Story 3.3).
-	streamHubRolloutSvc *StreamHubRolloutService
+	streamHubRolloutSvc *streamhubrollout.StreamHubRolloutService
 
 	// launcherPresetsSvc handles the GetLauncherPresets RPC.
-	launcherPresetsSvc *LauncherPresetsService
+	launcherPresetsSvc *sessiondefaults.LauncherPresetsService
 
 	// projectSvc handles Project CRUD RPCs.
 	projectSvc *ProjectService
@@ -297,7 +304,7 @@ type SessionService struct {
 	artifactSvc *ArtifactService
 
 	// prCreationSvc handles DraftPullRequest/CreatePullRequest RPCs.
-	prCreationSvc *PRCreationService
+	prCreationSvc *prs.PRCreationService
 
 	// featureFlagSvc handles GetFeatureFlags/UpdateFeatureFlag RPCs.
 	featureFlagSvc *flagsvc.FeatureFlagService
@@ -342,7 +349,7 @@ type SessionService struct {
 	// headroom gate that pauses/resumes backlog automation. Late-wired via
 	// SetQuotaGate since QuotaGate needs backlogCtrl, which doesn't exist yet
 	// inside NewSessionService.
-	quotaGate *QuotaGate
+	quotaGate *quota.QuotaGate
 
 	// escapeEventsClient is the ent client for db/escape_events.db (escape analytics RPCs).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
@@ -362,7 +369,7 @@ type SessionService struct {
 	headlessClient headless.PoolClient
 
 	// autonomousSvc manages the lifecycle of AutonomousDriver instances.
-	AutonomousSvc *AutonomousOrchestrationService
+	AutonomousSvc *autonomysvc.AutonomousOrchestrationService
 
 	// workflowSvc handles workflow CRUD and RunWorkflow RPC delegation.
 	// Injected after construction via SetWorkflowService to avoid bootstrapping cycle.
@@ -713,10 +720,19 @@ func publishClaudeSettingsNotification(eventBus *events.EventBus, content claude
 	eventBus.Publish(events.NewNotificationEvent(
 		"", "System", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		DerivePriority(false, false), // urgent, important — informational config-reload notice
+		notify.DerivePriority(false, false), // urgent, important — informational config-reload notice
 		content.title, content.message,
 		map[string]string{"type": "claude_settings_reload", "origin": content.origin},
 	))
+}
+
+// startSharedRulesReload hot-reloads the user's shared_rules.yaml, except in test mode so
+// tests never read the developer's real home directory. Call it after SetApprovalService: its
+// first load reconciles pending approvals.
+func startSharedRulesReload(testMode bool, userHomeDir func() (string, error), start func(context.Context, string, time.Duration)) {
+	if home, err := userHomeDir(); err == nil && !testMode {
+		start(context.Background(), classifier.ConfigFileRulesPath(home), rules.ConfigFileRulesPollInterval)
+	}
 }
 
 // loadClaudeSettingsRulesAtStartup parses ~/.claude/settings.json (and project-level
@@ -822,19 +838,19 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	reviewQueueSvc := NewReviewQueueService(reviewQueue, concStorage, eventBus)
 	reviewQueueSvc.SetApprovalStore(approvalStore)
 
-	notificationSvc := NewNotificationService(NewNotificationRateLimiter(10, 20), eventBus)
-	approvalSvc := NewApprovalService(approvalStore)
+	notificationSvc := notify.NewNotificationService(notify.NewNotificationRateLimiter(10, 20), eventBus)
+	approvalSvc := approvals.NewApprovalService(approvalStore)
 	approvalSvc.SetEventBus(eventBus)
 	approvalSvc.SetReviewQueueRemover(reviewQueue)
 	utilitySvc := NewUtilityService(approvalStore)
 
 	// Build rules store, analytics store, and classifier for approval rules service.
-	rulesStore, rulesErr := NewRulesStore(concStorage)
+	rulesStore, rulesErr := rules.NewRulesStore(concStorage)
 	if rulesErr != nil {
 		log.Warn("failed to load rules store, using empty store", "err", rulesErr)
-		rulesStore = &RulesStore{storage: concStorage}
+		rulesStore = rules.NewEmptyRulesStore(concStorage)
 	}
-	analyticsStore := NewAnalyticsStore(concStorage)
+	analyticsStore := rules.NewAnalyticsStore(concStorage)
 	analyticsStore.Start(context.Background())
 	classifierObj := classifier.NewRuleBasedClassifier()
 	// Merge user rules into the classifier. Safe to call AddRules directly (bypassing
@@ -850,16 +866,16 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Instance construction by a later phase of this project (session-classifier-pipeline
 	// Phase 3) — constructing it here just gives TaggingRulesService's CRUD/rebuild
 	// plumbing a real engine to target ahead of that wiring.
-	taggingRulesStore, taggingRulesErr := NewTaggingRulesStore(concStorage)
+	taggingRulesStore, taggingRulesErr := taggingrules.NewTaggingRulesStore(concStorage)
 	if taggingRulesErr != nil {
 		log.Warn("failed to load tagging rules store, using empty store", "err", taggingRulesErr)
-		taggingRulesStore = &TaggingRulesStore{storage: concStorage}
+		taggingRulesStore = taggingrules.NewEmptyTaggingRulesStore(concStorage)
 	}
 	taggingEngine := classifier.NewTaggingEngine()
 	if userTaggingRules := taggingRulesStore.ToRules(); len(userTaggingRules) > 0 {
 		taggingEngine.AddRules(userTaggingRules)
 	}
-	taggingRulesSvc := NewTaggingRulesService(taggingRulesStore, taggingEngine, analyticsStore)
+	taggingRulesSvc := taggingrules.NewTaggingRulesService(taggingRulesStore, taggingEngine, analyticsStore)
 
 	// Determine the server process's own working directory for claude-settings
 	// project-level scope. Empty cwd makes LoadClaudeSettingsRulesDetailed skip
@@ -887,32 +903,32 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	{
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
 		if c, backend := anthropicwire.NewBestAvailableAIClient(apiKey, anthropicwire.KnownCLIAgents); c != nil {
-			promptBuilder = &DefaultRulePromptBuilder{}
+			promptBuilder = &rules.DefaultRulePromptBuilder{}
 			aiClientImpl = c
 			log.Info("[SessionService] AI rule generation enabled", "backend", backend)
 		} else {
 			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, anthropicwire.WrapRulesAIClient(aiClientImpl))
+	rulesSvc := rules.NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, anthropicwire.WrapRulesAIClient(aiClientImpl))
 
 	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
 	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
 	// hot-swaps the classifier's claude-settings rules and emits a visible reload event.
-	claudeSettingsWatcher := claudesettings.NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
-		rulesSvc.rebuildClaudeSettingsRules(rules)
-		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(rules), "origin", origin)
+	claudeSettingsWatcher := claudesettings.NewClaudeSettingsWatcher(cwd, func(reloaded []classifier.Rule, origin string, notify bool) {
+		rulesSvc.RebuildClaudeSettingsRules(reloaded)
+		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(reloaded), "origin", origin)
 		// notify is false for Start()'s initial priming reload — the operator already saw a
 		// startup activation notification if any rules exist, and nothing meaningful
 		// happened for this callback to report otherwise. A zero-rule result is also
 		// never notification-worthy, on any call: "0 rules reloaded" is a no-op from the
 		// operator's perspective whether it's the priming reload or a later real one.
-		if !notify || len(rules) == 0 {
+		if !notify || len(reloaded) == 0 {
 			return
 		}
 		publishClaudeSettingsNotification(eventBus, claudeSettingsNotificationContent{
 			title:   "Claude Settings Reloaded",
-			message: fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin),
+			message: fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(reloaded), origin),
 			origin:  origin,
 		})
 	})
@@ -920,11 +936,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	rulesSvc.SetApprovalService(approvalSvc)
 	// Started after SetApprovalService: the first load reconciles pending approvals, which reads
 	// rs.approvalSvc unsynchronised.
-	// Hot-reload shared_rules.yaml (gated on IsTestMode like the claude-settings load above, so
-	// tests never read the developer's real home directory).
-	if home, homeErr := os.UserHomeDir(); homeErr == nil && !config.IsTestMode() {
-		rulesSvc.StartConfigFileRulesReload(context.Background(), classifier.ConfigFileRulesPath(home), configFileRulesPollInterval)
-	}
+	startSharedRulesReload(config.IsTestMode(), os.UserHomeDir, rulesSvc.StartConfigFileRulesReload)
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
@@ -991,7 +1003,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		searchSvc:                   searchrpc.NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
 		githubSvc:                   NewGitHubService(concStorage),
 		workspaceSvc:                workspaceSvc,
-		configSvc:                   NewConfigService(),
+		configSvc:                   claudeconfig.NewConfigService(),
 		notificationSvc:             notificationSvc,
 		approvalSvc:                 approvalSvc,
 		utilitySvc:                  utilitySvc,
@@ -999,16 +1011,16 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		taggingRulesSvc:             taggingRulesSvc,
 		taggingEngine:               taggingEngine,
 		approvalStore:               approvalStore,
-		databaseSvc:                 NewDatabaseService(),
+		databaseSvc:                 workspacedb.NewDatabaseService(),
 		fileSvc:                     NewFileService(workspaceSvc),
 		pathCompletionSvc:           NewPathCompletionService(),
 		slashCommandSvc:             NewSlashCommandService(),
-		defaultsSvc:                 NewDefaultsService(),
-		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
+		defaultsSvc:                 sessiondefaults.NewDefaultsService(),
+		slackConfigSvc:              notify.NewSlackConfigService(notify.NewSlackNotifier()),
 		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
-		callbackConfigSvc:           NewCallbackConfigService(),
-		streamHubRolloutSvc:         NewStreamHubRolloutService(nil),
-		launcherPresetsSvc:          NewLauncherPresetsService(),
+		callbackConfigSvc:           webhooks.NewCallbackConfigService(),
+		streamHubRolloutSvc:         streamhubrollout.NewStreamHubRolloutService(nil),
+		launcherPresetsSvc:          sessiondefaults.NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
 		artifactSvc:                 &ArtifactService{},
@@ -1063,11 +1075,11 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// backlogLifecycleListener are wired onto SessionService after construction
 	// (see the Set* wiring doc comment above NewSessionService), so they are nil
 	// here at construction time.
-	svc.prCreationSvc = NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
-	svc.streamHubRolloutSvc = NewStreamHubRolloutService(svc.findInstance)
+	svc.prCreationSvc = prs.NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
+	svc.streamHubRolloutSvc = streamhubrollout.NewStreamHubRolloutService(svc.findInstance)
 
 	// Wire the autonomous orchestration service with a storage getter closure.
-	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)
+	autonomousSvc := autonomysvc.NewAutonomousOrchestrationService(nil, eventBus)
 	autonomousSvc.SetStorageGetter(func() *session.Storage {
 		if cs, ok := storage.(*session.Storage); ok {
 			return cs
@@ -1100,7 +1112,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*instance.Instance, error)
 	// Wire up dependencies on loaded instances
 	for _, inst := range instances {
 		inst.SetReviewQueue(s.reviewQueueSvc.GetQueue())
-		inst.SetNotifier(&EventBusNotifier{Bus: s.eventBus})
+		inst.SetNotifier(&notify.EventBusNotifier{Bus: s.eventBus})
 		if s.statusManager != nil {
 			inst.SetStatusManager(s.statusManager)
 		}
@@ -1194,7 +1206,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		config.HiddenSessionGateFeatureFlag:              {}, // every gate flip takes the non-blocking path
 		featureflags.TerminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
 		featureflags.HiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
-		featureflags.HiddenSessionReplyFlagName:          replyFlagAuditPolicy,
+		featureflags.HiddenSessionReplyFlagName:          qareply.FlagAuditPolicy,
 	})
 	ff.MergeAuditPolicies(flagsvc.NotificationActionsFlagAuditPolicies())
 	ff.MergeAuditPolicies(flagsvc.SessionMultiPRFlagAuditPolicies())

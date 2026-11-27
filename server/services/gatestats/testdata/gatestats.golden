@@ -1,0 +1,40 @@
+== store
+status0={Loaded:false Quarantined:false Writable:false}
+save=<nil> status={Loaded:false Quarantined:false Writable:true}
+  file /cfg/delivery-gate-stats.json: {"version":1,"writer_pid":100,"written_at":"2026-10-09T12:00:00Z","process_start":"2026-10-09T12:00:00Z","buckets":[{"hour_start":"2026-10-09T12:00:00Z","uptime_ms":1800000,"gate_on_ms":1800000,"hidden_events_seen":0,"hidden_events_while_on":0,"routine_events_while_on":3,"counters":[{"counter":"suppressed","kind":"review","class":"routine","count":3}]}],"flag_history":null,"checksum":"63e64a74728f31298de7e156c232fd9b2c50cb6af485843165e39d5c8ee8f50e"}
+load ok=true pid=100 writtenAt=2026-10-09T12:00:00Z version=1 buckets=1 status={Loaded:true Quarantined:false Writable:true}
+save-rename-fail=no space left on device status={Loaded:true Quarantined:false Writable:false} warn=1
+save-again=no space left on device warn=1
+after-10m warn=2
+  file /cfg/delivery-gate-stats.json: {"version":1,"writer_pid":100,"written_at":"2026-10-09T12:00:00Z","process_start":"2026-10-09T12:00:00Z","buckets":[{"hour_start":"2026-10-09T12:00:00Z","uptime_ms":1800000,"gate_on_ms":1800000,"hidden_events_seen":0,"hidden_events_while_on":0,"routine_events_while_on":3,"counters":[{"counter":"suppressed","kind":"review","class":"routine","count":3}]}],"flag_history":null,"checksum":"63e64a74728f31298de7e156c232fd9b2c50cb6af485843165e39d5c8ee8f50e"}
+== quarantine
+invalid-json ok=false status={Loaded:false Quarantined:true Writable:false} corrupt-warns=1
+  name /cfg/delivery-gate-stats.json.corrupt-20261009T120000Z
+bad-version ok=false status={Loaded:false Quarantined:true Writable:false} corrupt-warns=1
+  name /cfg/delivery-gate-stats.json.corrupt-20261009T120000Z
+bad-checksum ok=false status={Loaded:false Quarantined:true Writable:false} corrupt-warns=1
+  name /cfg/delivery-gate-stats.json.corrupt-20261009T120000Z
+oversize ok=false status={Loaded:false Quarantined:true Writable:false} corrupt-warns=1
+  name /cfg/delivery-gate-stats.json.corrupt-20261009T120000Z
+valid ok=true status={Loaded:true Quarantined:false Writable:false} corrupt-warns=0
+  name /cfg/delivery-gate-stats.json
+== foreign
+alive=true foreign=true save=delivery gate stats file is being written by another process warns=1
+  after-window foreign=false save=<nil>
+  file /cfg/delivery-gate-stats.json: {"version":1,"writer_pid":200,"written_at":"2026-10-09T12:03:00Z","process_start":"2026-10-09T12:03:00Z","buckets":[{"hour_start":"2026-10-09T12:00:00Z","uptime_ms":1800000,"gate_on_ms":1800000,"hidden_events_seen":0,"hidden_events_while_on":0,"routine_events_while_on":3,"counters":[{"counter":"suppressed","kind":"review","class":"routine","count":3}]}],"flag_history":null,"checksum":"991f9e1d2813fcc68cc6262025bcba78c239b0b4e5af76ee2643dca6b8c853eb"}
+alive=false foreign=false save=<nil> warns=0
+  after-window foreign=false save=<nil>
+  file /cfg/delivery-gate-stats.json: {"version":1,"writer_pid":200,"written_at":"2026-10-09T12:03:00Z","process_start":"2026-10-09T12:03:00Z","buckets":[{"hour_start":"2026-10-09T12:00:00Z","uptime_ms":1800000,"gate_on_ms":1800000,"hidden_events_seen":0,"hidden_events_while_on":0,"routine_events_while_on":3,"counters":[{"counter":"suppressed","kind":"review","class":"routine","count":3}]}],"flag_history":null,"checksum":"991f9e1d2813fcc68cc6262025bcba78c239b0b4e5af76ee2643dca6b8c853eb"}
+== writer
+running=true
+running-after=false
+  file /cfg/delivery-gate-stats.json: {"version":1,"writer_pid":1,"written_at":"2026-10-09T12:10:00Z","process_start":"2026-10-09T12:00:00Z","buckets":[{"hour_start":"2026-10-09T12:00:00Z","uptime_ms":600000,"gate_on_ms":0,"hidden_events_seen":0,"hidden_events_while_on":0,"routine_events_while_on":0}],"flag_history":null,"checksum":"74ae9697d2bba1ec09871e96bd52d866fd769c4445562f5426e5187885a09a23"}
+restart buckets=1 uptime=600 prevZero=false
+foreign-flag=true status={Loaded:false Quarantined:false Writable:false}
+after-window foreign-flag=false running=false buckets=1
+  file /cfg/delivery-gate-stats.json: {"version":1,"writer_pid":3,"written_at":"2026-10-09T12:20:00Z","process_start":"2026-10-09T12:17:00Z","buckets":[{"hour_start":"2026-10-09T12:00:00Z","uptime_ms":780000,"gate_on_ms":0,"hidden_events_seen":0,"hidden_events_while_on":0,"routine_events_while_on":0}],"flag_history":null,"checksum":"829dfa45581179e615ecbd17d01bf192ca71c6a66ea717bc6a78e85fb7674d1f"}
+== response
+0a0608c0aea3d60610880e1a250a1068696464656e5f64656c69766572656412067265766965771a076661696c75726520021a130a0f7270635f756e76657273696f6e656420011a280a13737570707265737365647b613d322c7a3d317d12067265766965771a07726f7574696e65200722310a0608c0aea3d60610901c18880e3803421f0a0a7375707072657373656412067265766965771a07726f7574696e6520032a100a06676c6f62616c1a0608c8bca3d6062a170a0b6b696e643a72657669657710011a0608c8bca3d606320a0a0672657669657710033a7e09000000000000e03f10031a0608c8bca3d6063a06676c6f62616c3a0b6b696e643a72657669657741000000000000e03f4a130a08646961676e6f73651100000000000000004a100a056f746865721100000000000000004a110a067265766965771100000000000000004a110a06747269616765110000000000000000420408011801
+empty: 0a0b088092b8c398feffffff013a004200
+== liveness
+self-now=true self-future=true zero=false neg=false bogus=false

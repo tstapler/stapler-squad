@@ -30,8 +30,10 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -98,7 +100,7 @@ type BacklogService struct {
 	oneShotRunner PRRunner
 	// staleWorkInspector snapshots and nudges a stale work session before
 	// RemediateStaleWorkSession restarts it. nil keeps the plain restart.
-	staleWorkInspector services.StaleWorkInspector
+	staleWorkInspector autonomysvc.StaleWorkInspector
 	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
 	// (the default — Jules disabled, or its dependencies unresolvable at
 	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
@@ -153,6 +155,10 @@ type BacklogService struct {
 	// live feature-flag read (tests only).
 	claimWiring    atomic.Pointer[claimWiring]
 	claimDedupFlag func() bool
+	// epicIntegrationFlag overrides the epic_integration_child_enabled read; tests only.
+	epicIntegrationFlag func() bool
+	// integrationFailMu serializes OnIntegrationChildFailed (rare; one global lock is enough).
+	integrationFailMu sync.Mutex
 
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
@@ -688,7 +694,7 @@ func (s *BacklogService) Shutdown() {
 }
 
 // SetStaleWorkInspector wires the optional inspect-and-nudge step of RemediateStaleWorkSession.
-func (s *BacklogService) SetStaleWorkInspector(i services.StaleWorkInspector) {
+func (s *BacklogService) SetStaleWorkInspector(i autonomysvc.StaleWorkInspector) {
 	s.staleWorkInspector = i
 }
 
@@ -958,9 +964,11 @@ type triageResultJSON struct {
 // BuildStageConfigSnapshotFallback has nothing to reconstruct from.
 func backlogItemSummaryToProto(item *backlogdto.BacklogItemSummary, engine domain.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:       item.ID,
-		PublicId: item.PublicIDRaw,
-		Title:    item.Title,
+		Id:                 item.ID,
+		PublicId:           item.PublicIDRaw,
+		IsIntegrationChild: item.IsIntegrationChild,
+		IntegrationChildId: item.IntegrationChildID,
+		Title:              item.Title,
 		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
 		Priority:   int32(item.Priority),
 		Status:     string(item.Status),
@@ -1054,6 +1062,8 @@ func backlogItemToProto(item *backlogdto.BacklogItemData, engine domain.Workflow
 	p := &sessionv1.BacklogItem{
 		WorkflowSuggestions: workflowSuggestionsToProto(backlogstore.ParseWorkflowSuggestions(item.WorkflowSuggestions)),
 		Id:                  item.ID,
+		IsIntegrationChild:  item.IsIntegrationChild,
+		IntegrationChildId:  item.IntegrationChildID,
 		Title:               item.Title,
 		Description:         item.Description,
 		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
@@ -1335,7 +1345,7 @@ func (s *BacklogService) warnMissingWorktreeRow(is backlogdto.ItemSessionSummary
 		s.eventBus.Publish(events.NewNotificationEvent(
 			is.BacklogItemID, "", uuid.New().String(),
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-			services.DerivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
+			notify.DerivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
 			"Worktree row missing during item archival",
 			fmt.Sprintf("Session %s expected a git worktree but has no worktree row, so its on-disk directory (if any) could not be cleaned up.", is.SessionUUID),
 			map[string]string{"item_id": is.BacklogItemID},

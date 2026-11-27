@@ -85,3 +85,6 @@ const TerminalWriteLeaseFlagName = "terminal_write_lease"
 const HiddenSessionReadonlyGuardsFlagName = "hidden_session_readonly_guards"
 
 const HiddenSessionReplyFlagName = "hidden_session_reply"
+
+// EpicIntegrationChildFlagName gates auto-creation of an epic's integration child.
+const EpicIntegrationChildFlagName = "epic_integration_child_enabled"

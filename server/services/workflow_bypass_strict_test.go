@@ -60,7 +60,7 @@ var clsLegacyAllowedFiles = map[string]bool{
 // clsLegacyHandlerForwarders call the BacklogService RPC handler, which shares
 // its name with an old writer but routes through the gate, so they hold no write.
 var clsLegacyHandlerForwarders = map[string]string{
-	"server/services/notification_action_backlog.go backlogDecider.transition": "forwards the operator's click to the TransitionBacklogItemStatus handler, which resolves operator_notification_action and writes through GatedTransition",
+	"server/services/notifyactions/notification_action_backlog.go backlogDecider.transition": "forwards the operator's click to the TransitionBacklogItemStatus handler, which resolves operator_notification_action and writes through GatedTransition",
 }
 
 func clsScanLegacyCalls(t *testing.T, root string) map[string]int {
@@ -278,7 +278,7 @@ func TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers(t 
 		ctx := domain.WithTransitionActor(t.Context(), actor)
 		_, ok := domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q", actor)
-		ctx = WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
+		ctx = domain.WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
 		_, ok = domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q with the notification caller", actor)
 	}

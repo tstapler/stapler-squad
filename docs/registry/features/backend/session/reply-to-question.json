@@ -5,14 +5,14 @@
   "method": "ReplyToPendingQuestion",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/hidden_question_reply.go",
+  "handlerFile": "server/services/question_reply_wiring.go",
   "tested": true,
   "testIds": [
-    "server/services/hidden_question_reply_test.go",
+    "server/services/qareply/hidden_question_reply_test.go",
     "session/panereply/pane_reply_test.go",
     "server/services/questionkit/pending_question_store_test.go",
-    "server/services/approval_question_test.go",
+    "server/services/approvals/approval_question_test.go",
     "tests/e2e/hidden-session-reply.spec.ts"
   ],
-  "lastModified": "2026-10-10T11:04:31.256479995-07:00"
+  "lastModified": "2026-11-26T21:42:01.773505329-08:00"
 }

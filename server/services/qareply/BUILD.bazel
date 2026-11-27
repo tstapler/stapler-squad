@@ -1,0 +1,99 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "qareply",
+    srcs = [
+        "hidden_question_reply.go",
+        "hook_reply.go",
+        "pane_reply_core.go",
+        "pane_reply_sequence.go",
+        "question_answer_retry.go",
+        "question_answer_router.go",
+        "question_answer_sequence.go",
+        "reply_service.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/qareply",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//internal/hookipc",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/access",
+        "//server/services/auditkit",
+        "//server/services/featureflags",
+        "//server/services/flagsvc",
+        "//server/services/guidance",
+        "//server/services/notifyactions",
+        "//server/services/questionkit",
+        "//session/domain",
+        "//session/instance",
+        "//session/panereply",
+        "//session/tmux",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@org_golang_x_time//rate",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":qareply",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "qareply_test",
+    srcs = [
+        "helpers_test.go",
+        "hidden_question_reply_archived_test.go",
+        "hidden_question_reply_test.go",
+        "hook_reply_test.go",
+        "notification_action_remote_tierb_test.go",
+        "pane_reply_core_test.go",
+        "pane_reply_sequence_archived_test.go",
+        "pane_reply_sequence_test.go",
+        "pane_reply_testdouble_test.go",
+        "question_answer_retry_test.go",
+        "question_answer_router_precedence_test.go",
+        "question_answer_router_test.go",
+        "question_answer_sequence_test.go",
+        "reply_service_test.go",
+        "terminal_writer_constructors_test.go",
+    ],
+    data = ["//session/testdata:all"],
+    embed = [":qareply"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/deliverygate",
+        "//server/middleware",
+        "//server/services/access",
+        "//server/services/auditkit",
+        "//server/services/featureflags",
+        "//server/services/flagsvc",
+        "//server/services/fsops/memfs",
+        "//server/services/internal/svctest",
+        "//server/services/notifyactions",
+        "//server/services/questionkit",
+        "//session",
+        "//session/domain",
+        "//session/instance",
+        "//session/panereply",
+        "//session/queue",
+        "//session/tmux",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

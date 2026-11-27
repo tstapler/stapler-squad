@@ -19,7 +19,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/mcp"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -76,7 +76,7 @@ type ownershipParityCase struct {
 // tc's fixture, and asserts they produce a matching (error code, remediation
 // text) pair — split out of the table test below to keep that function under
 // the house function-length gate.
-func assertOwnershipParity(t *testing.T, ctx context.Context, storage *session.Storage, svc *services.GuidanceRequestService, tc ownershipParityCase) {
+func assertOwnershipParity(t *testing.T, ctx context.Context, storage *session.Storage, svc *guidance.GuidanceRequestService, tc ownershipParityCase) {
 	t.Helper()
 
 	_, mcpRes := mcp.ResolveItemLinkViaMCPAdapter(ctx, storage, tc.callerUUID, tc.itemID)
@@ -112,7 +112,7 @@ func TestGuidanceRequestOwnershipParity_should_ProduceMatchingCodeAndRemediation
 	t.Parallel()
 	storage := newParityTestStorage(t)
 	ctx := context.Background()
-	svc := services.NewGuidanceRequestService(storage, nil, nil)
+	svc := guidance.NewGuidanceRequestService(storage, nil, nil)
 
 	linkedItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "parity linked item"})
 	require.NoError(t, err)

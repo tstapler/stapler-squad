@@ -35,6 +35,7 @@ go_library(
         "session_nudge_guard.go",
         "session_service.go",
         "session_service_fork.go",
+        "temp_home.go",
         "tmuxreap_unix.go",
         "tmuxreap_windows.go",
         "utility_service.go",

@@ -12,6 +12,9 @@ import { screen, fireEvent, act, waitFor } from "@testing-library/react";
 
 const mockXtermHandle = require("./terminalOutputTestMocks").createMockXtermHandle();
 
+// The real hook fetches on first mount, which would consume the upload responses queued on fetch.
+jest.mock("@/lib/hooks/useE2eInputDropTrigger", () => ({ useE2eInputDropTrigger: jest.fn() }));
+
 jest.mock("../XtermTerminal", () =>
   require("./terminalOutputTestMocks").xtermTerminalMockModule(mockXtermHandle)
 );

@@ -4,6 +4,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/taggingrules"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tagpoller"
@@ -68,7 +69,7 @@ func buildTagPoller(cfg *config.Config, llm llmWiring, sessionService *services.
 	var sessionTagPoller *tagpoller.SessionTagClassificationPoller
 	if headlessPool != nil {
 		tagPollerCfg := tagpoller.DefaultSessionTagPollerConfig()
-		tagModel, tagFallbacks := services.TaggingClassifierModelHierarchy(cfg)
+		tagModel, tagFallbacks := taggingrules.TaggingClassifierModelHierarchy(cfg)
 		tagPollerCfg.Model = tagModel
 		tagPollerCfg.FallbackModels = tagFallbacks
 		sessionTagPoller = tagpoller.NewSessionTagClassificationPollerWithConfig(llmClient, sessionService.GetTaggingEngine(), tagPollerCfg)

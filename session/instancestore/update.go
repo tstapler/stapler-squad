@@ -147,6 +147,9 @@ func setSessionTextFields(sessionUpdate *ent.SessionUpdateOne, data domain.Insta
 	if data.TmuxPrefix != "" {
 		sessionUpdate.SetTmuxPrefix(data.TmuxPrefix)
 	}
+	if data.TmuxTitle != "" {
+		sessionUpdate.SetTmuxTitle(data.TmuxTitle)
+	}
 	// See the matching comment in Create above: Backend is write-once per
 	// instance today, so this guard is intentionally set-only, never clear.
 	if data.Backend != "" {
