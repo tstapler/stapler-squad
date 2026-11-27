@@ -33,6 +33,10 @@ func TestWireDepsIntoServer_ConnectsWorkflowReviewCheckpointAndWakeLeaves(t *tes
 	envtest.NewIsolatedStateDir(t)
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("STAPLER_SQUAD_TMUX_SOCKET", "ssq-wiring-"+uuid.NewString()[:8])
+	tmuxDir, err := os.MkdirTemp("", "ssqw-") // short path: unix socket length limit
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(tmuxDir) })
+	t.Setenv("TMUX_TMPDIR", tmuxDir)
 	cfg := config.LoadConfig()
 	cfg.FeatureFlags = map[string]bool{"agent_wake_triggers": true, "notification_inline_actions": true}
 	require.NoError(t, config.SaveConfig(cfg))
