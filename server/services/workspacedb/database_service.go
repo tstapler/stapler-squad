@@ -1,4 +1,5 @@
-package services
+// Package workspacedb serves the workspace database switcher RPCs: list, switch and merge.
+package workspacedb
 
 import (
 	"context"

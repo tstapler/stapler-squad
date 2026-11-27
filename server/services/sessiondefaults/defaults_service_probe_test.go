@@ -1,4 +1,4 @@
-package services
+package sessiondefaults
 
 import (
 	"context"
@@ -189,7 +189,7 @@ func TestProbeProgram_should_PreserveStatusAndReportNotFound_When_TimeoutOrRunne
 // The aider fixture is the shape of a real --help; a fake runner feeds it
 // through the real Prober, parser and handler.
 func TestProbeProgram_should_ReturnAiderFlags_When_RealProberRunsFakeAiderHelp(t *testing.T) {
-	help, err := os.ReadFile(filepath.Join("..", "..", "config", "clihelp", "testdata", "help", "aider-0.78.0.txt"))
+	help, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "clihelp", "testdata", "help", "aider-0.78.0.txt"))
 	require.NoError(t, err)
 	path := newProbeExecutable(t, "aider")
 	var calls atomic.Int32

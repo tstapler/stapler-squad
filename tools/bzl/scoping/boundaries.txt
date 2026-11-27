@@ -126,3 +126,6 @@ server/services/approvals !server/web
 server/services/notifyactions !server/web
 server/services/qareply !server/web
 server/services/rules !server/web
+server/services/sessiondefaults !server/web
+server/services/claudeconfig !server/web
+server/services/workspacedb !server/web

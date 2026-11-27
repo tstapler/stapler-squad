@@ -90,7 +90,7 @@ func writeWorkspaceMetaErr(configDir, cwd, wsType string) error {
 func ReadWorkspaceMeta(configDir string) (WorkspaceMeta, error) {
 	// #nosec G304 -- configDir comes from config.GetConfigDir() or a baseDir built
 	// from os.UserHomeDir() plus fixed subdirectory names (see ListAvailableWorkspaces,
-	// scanMetaSubdirs, and server/services/database_service.go); never RPC/user input.
+	// scanMetaSubdirs, and server/services/workspacedb/database_service.go); never RPC/user input.
 	data, err := os.ReadFile(filepath.Join(configDir, workspaceMetaFileName))
 	if err != nil {
 		return WorkspaceMeta{}, fmt.Errorf("failed to read workspace meta: %w", err)

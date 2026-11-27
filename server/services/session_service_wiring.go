@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
@@ -517,7 +518,7 @@ func (s *SessionService) GetNotificationStore() *notifications.NotificationHisto
 }
 
 // SetConfigService wires the ConfigService for delegating config RPCs.
-func (s *SessionService) SetConfigService(svc *ConfigService) {
+func (s *SessionService) SetConfigService(svc *claudeconfig.ConfigService) {
 	s.configSvc = svc
 }
 
