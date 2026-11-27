@@ -22,6 +22,8 @@ export interface CommitDelay<T> {
   /** Starts the hold, or commits at once when the delay is 0. */
   start: (held: T) => void;
   undo: () => void;
+  /** Cancels a running hold: what it would send no longer applies. */
+  leave: () => void;
 }
 
 const SECOND_MS = 1_000;
@@ -118,5 +120,5 @@ export function useCommitDelay<T>({ onCommit, onCancel, insideSelector = "[data-
   // Unmounting mid-hold (the row left the list, the page closed) also cancels.
   useEffect(() => leave, [leave]);
 
-  return { held, secondsLeft, start, undo };
+  return { held, secondsLeft, start, undo, leave };
 }

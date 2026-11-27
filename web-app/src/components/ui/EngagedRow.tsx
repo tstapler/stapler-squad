@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { CardEngagementContext, useEngagedCard } from "@/lib/hooks/useEngagedCard";
 import { isRowTextClick } from "@/lib/utils/rowClick";
 
@@ -25,6 +25,14 @@ const hasActions = (el: HTMLElement) => !!el.querySelector('[data-testid="action
 export function EngagedRow({ cardId, preExpand = false, children, onKeyDown, ...rest }: Props) {
   const { tracker, handlers, card } = useEngagedCard(cardId);
   const [expansion, setExpansion] = useState(() => (cardId === undefined ? "none" : (tracker?.expansion(cardId) ?? "none")));
+
+  // A row can be pinned again without remounting: drop its old expansion and take back focus it still holds.
+  const el = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!tracker || cardId === undefined) return;
+    setExpansion(tracker.expansion(cardId));
+    if (el.current?.contains(document.activeElement)) tracker.rejoin(cardId);
+  }, [tracker, cardId]);
 
   useEffect(() => {
     if (!tracker || cardId === undefined || !preExpand) return;
@@ -71,6 +79,7 @@ export function EngagedRow({ cardId, preExpand = false, children, onKeyDown, ...
   return (
     <CardEngagementContext.Provider value={card}>
       <div
+        ref={el}
         {...rest}
         {...handlers}
         onKeyDown={onKey}

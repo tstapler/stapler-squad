@@ -308,10 +308,13 @@ export function NotificationPanel() {
   }, [isPanelOpen, tracker]);
   // A held row whose live record is no longer pending was resolved elsewhere: it stops being
   // engaged by focus or a draft, and stays in place until the list unfreezes.
-  useEffect(() => {
+  const retiredIds = useMemo(() => {
     const live = new Map(visibleHistory.map((n) => [n.id, n]));
-    for (const n of frozenList.items) if (isNeedsYou(n) && !isNeedsYou(live.get(n.id))) tracker.setResolved(n.id, true);
-  }, [visibleHistory, frozenList.items, tracker]);
+    return new Set(frozenList.items.filter((n) => isNeedsYou(n) && !isNeedsYou(live.get(n.id))).map((n) => n.id));
+  }, [visibleHistory, frozenList.items]);
+  useEffect(() => {
+    for (const id of retiredIds) tracker.setResolved(id, true);
+  }, [retiredIds, tracker]);
 
   const stable = useStableRowOrder(frozenList.items, isPanelOpen, scrolled);
   const newCount = frozenList.queued + stable.heldCount;
@@ -585,6 +588,7 @@ export function NotificationPanel() {
           rows={listRows}
           setSize={setSize}
           itemProps={{
+            retiredIds,
             resolvedApprovals,
             pendingApprovals,
             blockedApprovals,

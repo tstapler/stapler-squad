@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useSwipeToDismiss } from "@/lib/hooks/useSwipeToDismiss";
 import { useEngagement } from "@/lib/hooks/useEngagedCard";
 import { EngagedRow } from "./EngagedRow";
+import { ActionKind } from "@/gen/session/v1/notification_action_pb";
 import type { GroupedNotification, TrayRow } from "@/lib/utils/notificationGrouping";
 import { NotificationItem, type NotificationItemProps } from "./NotificationItem";
 import {
@@ -53,7 +54,18 @@ interface TrayListProps extends TrayListPaging {
 const HEADER_HEIGHT = 44;
 const GROUP_HEIGHT = 140;
 
-/** Wraps pinned rows too (never swipeable), so a row that unpins keeps its subtree and focus. */
+const ANSWER_KINDS = new Set([ActionKind.ANSWER_QUESTION, ActionKind.ANSWER_GUIDANCE, ActionKind.OPEN]);
+
+/**
+ * Only a durable question card stays mounted when it changes tier (UX-AC26). Every other row remounts, which
+ * is what cancels a held Approve or decision and closes its sub-steps: fail closed.
+ */
+function staysMounted({ notification }: GroupedNotification): boolean {
+  const md = notification.metadata;
+  return !!md?.["guidance_request_id"] && !md["approval_id"] && (notification.actions ?? []).every((a) => ANSWER_KINDS.has(a.kind));
+}
+
+/** Wraps pinned rows too (never swipeable), so a question card that unpins keeps its subtree and focus. */
 function SwipeRow({ pinned, onDismiss, disabled, children }: { pinned: boolean; onDismiss: () => void; disabled: boolean; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const view = useSwipeToDismiss(ref, { onDismiss, disabled: pinned || disabled });
@@ -131,13 +143,21 @@ export function TrayList({
   // Focus inside a row that leaves moves to the next item header, never to an engaged state (7.1).
   const heldFocusKey = useRef<string | null>(null);
   const prevKeys = useRef<string[]>([]);
+  const prevPinned = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     const keys = rows.map((r) => r.key).filter((k) => k !== "nothing-needs-attention");
     const left = heldFocusKey.current;
     const before = prevKeys.current;
     prevKeys.current = keys;
     if (before.join("\0") !== keys.join("\0")) tracker?.noteListChange();
-    if (!left || (document.activeElement && document.activeElement !== document.body)) return;
+    const wasPinned = prevPinned.current;
+    prevPinned.current = new Set(rows.flatMap((r) => (r.kind === "group" && r.pinned ? [r.key] : [])));
+    if (!left) return;
+    if (document.activeElement && document.activeElement !== document.body) {
+      // A card that kept focus while leaving Needs you is still announced.
+      if (wasPinned.has(left) && !prevPinned.current.has(left) && keys.includes(left)) onFocusAdvanced?.(left);
+      return;
+    }
     const at = before.indexOf(left);
     const next = keys.find((k) => k !== left && before.indexOf(k) > at) ?? keys.find((k) => k !== left);
     heldFocusKey.current = null;
@@ -282,7 +302,7 @@ export function TrayList({
               />
             );
             body = (
-              <SwipeRow pinned={row.pinned} disabled={!!offlineReason} onDismiss={() => onDismissGroup(row.group)}>
+              <SwipeRow key={staysMounted(row.group) || row.pinned ? "row" : "recent"} pinned={row.pinned} disabled={!!offlineReason} onDismiss={() => onDismissGroup(row.group)}>
                 {item}
               </SwipeRow>
             );

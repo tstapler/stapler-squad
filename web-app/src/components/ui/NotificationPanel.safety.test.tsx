@@ -4,6 +4,7 @@ import { invokeMock, respondWith } from "./__fixtures__/actionRowHarness";
 import { setTimingForTests } from "@/lib/hooks/interactionTiming";
 import { pendingApprovals, pendingQuestions, renderPanel, resolvedElsewhere, rowKeys } from "./__fixtures__/panelHarness";
 import { panelState } from "./__fixtures__/panelMocks";
+import { makeApprovalDescriptors, makeDecisionDescriptors } from "./__fixtures__/notificationFixtures";
 
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({ useFeatureFlag: () => false }));
 jest.mock("@/lib/api/notificationActionApi", () => ({ invokeNotificationAction: jest.fn() }));
@@ -142,12 +143,18 @@ describe("Story 2.6a and 2.10: resolved-row lifecycle and focus advance", () => 
   });
 });
 
+/** A one-tap question card backed by a durable row: the one kind of row that stays mounted across tiers. */
+const questionCard = () => pendingQuestions(1).map((q) => ({ ...q, metadata: { guidance_request_id: "g0" } }));
+const optionOf = (container: HTMLElement) => container.querySelector('[data-tray-row="q0"] [data-action-option]') as HTMLElement;
+
 describe("a card resolved elsewhere leaves Needs you without remounting (UX-AC26)", () => {
-  it("keeps the same control mounted and focused when the list unfreezes", () => {
-    panelState.history = pendingQuestions(1);
-    const { container, refreshPanel } = renderPanel();
-    const option = () => container.querySelector('[data-tray-row="q0"] [data-action-option]') as HTMLElement;
-    const before = option();
+  beforeEach(() => {
+    panelState.history = questionCard();
+  });
+
+  it("keeps the same control mounted and focused when the list unfreezes, and announces the move once", () => {
+    const { container, refreshPanel, announce } = renderPanel();
+    const before = optionOf(container);
     operatorFocus(before);
 
     panelState.history = [resolvedElsewhere(panelState.history[0])];
@@ -155,8 +162,136 @@ describe("a card resolved elsewhere leaves Needs you without remounting (UX-AC26
     advance(GRACE);
 
     expect(screen.queryByTestId("tray-needs-attention-header")).toBeNull();
-    expect(option()).toBe(before);
+    expect(optionOf(container)).toBe(before);
     expect(document.activeElement).toBe(before);
+    expect(announce.mock.calls.filter(([t]) => t === "Answer confirmed, moved to Recent activity")).toHaveLength(1);
+  });
+
+  it("re-engages a focused card that is pinned again, so the list holds still under it", () => {
+    const { container, refreshPanel } = renderPanel();
+    const pending = panelState.history[0];
+    operatorFocus(optionOf(container));
+    panelState.history = [resolvedElsewhere(pending)];
+    refreshPanel();
+    // Unpinning holds the list for one more grace window.
+    advance(GRACE);
+    advance(GRACE);
+
+    panelState.history = [pending];
+    refreshPanel();
+    expect(screen.getByTestId("tray-needs-attention-header")).toBeInTheDocument();
+    expect(document.activeElement).toBe(optionOf(container));
+    panelState.history = pendingApprovals(1, 9);
+    refreshPanel();
+
+    expect(optionOf(container)).not.toBeNull();
+  });
+});
+
+describe("a pending action dies with the decision it was made for", () => {
+  /** What the poll returns once the session left the queue or another tab dismissed the record. */
+  const readElsewhere = (n: (typeof panelState.history)[number]) => ({ ...n, isRead: true, isPendingDecision: false });
+  const rowOf = (container: HTMLElement) => container.querySelector('[data-tray-row="n0"]') as HTMLElement;
+  const holdApprove = () => {
+    operatorFocus(approveOf(0));
+    act(() => approveOf(0).click());
+    expect(screen.getByTestId("action-undo")).toBeInTheDocument();
+  };
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    respondWith(ActionOutcome.APPLIED);
+    setTimingForTests({ settleMs: 0, commitDelayMs: 3_000 });
+    panelState.history = pendingApprovals(1);
+    panelState.answeredElsewhere = {};
+    window.sessionStorage.clear();
+  });
+  afterEach(() => {
+    panelState.answeredElsewhere = {};
+  });
+
+  it.each([
+    ["is read while the pointer holds the card in Needs you", true, true],
+    ["is read and the card moves to recent", true, false],
+    ["is deleted while the pointer holds the card", false, true],
+  ])("sends nothing when the record %s", (_name, kept, pointerOver) => {
+    const { container, refreshPanel } = renderPanel();
+    if (pointerOver) fireEvent.pointerEnter(rowOf(container));
+    holdApprove();
+
+    panelState.history = kept ? [readElsewhere(panelState.history[0])] : [];
+    refreshPanel();
+    advance(GRACE);
+    advance(10_000);
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("action-undo")).toBeNull();
+  });
+
+  it("sends nothing when another tab answers during the hold", () => {
+    const { refreshPanel } = renderPanel();
+    holdApprove();
+
+    panelState.answeredElsewhere = { n0: "Denied" };
+    refreshPanel();
+    advance(10_000);
+
+    expect(screen.getByText("Answered elsewhere: Denied")).toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("closes an open confirm step when the record is read", () => {
+    panelState.history = pendingApprovals(1).map((n) => ({ ...n, actions: makeApprovalDescriptors("a0", { requiresConfirm: true }) }));
+    const { container, refreshPanel } = renderPanel();
+    fireEvent.pointerEnter(rowOf(container));
+    act(() => approveOf(0).click());
+    expect(screen.getByRole("button", { name: "Confirm approve" })).toBeInTheDocument();
+
+    panelState.history = [readElsewhere(panelState.history[0])];
+    refreshPanel();
+
+    expect(screen.queryByRole("button", { name: "Confirm approve" })).toBeNull();
+  });
+
+  it("sends no held Send back once the backlog decision is resolved elsewhere", () => {
+    panelState.history = [{ ...pendingApprovals(1)[0], metadata: { item_id: "item-1" }, actions: makeDecisionDescriptors("item-1") }];
+    const { container, refreshPanel } = renderPanel();
+    fireEvent.pointerEnter(rowOf(container));
+    act(() => screen.getByRole("button", { name: "Send back" }).click());
+    expect(screen.getByTestId("action-undo")).toBeInTheDocument();
+
+    panelState.history = [readElsewhere(panelState.history[0])];
+    refreshPanel();
+    advance(10_000);
+
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("remounts a row that is not a question card when it changes tier, so no local state carries over", () => {
+    const { container, refreshPanel } = renderPanel();
+    const before = rowOf(container).querySelector('[data-testid="action-row"]');
+
+    panelState.history = [readElsewhere(panelState.history[0])];
+    refreshPanel();
+
+    const after = rowOf(container).querySelector('[data-testid="action-row"]');
+    expect(after).not.toBeNull();
+    expect(after).not.toBe(before);
+  });
+
+  it("drops a settled result when the same record moves to a new approval", async () => {
+    setTimingForTests({ settleMs: 0, commitDelayMs: 0 });
+    const { container, refreshPanel } = renderPanel();
+    await act(async () => approveOf(0).click());
+    expect(within(rowOf(container)).getByText("Approved")).toBeInTheDocument();
+    advance(GRACE);
+
+    const next = panelState.history[0];
+    panelState.history = [{ ...next, metadata: { ...next.metadata, approval_id: "a1" }, actions: makeApprovalDescriptors("a1") }];
+    refreshPanel();
+
+    expect(within(rowOf(container)).queryByText("Approved")).toBeNull();
+    expect(approveOf(0)).toBeInTheDocument();
   });
 });
 

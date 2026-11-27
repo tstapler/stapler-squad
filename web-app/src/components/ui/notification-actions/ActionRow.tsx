@@ -63,6 +63,8 @@ export interface ActionRowProps {
   onApplied?: (kind: ActionKind, summary: string) => void;
   /** Another tab resolved this record: show its result, in place, without moving focus. */
   elsewhere?: string;
+  /** False once the record no longer waits on the operator, even while the row is held in Needs you. */
+  needsYou?: boolean;
   /** Overrides the shared connectivity reason (Offline, Reconnecting, Updating...). */
   disabledReason?: string;
   /** The durable question behind this row: renders the shared question form and its delivery line. */
@@ -187,6 +189,18 @@ export function ActionRow(props: ActionRowProps) {
   useEffect(() => {
     if (holding) undoRef.current?.focus();
   }, [holding]);
+
+  // Answered elsewhere, read or resolved: send nothing held and close any open step.
+  const { elsewhere: answered, needsYou = false } = props;
+  const neededYou = useRef(needsYou);
+  const cancelHold = delay.leave;
+  useEffect(() => {
+    const retired = neededYou.current && !needsYou;
+    neededYou.current = needsYou;
+    if (!retired && answered === undefined) return;
+    cancelHold();
+    setStep("row");
+  }, [needsYou, answered, cancelHold]);
 
   const dispatch = useCallback(
     (spec: ActionSpec, ctx: OutcomeContext) => {
@@ -387,6 +401,7 @@ export function ActionRow(props: ActionRowProps) {
         retry={() => void retry()}
         reset={reset}
         onMarkHandled={props.onMarkHandled}
+        stale={!needsYou ? "retired" : answered}
         onDeliveryRow={props.onDeliveryRow}
       />
     );

@@ -141,6 +141,8 @@ export interface NotificationItemProps {
   onRefreshActions?: () => void;
   /** An inline action was applied: mark these records read and close their toasts. */
   onActionApplied?: (ids: string[], summary: string) => void;
+  /** Rows still shown in Needs you whose live record no longer waits on the operator. */
+  retiredIds?: ReadonlySet<string>;
   /** Records another tab resolved, id to result: the row shows "Answered elsewhere". */
   answeredElsewhere?: Readonly<Record<string, string>>;
   /** Opens the rule builder for the Create rule confirm (desktop More menu). */
@@ -184,6 +186,7 @@ export function NotificationItem({
   lookupHidden = true,
   onRefreshActions,
   onActionApplied,
+  retiredIds,
   answeredElsewhere,
   onCreateRule,
 }: NotificationItemProps) {
@@ -449,6 +452,9 @@ export function NotificationItem({
       </div>
       {rowOn && (
         <ActionRow
+          // The record outlives its target (the next approval of a session reuses it): nothing carries over.
+          key={`${notification.metadata?.["approval_id"] ?? ""}:${guidanceId ?? ""}`}
+          needsYou={notification.isPendingDecision === true && !retiredIds?.has(notification.id)}
           rowId={notification.id}
           descriptors={descriptors}
           approval={approval}
