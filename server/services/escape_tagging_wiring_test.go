@@ -70,6 +70,8 @@ func (p *modelRecordingPool) CallBlocking(_ context.Context, _ headless.FeatureK
 // one as Unimplemented rather than calling through a typed nil pointer.
 func TestSessionService_should_DriveTheInstalledTagPoller_When_SetAfterConstruction(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
+	t.Setenv("STAPLER_SQUAD_TAGGING_MODEL", "")
+	t.Setenv("STAPLER_SQUAD_TAGGING_FALLBACK_MODELS", "")
 	ctx := context.Background()
 	svc := NewSessionService(svctest.CreateTestStorage(t), events.NewEventBus(16))
 	t.Cleanup(func() { svc.Shutdown() })

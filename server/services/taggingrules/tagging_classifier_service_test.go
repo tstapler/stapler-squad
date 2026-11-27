@@ -18,11 +18,19 @@ import (
 	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
 
-// isolatedClassifierService builds a poller-less ClassifierService with config I/O redirected
-// to a temp dir, so UpdateTaggingClassifierConfig's SaveConfig never touches the real config.json.
-func isolatedClassifierService(t *testing.T) *ClassifierService {
+// isolateClassifierConfig redirects config I/O to a temp dir, so SaveConfig never touches the real
+// config.json, and blanks the env overrides an operator may have exported.
+func isolateClassifierConfig(t *testing.T) {
 	t.Helper()
 	svctest.WithIsolatedStateDir(t)
+	t.Setenv("STAPLER_SQUAD_TAGGING_MODEL", "")
+	t.Setenv("STAPLER_SQUAD_TAGGING_FALLBACK_MODELS", "")
+}
+
+// isolatedClassifierService builds a poller-less ClassifierService over an isolated config.
+func isolatedClassifierService(t *testing.T) *ClassifierService {
+	t.Helper()
+	isolateClassifierConfig(t)
 	return NewClassifierService(nil)
 }
 
@@ -112,7 +120,7 @@ func TestTaggingClassifierService_should_PreferEnv_When_EnvOverridesSet(t *testi
 }
 
 func TestTaggingClassifierService_should_LiveUpdatePoller_When_Updated(t *testing.T) {
-	svctest.WithIsolatedStateDir(t)
+	isolateClassifierConfig(t)
 
 	// Attach a poller with no sessions: Update must still hot-apply without error, and a
 	// later Get must report the new hierarchy (persistence + live path together).
@@ -169,7 +177,7 @@ func (f *errTagPoolClient) CallBlocking(_ context.Context, _ headless.FeatureKey
 // reclassifyFixture registers one unstarted session with a poller backed by client.
 func reclassifyFixture(t *testing.T, client headless.PoolClient, title string) *ClassifierService {
 	t.Helper()
-	svctest.WithIsolatedStateDir(t)
+	isolateClassifierConfig(t)
 	poller := tagpoller.NewSessionTagClassificationPoller(client, classifier.NewTaggingEngine())
 	poller.AddInstance(&instance.Instance{Title: title})
 	return NewClassifierService(poller)
