@@ -1,4 +1,4 @@
-package services
+package julesrpc
 
 // Differential golden for the Jules config RPCs, dispatch guards and usage
 // counter, recorded from origin/main before the move.

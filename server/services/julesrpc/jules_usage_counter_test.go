@@ -1,4 +1,4 @@
-package services
+package julesrpc
 
 // jules_usage_counter_test.go — Epic 4.1, Task 4.1.1b. Two tests:
 //

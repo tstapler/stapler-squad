@@ -1,4 +1,4 @@
-package services
+package julesrpc
 
 // jules_dispatch_service.go — Epic 2.2: the one guarded, idempotent path from
 // "user clicks Dispatch to Jules" to "a billed Jules session exists and a
