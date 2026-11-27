@@ -62,14 +62,10 @@ export const roleMenu = style({
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.lg,
   boxShadow: vars.shadow.md,
-  // Above the mobile bottom nav (zIndex.bottomNav), which the menu can open over.
-  zIndex: zIndex.mobilePickerSheet,
+  zIndex: zIndex.dropdown,
   padding: vars.space["1"],
   display: "flex",
   flexDirection: "column",
-  // Scrolls inside the menu when the viewport is shorter than the menu.
-  maxHeight: "calc(100% - 16px)",
-  overflowY: "auto",
 });
 
 export const roleMenuItem = style({

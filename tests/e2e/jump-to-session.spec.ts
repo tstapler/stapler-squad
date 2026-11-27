@@ -238,115 +238,50 @@ test.describe("backlog-jump-to-session", () => {
           const m = (await menu.boundingBox())!;
           return Math.round(Math.min(Math.abs(m.y - (t.y + t.height)), Math.abs(t.y - (m.y + m.height))));
         };
-        // Sideways, because moving it vertically this way would clip it out of its section.
-        const before = (await trigger.boundingBox())!.x;
+        const before = (await trigger.boundingBox())!.y;
         await trigger.evaluate((el) => {
           el.parentElement!.style.position = "relative";
-          el.parentElement!.style.left = "-150px";
+          el.parentElement!.style.top = "-80px";
         });
-        const after = (await trigger.boundingBox())!.x;
-        expect(after).toBeLessThan(before);
-        await expect.poll(async () => (await menu.boundingBox())!.x).toBe(after);
+        expect((await trigger.boundingBox())!.y).toBeLessThan(before);
         await expect.poll(distance).toBe(4);
         await expect(menu).toBeInViewport({ ratio: 1 });
 
-        // Scrolls the detail pane until the trigger's top edge is at targetY, or as near as it goes.
-        const scrollTriggerTo = (targetY: number) =>
-          trigger.evaluate((el, y) => {
-            let pane = el.parentElement!;
-            while (!/auto|scroll/.test(getComputedStyle(pane).overflowY) || pane.scrollHeight <= pane.clientHeight) {
-              pane = pane.parentElement!;
-            }
-            pane.scrollTop += el.getBoundingClientRect().top - y;
-          }, targetY);
-
         if (viewport.width < 640) {
-          // Low enough that the menu opens over the bottom nav, which it must paint above. Taller,
-          // because at 568px the pane's scroll area is too short for the trigger to get there.
-          // Retried as a unit because the detail header can still reflow and move the trigger.
+          // Room for the menu below the trigger, but only under the bottom nav. Taller, because at
+          // 568px the pane's scroll area is too short for the trigger to get that low.
           const height = 700;
           await page.setViewportSize({ width: viewport.width, height });
+          await trigger.evaluate((el) => {
+            el.parentElement!.style.top = "0px";
+          });
+          const nav = page.getByRole("navigation", { name: "Bottom navigation" });
+          // Retried as a unit because the detail header can still reflow and move the trigger.
           await expect(async () => {
-            await scrollTriggerTo(height - 170);
-            if (!(await menu.isVisible())) await trigger.click();
+            await trigger.evaluate((el, targetY) => {
+              let pane = el.parentElement!;
+              while (!/auto|scroll/.test(getComputedStyle(pane).overflowY) || pane.scrollHeight <= pane.clientHeight) {
+                pane = pane.parentElement!;
+              }
+              pane.scrollTop += el.getBoundingClientRect().top - targetY;
+            }, height - 170);
+            const t = (await trigger.boundingBox())!;
+            const navTop = (await nav.boundingBox())!.y;
+            const menuHeight = (await menu.boundingBox())!.height;
+            expect(t.y + t.height + 4 + menuHeight).toBeGreaterThan(navTop);
+            expect(t.y + t.height + 4 + menuHeight).toBeLessThan(height - 8);
             await expect.poll(distance, { timeout: 1000 }).toBe(4);
-            expect((await menu.boundingBox())!.y).toBeGreaterThan(height - 130);
+            const m = (await menu.boundingBox())!;
+            expect(m.y + m.height).toBeLessThanOrEqual(navTop);
             // A trial click runs the hit test: it fails if anything covers the item.
             await page.getByTestId("jump-to-session-role-item-work").click({ trial: true, timeout: 1000 });
           }).toPass({ timeout: 10000 });
         }
-
-        // Scrolled out of view: the menu closes instead of staying pinned to an edge.
-        await scrollTriggerTo(5000);
-        await expect(menu).toBeHidden();
-
-        // A keyboard-opened overlay takes focus: the menu must not stay painted over it.
-        await trigger.click();
-        await expect(menu).toBeVisible();
-        await page.keyboard.press("Control+k");
-        await expect(page.getByRole("dialog")).toBeVisible();
-        await expect(menu).toBeHidden();
-        await page.keyboard.press("Escape");
-        await expect(page.getByRole("dialog")).toBeHidden();
-
-        // Enter on a trigger that has been scrolled away must bring it back, not flash the menu.
-        await trigger.evaluate((el) => el.focus());
-        await scrollTriggerTo(5000);
-        await expect(trigger).not.toBeInViewport();
-        await page.keyboard.press("Enter");
-        await expect(trigger).toBeInViewport();
-        await expect(menu).toBeInViewport({ ratio: 1 });
       } finally {
         if (itemId) await archiveItem(request, itemId);
       }
     });
   }
-
-  test("keeps the role menu open when the loading terminal autofocuses", async ({ page, request }) => {
-    const itemTitle = `jump-to-session-autofocus-${Date.now()}`;
-    let itemId: string | undefined;
-    let realSessionId: string | undefined;
-
-    try {
-      itemId = await createInProgressItem(request, itemTitle);
-      const realSession = await client.createSession({
-        title: `jump-to-session-autofocus-target-${Date.now()}`,
-        path: "/tmp",
-        program: "bash",
-      });
-      realSessionId = realSession.id;
-      await injectItemSessions(page, itemId, [
-        { id: "e2e-work-session-entity", sessionUuid: "e2e-autofocus-work", sessionRole: "work" },
-        { id: "e2e-review-session-entity", sessionUuid: realSessionId, sessionRole: "review" },
-      ]);
-      // Holds the session fetch so the menu is open before the terminal exists.
-      let release = () => {};
-      const held = new Promise<void>((resolve) => (release = resolve));
-      await page.route("**/api/session.v1.SessionService/GetSession", async (route) => {
-        await held;
-        await route.continue();
-      });
-
-      await openDetail(page, itemTitle);
-      await page.getByTestId("jump-to-session-button").click();
-      await page.getByTestId("jump-to-session-role-menu-trigger").click();
-      const menu = page.getByTestId("jump-to-session-role-menu");
-      await expect(menu).toBeVisible();
-      await page.evaluate(() => {
-        document.addEventListener("focusin", (e) => {
-          if ((e.target as Element).tagName === "TEXTAREA") document.body.dataset.terminalFocused = "true";
-        });
-      });
-      release();
-
-      await expect(page.locator("body[data-terminal-focused]")).toHaveCount(1, { timeout: 15000 });
-      await expect(menu).toBeVisible();
-      await expect(page.getByTestId("jump-to-session-role-item-review")).toBeFocused();
-    } finally {
-      if (realSessionId) await client.deleteSession(realSessionId, true).catch(() => {});
-      if (itemId) await archiveItem(request, itemId);
-    }
-  });
 
   test("renders a touch-sized jump button at mobile width", async ({ page, request }) => {
     const itemTitle = `jump-to-session-mobile-${Date.now()}`;

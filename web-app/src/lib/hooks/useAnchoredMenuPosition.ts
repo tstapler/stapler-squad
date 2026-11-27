@@ -31,9 +31,12 @@ export function useAnchoredMenuPosition(
       const menu = menuRef.current?.getBoundingClientRect();
       if (!anchor || !menu) return;
       const { clientWidth, clientHeight } = document.documentElement;
-      const fitted = fitMenuTop(anchor.bottom + ANCHOR_GAP, anchor.top - ANCHOR_GAP, menu.height, clientHeight);
+      // The mobile bottom nav paints over the menu; BottomNav publishes 0px when it is hidden.
+      const navHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--bottom-nav-height"));
+      const usableHeight = clientHeight - (navHeight || 0);
+      const fitted = fitMenuTop(anchor.bottom + ANCHOR_GAP, anchor.top - ANCHOR_GAP, menu.height, usableHeight);
       // The anchor itself may be scrolled off-screen, so clamp the bottom edge too.
-      const top = Math.max(VIEWPORT_MARGIN, Math.min(fitted, clientHeight - VIEWPORT_MARGIN - menu.height));
+      const top = Math.max(VIEWPORT_MARGIN, Math.min(fitted, usableHeight - VIEWPORT_MARGIN - menu.height));
       const left = Math.max(VIEWPORT_MARGIN, Math.min(anchor.left, clientWidth - VIEWPORT_MARGIN - menu.width));
       setPos((prev) => (prev.top === top && prev.left === left ? prev : { top, left }));
     };
