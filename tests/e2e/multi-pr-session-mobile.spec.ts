@@ -54,11 +54,11 @@ test.describe("multi-pr-session-mobile", () => {
     await setMultiPrFlag(page, true);
   });
 
-  test.afterEach(async ({ page }) => {
-    // Close first: a terminal handshake still in flight would otherwise find its session deleted and log an error.
-    await page.close();
+  test.afterEach(async () => {
+    // Assert before deleting: a terminal handshake still in flight finds its session gone and logs an error.
+    // Soft, so the deletes still run; the page stays open, or an error found here would leave no screenshot.
+    expect.soft(consoleErrors, "no console or page errors").toEqual([]);
     for (const id of created.splice(0)) await client.deleteSession(id, true).catch(() => undefined);
-    expect(consoleErrors, "no console or page errors").toEqual([]);
   });
 
   test("precondition_should_beACoarsePointerTouchDevice", async ({ page }) => {
