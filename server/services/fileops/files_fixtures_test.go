@@ -3,11 +3,9 @@ package fileops
 // Fixtures shared by this package's tests (copies of the contentsearch ones).
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,21 +19,6 @@ const (
 	fixtureSeed      = 42
 	searchBenchQuery = "TODO"
 )
-
-var fixtureWords = []string{"alpha", "beta", "gamma", "delta", "func", "return", "TODO", "value", "index", "config"}
-
-func fixtureText(rng *rand.Rand, lines int) []byte {
-	var b bytes.Buffer
-	for l := 0; l < lines; l++ {
-		n := 3 + rng.Intn(8)
-		for w := 0; w < n; w++ {
-			b.WriteString(fixtureWords[rng.Intn(len(fixtureWords))])
-			b.WriteByte(' ')
-		}
-		b.WriteByte('\n')
-	}
-	return b.Bytes()
-}
 
 func mustMkdir(tb testing.TB, p string) {
 	tb.Helper()
