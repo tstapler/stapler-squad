@@ -601,6 +601,40 @@ linters:
             - github.com/tstapler/stapler-squad/session/instance
             - github.com/tstapler/stapler-squad/session/panereply
             - github.com/tstapler/stapler-squad/session/tmux
+        # server/services/escapecode owns the escape-analytics REST handler and query RPCs; it never imports the hub.
+        isolate_escapecode:
+          list-mode: strict
+          files:
+            - "**/services/escapecode/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/analytics
+            - github.com/tstapler/stapler-squad/server/analytics/escapedb
+            - github.com/tstapler/stapler-squad/session/ent
+        # server/services/taggingrules owns session tagging (rules and the LLM classifier RPCs); it never imports the hub.
+        isolate_taggingrules:
+          list-mode: strict
+          files:
+            - "**/services/taggingrules/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/classifier
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/tagpoller
         # server/services/rules owns the auto-approval rules and analytics; it never imports the
         # services hub (the hub builds it).
         isolate_rules:
@@ -830,8 +864,8 @@ linters:
             # Temporarily excluded — session/ent still imported; removed-in: refactor/storage-interface-cleanup (P6)
             - "!**/server/services/error_registry.go"
             - "!**/server/services/error_registry_test.go"
-            - "!**/server/services/analytics_escape_service.go"
-            - "!**/server/services/analytics_escape_service_test.go"
+            - "!**/server/services/escapecode/analytics_escape_service.go"
+            - "!**/server/services/escapecode/analytics_escape_service_test.go"
             - "!**/server/services/workflow_service_test.go"
             - "!**/server/services/workflow_service.go"
             - "!**/server/services/backlogsvc/backlog_service_query.go"

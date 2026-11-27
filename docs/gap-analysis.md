@@ -1002,7 +1002,7 @@ skip it in future rounds.
 - **status**: open
 - **severity**: low
 - **files**: `server/services/escapecode/escape_code_handler.go` (old REST + in-memory),
-  `server/services/analytics_escape_service.go` (new ConnectRPC + ent DB)
+  `server/services/escapecode/analytics_escape_service.go` (new ConnectRPC + ent DB)
 - **detail**: Two independent tracking paths exist. The nav points to the new SQLite-
   backed one at `/analytics/escape`. The old REST debug page at `/debug/escape-codes`
   uses a completely separate in-memory `EscapeCodeHandler` that requires manual toggling

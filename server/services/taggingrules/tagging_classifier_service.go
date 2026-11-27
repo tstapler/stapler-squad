@@ -1,4 +1,4 @@
-package services
+package taggingrules
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
 
@@ -39,9 +40,8 @@ func taggingClassifierConfigToProto(model string, fallbacks []string) *sessionv1
 // config file first, STAPLER_SQUAD_TAGGING_MODEL / STAPLER_SQUAD_TAGGING_FALLBACK_MODELS
 // (comma-separated) overriding when set — same kill-switch-via-env precedent as
 // STAPLER_SQUAD_DISABLE_DETECTOR_PLUGINS. Env wins so a free-proxy operator can point the
-// fleet at a proxy model without editing config.json on every host. Exported for
-// server/dependencies.go's poller construction (same package cannot be used there —
-// dependencies.go is package server, the poller wiring lives here in services).
+// fleet at a proxy model without editing config.json on every host. Exported for the
+// composition root's poller construction.
 func TaggingClassifierModelHierarchy(cfg *config.Config) (string, []string) {
 	model := strings.TrimSpace(envOrEmpty("STAPLER_SQUAD_TAGGING_MODEL"))
 	fallbacks := splitEnvList(envOrEmpty("STAPLER_SQUAD_TAGGING_FALLBACK_MODELS"))
@@ -72,10 +72,28 @@ func splitEnvList(s string) []string {
 	return out
 }
 
+// SessionClassifier is the part of *tagpoller.SessionTagClassificationPoller the
+// classifier RPCs use.
+type SessionClassifier interface {
+	SetModelConfig(model string, fallbackModels []string)
+	ClassifyNow(ctx context.Context, title string) error
+	Instances() []*instance.Instance
+}
+
+// ClassifierService answers the tagging-classifier config and reclassify RPCs.
+type ClassifierService struct {
+	poller SessionClassifier
+}
+
+// NewClassifierService takes the running classifier; pass an untyped nil when there is
+// none (no headless pool), never a nil pointer.
+func NewClassifierService(poller SessionClassifier) *ClassifierService {
+	return &ClassifierService{poller: poller}
+}
+
 // GetTaggingClassifierConfig returns the effective LLM model hierarchy for session-tag
 // classification.
-// +api: tagging-classifier:get-config
-func (s *SessionService) GetTaggingClassifierConfig(
+func (s *ClassifierService) GetTaggingClassifierConfig(
 	_ context.Context,
 	_ *connect.Request[sessionv1.GetTaggingClassifierConfigRequest],
 ) (*connect.Response[sessionv1.GetTaggingClassifierConfigResponse], error) {
@@ -89,8 +107,7 @@ func (s *SessionService) GetTaggingClassifierConfig(
 // UpdateTaggingClassifierConfig validates, persists, and hot-applies a new model hierarchy.
 // An empty model resets to the server default ("haiku"). Rejects blank-after-trim entries,
 // overlong names, and hierarchies longer than maxTaggingClassifierFallbacks.
-// +api: tagging-classifier:update-config
-func (s *SessionService) UpdateTaggingClassifierConfig(
+func (s *ClassifierService) UpdateTaggingClassifierConfig(
 	_ context.Context,
 	req *connect.Request[sessionv1.UpdateTaggingClassifierConfigRequest],
 ) (*connect.Response[sessionv1.UpdateTaggingClassifierConfigResponse], error) {
@@ -132,8 +149,8 @@ func (s *SessionService) UpdateTaggingClassifierConfig(
 	// Env overrides win over the saved config, so the poller and response report the
 	// effective hierarchy, not what was just saved.
 	effModel, effFallbacks := TaggingClassifierModelHierarchy(cfg)
-	if s.sessionTagPoller != nil {
-		s.sessionTagPoller.SetModelConfig(effModel, effFallbacks)
+	if s.poller != nil {
+		s.poller.SetModelConfig(effModel, effFallbacks)
 	}
 	log.Info("tagging classifier config updated", "model", effModel, "fallbacks", effFallbacks)
 	return connect.NewResponse(&sessionv1.UpdateTaggingClassifierConfigResponse{
@@ -146,8 +163,7 @@ func (s *SessionService) UpdateTaggingClassifierConfig(
 // automatically — this RPC is the explicit user action that does. Fails NotFound when no
 // monitored session matches, Unimplemented when the headless pool (and therefore the
 // poller) is unavailable.
-// +api: tagging-classifier:reclassify-session
-func (s *SessionService) ReclassifySessionTags(
+func (s *ClassifierService) ReclassifySessionTags(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ReclassifySessionTagsRequest],
 ) (*connect.Response[sessionv1.ReclassifySessionTagsResponse], error) {
@@ -155,10 +171,10 @@ func (s *SessionService) ReclassifySessionTags(
 	if id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
 	}
-	if s.sessionTagPoller == nil {
+	if s.poller == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("tag classification is not available on this server (no headless pool)"))
 	}
-	if err := s.sessionTagPoller.ClassifyNow(ctx, id); err != nil {
+	if err := s.poller.ClassifyNow(ctx, id); err != nil {
 		code := connect.CodeNotFound
 		if errors.Is(err, tagpoller.ErrClassificationDegraded) {
 			code = connect.CodeUnavailable
@@ -166,7 +182,7 @@ func (s *SessionService) ReclassifySessionTags(
 		return nil, connect.NewError(code, err)
 	}
 	var tags []string
-	for _, inst := range s.sessionTagPoller.Instances() {
+	for _, inst := range s.poller.Instances() {
 		if inst.MatchesID(id) {
 			tags = inst.GetTags()
 			break

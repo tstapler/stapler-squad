@@ -1,4 +1,4 @@
-package services
+package taggingrules
 
 import (
 	"context"
@@ -12,23 +12,25 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
-	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
 
-// isolatedClassifierService builds a SessionService with config I/O redirected to a temp dir,
-// so UpdateTaggingClassifierConfig's SaveConfig never touches the real config.json.
-func isolatedClassifierService(t *testing.T) *SessionService {
+// isolatedClassifierService builds a poller-less ClassifierService with config I/O redirected
+// to a temp dir, so UpdateTaggingClassifierConfig's SaveConfig never touches the real config.json.
+func isolatedClassifierService(t *testing.T) *ClassifierService {
 	t.Helper()
 	svctest.WithIsolatedStateDir(t)
-	bus := events.NewEventBus(16)
-	t.Cleanup(bus.Close)
-	svc := NewSessionService(svctest.CreateTestStorage(t), bus)
-	t.Cleanup(func() { svc.Shutdown() })
-	return svc
+	return NewClassifierService(nil)
+}
+
+func assertConnectCode(t *testing.T, err error, want connect.Code) {
+	t.Helper()
+	var ce *connect.Error
+	require.ErrorAs(t, err, &ce, "expected a connect.Error")
+	assert.Equal(t, want, ce.Code(), "expected connect code %v, got %v", want, ce.Code())
 }
 
 func TestTaggingClassifierService_should_ReturnHaikuDefault_When_Unconfigured(t *testing.T) {
@@ -114,7 +116,7 @@ func TestTaggingClassifierService_should_LiveUpdatePoller_When_Updated(t *testin
 
 	// Attach a poller with no sessions: Update must still hot-apply without error, and a
 	// later Get must report the new hierarchy (persistence + live path together).
-	svc.SetSessionTagPoller(tagpoller.NewSessionTagClassificationPoller(nil, nil))
+	svc = NewClassifierService(tagpoller.NewSessionTagClassificationPoller(nil, nil))
 	_, err := svc.UpdateTaggingClassifierConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateTaggingClassifierConfigRequest{
 		Config: &sessionv1.TaggingClassifierConfigProto{Model: "sonnet", FallbackModels: []string{"proxy-free"}},
 	}))
@@ -135,7 +137,7 @@ func TestTaggingClassifierService_should_RejectReclassify_When_BadRequest(t *tes
 	assertConnectCode(t, err, connect.CodeUnimplemented)
 
 	// Poller attached but session unknown: NotFound.
-	svc.SetSessionTagPoller(tagpoller.NewSessionTagClassificationPoller(nil, nil))
+	svc = NewClassifierService(tagpoller.NewSessionTagClassificationPoller(nil, nil))
 	_, err = svc.ReclassifySessionTags(context.Background(), connect.NewRequest(&sessionv1.ReclassifySessionTagsRequest{SessionId: "no-such-session"}))
 	assertConnectCode(t, err, connect.CodeNotFound)
 }
@@ -164,21 +166,18 @@ func (f *errTagPoolClient) CallBlocking(_ context.Context, _ headless.FeatureKey
 	return f.response, f.err
 }
 
-// reclassifyFixture registers one real session with a poller backed by client.
-func reclassifyFixture(t *testing.T, client headless.PoolClient, title string) (*SessionService, *instance.Instance) {
+// reclassifyFixture registers one unstarted session with a poller backed by client.
+func reclassifyFixture(t *testing.T, client headless.PoolClient, title string) *ClassifierService {
 	t.Helper()
-	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
+	svctest.WithIsolatedStateDir(t)
 	poller := tagpoller.NewSessionTagClassificationPoller(client, classifier.NewTaggingEngine())
-	svc.SetSessionTagPoller(poller)
-	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = inst.Destroy() })
-	return svc, inst
+	poller.AddInstance(&instance.Instance{Title: title})
+	return NewClassifierService(poller)
 }
 
 func TestTaggingClassifierService_should_ReturnTags_When_ReclassifySucceeds(t *testing.T) {
 	const title = "reclassify-ok-session"
-	svc, _ := reclassifyFixture(t, &errTagPoolClient{response: `{"results":[{"name":"` + title + `","tags":["Unclassified"]}]}`}, title)
+	svc := reclassifyFixture(t, &errTagPoolClient{response: `{"results":[{"name":"` + title + `","tags":["Unclassified"]}]}`}, title)
 
 	resp, err := svc.ReclassifySessionTags(context.Background(), connect.NewRequest(&sessionv1.ReclassifySessionTagsRequest{SessionId: title}))
 
@@ -188,7 +187,7 @@ func TestTaggingClassifierService_should_ReturnTags_When_ReclassifySucceeds(t *t
 
 func TestTaggingClassifierService_should_ReturnUnavailable_When_ReclassifyDegrades(t *testing.T) {
 	const title = "reclassify-degraded-session"
-	svc, _ := reclassifyFixture(t, &errTagPoolClient{err: errors.New("pool down")}, title)
+	svc := reclassifyFixture(t, &errTagPoolClient{err: errors.New("pool down")}, title)
 
 	_, err := svc.ReclassifySessionTags(context.Background(), connect.NewRequest(&sessionv1.ReclassifySessionTagsRequest{SessionId: title}))
 

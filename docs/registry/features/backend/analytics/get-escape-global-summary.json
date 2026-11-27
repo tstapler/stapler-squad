@@ -5,7 +5,7 @@
   "method": "GetEscapeAnalyticsGlobalSummary",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/analytics_escape_service.go",
+  "handlerFile": "server/services/session_service_escape_tagging.go",
   "tested": true,
   "testIds": [
     "TestGetEscapeAnalyticsGlobalSummary_should_ReturnUnavailable_When_AnalyticsClientNil",
@@ -14,5 +14,5 @@
     "TestGetEscapeAnalyticsGlobalSummary_should_ReturnZeroRate_When_NoEventsMatch",
     "TestGetEscapeAnalyticsGlobalSummary_should_ReturnExactMangledCount_When_FixtureHasMixedTrueFalseMangled"
   ],
-  "lastModified": "2026-08-11T13:00:08.349283515-07:00"
+  "lastModified": "2026-11-27T02:54:06.634503841-08:00"
 }
