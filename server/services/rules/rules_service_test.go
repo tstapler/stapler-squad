@@ -1,4 +1,4 @@
-package services
+package rules
 
 import (
 	"context"
@@ -1638,7 +1638,7 @@ func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *t
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)","Bash(npm test*)"]}}`)
 	svc.SetClaudeSettingsWatcher(claudesettings.NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
-		svc.rebuildClaudeSettingsRules(rules)
+		svc.RebuildClaudeSettingsRules(rules)
 	}))
 
 	resp, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
@@ -1656,7 +1656,7 @@ func TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGood
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 	svc.SetClaudeSettingsWatcher(claudesettings.NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
-		svc.rebuildClaudeSettingsRules(rules)
+		svc.RebuildClaudeSettingsRules(rules)
 	}))
 
 	// Establish a known-good baseline.
@@ -1765,7 +1765,7 @@ func TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes(t
 	aDone := make(chan struct{})
 	go func() {
 		defer close(aDone)
-		svc.rebuildClaudeSettingsRules([]classifier.Rule{{
+		svc.RebuildClaudeSettingsRules([]classifier.Rule{{
 			RuleMeta: classifier.RuleMeta{ID: "cs-a", Enabled: true, Source: "claude-settings", Priority: 150},
 			ToolName: "Read", Decision: classifier.AutoAllow,
 		}})

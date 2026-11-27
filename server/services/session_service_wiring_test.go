@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/rules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -84,4 +86,15 @@ func TestSessionService_Shutdown_KillsTestTmuxServer(t *testing.T) {
 
 	require.Error(t, safeexec.CommandContext(ctx, tmuxBin, "-L", socket, "list-sessions").Run(),
 		"Shutdown should have killed the tmux server on the test socket")
+}
+
+func TestClassificationRecorder_should_BeANilInterface_When_ThereIsNoAnalyticsStore(t *testing.T) {
+	t.Parallel()
+	recorder := (&SessionService{}).ClassificationRecorder()
+
+	// assert.Nil would accept a typed nil pointer, which the hook paths would call.
+	require.True(t, recorder == nil)
+	store := rules.NewAnalyticsStore(nil)
+	rulesSvc := rules.NewRulesService(nil, nil, store, nil, nil, nil)
+	assert.Same(t, store, (&SessionService{rulesSvc: rulesSvc}).ClassificationRecorder())
 }

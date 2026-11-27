@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,12 +16,12 @@ import (
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/server/services/rules"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -132,6 +131,41 @@ func decisionBehavior(t *testing.T, rr *httptest.ResponseRecorder) string {
 	return resp.HookSpecificOutput.Decision.Behavior
 }
 
+// newRulesService creates a RulesService over an in-memory database that writes nothing under $HOME.
+func newRulesService(t *testing.T) *rules.RulesService {
+	t.Helper()
+	storage := svctest.CreateTestStorage(t)
+	rulesStore, err := rules.NewRulesStore(storage)
+	require.NoError(t, err)
+	svc := rules.NewRulesService(rulesStore, nil, rules.NewAnalyticsStore(storage), classifier.NewRuleBasedClassifier(), nil, nil)
+	svc.DisableAntigravityExport()
+	return svc
+}
+
+// newSimpleRulesService is newRulesService with the analytics flush loop running.
+func newSimpleRulesService(t *testing.T) *rules.RulesService {
+	t.Helper()
+	storage := svctest.CreateTestStorage(t)
+	rulesStore, err := rules.NewRulesStore(storage)
+	require.NoError(t, err)
+	analyticsStore := rules.NewAnalyticsStore(storage)
+	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
+	svc := rules.NewRulesService(rulesStore, nil, analyticsStore, classifier.NewRuleBasedClassifier(), nil, nil)
+	svc.DisableAntigravityExport()
+	return svc
+}
+
+func bashApproval(id, sessionID, command string, createdAt time.Time) *approvalkit.PendingApproval {
+	return &approvalkit.PendingApproval{
+		ID:        id,
+		SessionID: sessionID,
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{"command": command},
+		CreatedAt: createdAt,
+	}
+}
+
 type fakeApprovalLiveInstanceFinder struct{ inst *instance.Instance }
 
 func (f *fakeApprovalLiveInstanceFinder) FindLiveInstance(id string) *instance.Instance {
@@ -143,13 +177,6 @@ func (f *fakeApprovalLiveInstanceFinder) FindLiveInstance(id string) *instance.I
 
 func newTestPendingApproval(id, sessionID, toolName string) *approvalkit.PendingApproval {
 	return &approvalkit.PendingApproval{ID: id, SessionID: sessionID, ToolName: toolName}
-}
-
-func newTestNotificationStore(t *testing.T) *notifications.NotificationHistoryStore {
-	t.Helper()
-	store, err := notifications.NewNotificationHistoryStore(filepath.Join(t.TempDir(), "notifications.json"))
-	require.NoError(t, err)
-	return store
 }
 
 // failingCIInstance is a shared fixture: PR #42, CI failing.

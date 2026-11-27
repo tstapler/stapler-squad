@@ -1,4 +1,4 @@
-package services
+package rules
 
 import (
 	"context"
@@ -603,10 +603,10 @@ func (rs *RulesService) rebuildClassifier() {
 	go rs.reconcilePendingApprovalsSafe()
 }
 
-// rebuildClaudeSettingsRules hot-swaps the claude-settings-sourced rules in the classifier,
+// RebuildClaudeSettingsRules hot-swaps the claude-settings-sourced rules in the classifier,
 // keeping seed and DB-backed user rules unchanged. Guarded by rebuildMu for the same reason
 // as rebuildClassifier — see that method's doc comment.
-func (rs *RulesService) rebuildClaudeSettingsRules(newClaudeRules []classifier.Rule) {
+func (rs *RulesService) RebuildClaudeSettingsRules(newClaudeRules []classifier.Rule) {
 	func() {
 		rs.rebuildMu.Lock()
 		defer rs.rebuildMu.Unlock()

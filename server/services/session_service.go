@@ -45,6 +45,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/qareply"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/quota"
+	"github.com/tstapler/stapler-squad/server/services/rules"
 	"github.com/tstapler/stapler-squad/server/services/taggingrules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -203,7 +204,7 @@ type SessionService struct {
 	notificationSvc *notify.NotificationService
 	approvalSvc     *approvals.ApprovalService
 	utilitySvc      *UtilityService
-	rulesSvc        *RulesService
+	rulesSvc        *rules.RulesService
 	// taggingRulesSvc is exposed over ListTaggingRules/UpsertTaggingRule/DeleteTaggingRule
 	// (Phase 5 of the session-classifier-pipeline project). nil-safe: those RPC handlers
 	// guard with `if s.taggingRulesSvc == nil` and return CodeUnimplemented, mirroring the
@@ -830,12 +831,12 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	utilitySvc := NewUtilityService(approvalStore)
 
 	// Build rules store, analytics store, and classifier for approval rules service.
-	rulesStore, rulesErr := NewRulesStore(concStorage)
+	rulesStore, rulesErr := rules.NewRulesStore(concStorage)
 	if rulesErr != nil {
 		log.Warn("failed to load rules store, using empty store", "err", rulesErr)
-		rulesStore = &RulesStore{storage: concStorage}
+		rulesStore = rules.NewEmptyRulesStore(concStorage)
 	}
-	analyticsStore := NewAnalyticsStore(concStorage)
+	analyticsStore := rules.NewAnalyticsStore(concStorage)
 	analyticsStore.Start(context.Background())
 	classifierObj := classifier.NewRuleBasedClassifier()
 	// Merge user rules into the classifier. Safe to call AddRules directly (bypassing
@@ -888,32 +889,32 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	{
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
 		if c, backend := anthropicwire.NewBestAvailableAIClient(apiKey, anthropicwire.KnownCLIAgents); c != nil {
-			promptBuilder = &DefaultRulePromptBuilder{}
+			promptBuilder = &rules.DefaultRulePromptBuilder{}
 			aiClientImpl = c
 			log.Info("[SessionService] AI rule generation enabled", "backend", backend)
 		} else {
 			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, anthropicwire.WrapRulesAIClient(aiClientImpl))
+	rulesSvc := rules.NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, anthropicwire.WrapRulesAIClient(aiClientImpl))
 
 	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
 	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
 	// hot-swaps the classifier's claude-settings rules and emits a visible reload event.
-	claudeSettingsWatcher := claudesettings.NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
-		rulesSvc.rebuildClaudeSettingsRules(rules)
-		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(rules), "origin", origin)
+	claudeSettingsWatcher := claudesettings.NewClaudeSettingsWatcher(cwd, func(reloaded []classifier.Rule, origin string, notify bool) {
+		rulesSvc.RebuildClaudeSettingsRules(reloaded)
+		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(reloaded), "origin", origin)
 		// notify is false for Start()'s initial priming reload — the operator already saw a
 		// startup activation notification if any rules exist, and nothing meaningful
 		// happened for this callback to report otherwise. A zero-rule result is also
 		// never notification-worthy, on any call: "0 rules reloaded" is a no-op from the
 		// operator's perspective whether it's the priming reload or a later real one.
-		if !notify || len(rules) == 0 {
+		if !notify || len(reloaded) == 0 {
 			return
 		}
 		publishClaudeSettingsNotification(eventBus, claudeSettingsNotificationContent{
 			title:   "Claude Settings Reloaded",
-			message: fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin),
+			message: fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(reloaded), origin),
 			origin:  origin,
 		})
 	})
@@ -924,7 +925,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Hot-reload shared_rules.yaml (gated on IsTestMode like the claude-settings load above, so
 	// tests never read the developer's real home directory).
 	if home, homeErr := os.UserHomeDir(); homeErr == nil && !config.IsTestMode() {
-		rulesSvc.StartConfigFileRulesReload(context.Background(), classifier.ConfigFileRulesPath(home), configFileRulesPollInterval)
+		rulesSvc.StartConfigFileRulesReload(context.Background(), classifier.ConfigFileRulesPath(home), rules.ConfigFileRulesPollInterval)
 	}
 
 	// Initialize capacity monitor.

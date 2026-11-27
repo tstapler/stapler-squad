@@ -33,6 +33,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/rules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -4212,7 +4213,7 @@ func TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine(t *testing.T) {
 	require.NotPanics(t, svc.Shutdown, "a second Shutdown() call must be idempotent")
 
 	require.NotPanics(t, func() {
-		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
+		store.Record(rules.AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
 	}, "Record() after Shutdown() must stay a silent no-op, not panic")
 }
 
@@ -4263,9 +4264,8 @@ func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) 
 
 // TestNewSessionService_WiresApprovalServiceIntoRulesService is the
 // construction-order regression guard for Task 2.1.2b (validation.md Scope 4 /
-// Epic 2.1.2 — "gap — add"): after NewSessionService returns, rulesSvc's
-// approvalSvc field must be non-nil, so a future edit can't silently drop the
-// rulesSvc.SetApprovalService(approvalSvc) call without a test noticing.
+// Epic 2.1.2 — "gap — add"): a reconciliation pass only reaches the pending
+// approvals if NewSessionService passed the approval service to the rules service.
 func TestNewSessionService_WiresApprovalServiceIntoRulesService(t *testing.T) {
 	home := t.TempDir()
 	svctest.WithFakeHomePath(t, home)
@@ -4276,7 +4276,16 @@ func TestNewSessionService_WiresApprovalServiceIntoRulesService(t *testing.T) {
 	t.Cleanup(func() { svc.Shutdown() })
 
 	require.NotNil(t, svc.rulesSvc)
-	assert.NotNil(t, svc.rulesSvc.approvalSvc, "rulesSvc.approvalSvc must be wired by NewSessionService")
+	pending := bashApproval("appr-wiring", "sess", "wiringprobe run", time.Now())
+	require.NoError(t, svc.GetApprovalStore().Create(pending))
+	svc.GetClassifier().ReplaceRules([]classifier.Rule{{
+		RuleMeta: classifier.RuleMeta{ID: "all-bash", Name: "All Bash", Enabled: true, Source: "user", Priority: 999},
+		ToolName: "Bash", Decision: classifier.AutoAllow,
+	}})
+	svc.rulesSvc.ReconcileNow()
+
+	_, stillPending := svc.GetApprovalStore().Get(pending.ID)
+	assert.False(t, stillPending, "the approval service must be wired into the rules service")
 }
 
 // TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the

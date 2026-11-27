@@ -1,4 +1,4 @@
-package services
+package rules
 
 import (
 	"context"
@@ -9,9 +9,9 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 )
 
-// configFileRulesPollInterval is how often the server re-stats shared_rules.yaml. A poll (not
+// ConfigFileRulesPollInterval is how often the server re-stats shared_rules.yaml. A poll (not
 // fsnotify) because editors often replace the file via rename, which loses a file-level watch.
-const configFileRulesPollInterval = 3 * time.Second
+const ConfigFileRulesPollInterval = 3 * time.Second
 
 // configFileRulesReloader hot-reloads shared_rules.yaml into the live classifier so the
 // resident classifier uses the same rules ssq-hooks' local path loads at startup. Any load
