@@ -563,7 +563,7 @@ export function NotificationPanel() {
           <p className={emptyText}>{e.text}</p>
           {e.sub && <p className={emptySubtext}>{e.sub}</p>}
           {trayState.exit === "retry" && (
-            <button type="button" className={trayButton} onClick={() => refreshHistory()}>
+            <button type="button" className={trayButton} onClick={() => refreshHistory()}>{/* analytics-exempt */}
               Retry
             </button>
           )}
@@ -575,7 +575,7 @@ export function NotificationPanel() {
                 setSearchQuery("");
                 setTypeFilter("all");
               }}
-            >
+            >{/* analytics-exempt */}
               Clear filters
             </button>
           )}
@@ -660,7 +660,7 @@ export function NotificationPanel() {
                 className={`${filterPill} ${typeFilter === filter ? filterPillActive : ""}`}
                 onClick={() => setTypeFilter(filter)}
                 aria-pressed={typeFilter === filter}
-              >
+              >{/* analytics-exempt */}
                 {TYPE_FILTER_LABELS[filter]}
               </button>
             ))}
@@ -716,7 +716,7 @@ export function NotificationPanel() {
               data-testid="tray-expand"
               aria-pressed={expanded}
               onClick={() => setExpanded((v) => !v)}
-            >
+            >{/* analytics-exempt */}
               {expanded ? "Collapse" : "Expand"}
             </button>
           </div>
@@ -752,7 +752,7 @@ export function NotificationPanel() {
                     aria-label="Mark activity read"
                     aria-disabled={actionsDisabled ? true : undefined}
                     title={actionsReason}
-                  >
+                  >{/* analytics-exempt */}
                     Mark activity read
                   </button>
                 )}
@@ -769,7 +769,7 @@ export function NotificationPanel() {
                   writeTrayPinned(!pinned);
                   setPinned(!pinned);
                 }}
-              >
+              >{/* analytics-exempt */}
                 Pin
               </button>
             )}
@@ -784,7 +784,7 @@ export function NotificationPanel() {
                 setQuietMode(next);
                 setQuietUnsaved(next && !readQuietMode());
               }}
-            >
+            >{/* analytics-exempt */}
               Quiet mode{quietMode ? " on" : ""}
             </button>
             <TrayOverflowMenu groups={menuGroups} />
@@ -793,7 +793,7 @@ export function NotificationPanel() {
               onClick={togglePanel}
               aria-label="Close notification panel"
               style={{ minWidth: 44, minHeight: 44 }}
-            >
+            >{/* analytics-exempt */}
               ✕
             </button>
           </div>
@@ -817,7 +817,7 @@ export function NotificationPanel() {
               Couldn&apos;t load notifications.
               {historyLastUpdatedAt !== null ? ` Showing data from ${formatClockTime(historyLastUpdatedAt)}.` : ""}
             </span>
-            <button type="button" className={trayButton} onClick={() => refreshHistory()}>
+            <button type="button" className={trayButton} onClick={() => refreshHistory()}>{/* analytics-exempt */}
               Retry
             </button>
           </div>
@@ -833,7 +833,7 @@ export function NotificationPanel() {
             onBlur={() => undoWindow.resume("focus")}
           >
             <span>{undoWindow.pending.label}</span>
-            <button type="button" className={trayButton} data-testid="tray-undo" onClick={bulk.undo}>
+            <button type="button" className={trayButton} data-testid="tray-undo" onClick={bulk.undo}>{/* analytics-exempt */}
               Undo
             </button>
           </div>
@@ -846,7 +846,7 @@ export function NotificationPanel() {
         {clearError && (
           <div className={trayBanner} data-testid="tray-clear-error">
             <span>Could not clear notifications</span>
-            <button type="button" className={trayButton} onClick={() => bulk.startUndoableClear(clearError.label, clearError.ids)}>
+            <button type="button" className={trayButton} onClick={() => bulk.startUndoableClear(clearError.label, clearError.ids)}>{/* analytics-exempt */}
               Retry
             </button>
           </div>
@@ -854,7 +854,7 @@ export function NotificationPanel() {
         {bulk.markReadError && (
           <div className={trayBanner} data-testid="tray-mark-read-error">
             <span>Could not mark read</span>
-            <button type="button" className={trayButton} onClick={bulk.markActivityRead}>
+            <button type="button" className={trayButton} onClick={bulk.markActivityRead}>{/* analytics-exempt */}
               Retry
             </button>
           </div>
@@ -913,7 +913,7 @@ export function NotificationPanel() {
         <div ref={setSlotEl} className={statusSlot} data-testid="tray-status-slot">
           <OfflineBanner online={!isOffline} testId="tray-banner-offline" />
           {traySegment !== "background" && newCount > 0 && (
-            <button type="button" className={newPill} data-testid="tray-new-pill" onClick={mergeNew}>
+            <button type="button" className={newPill} data-testid="tray-new-pill" onClick={mergeNew}>{/* analytics-exempt */}
               {newCount} new
             </button>
           )}

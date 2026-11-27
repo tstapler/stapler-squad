@@ -44,7 +44,18 @@ export interface ApprovalDisplay {
   ruleScope?: string;
 }
 
-export interface ActionRowProps {
+interface QuestionCardRowProps {
+  /** The durable question behind this row: renders the shared question form and its delivery line. */
+  guidance?: PlainGuidanceRequest;
+  /** Approvals of the same session still pending behind this row after it is decided ("Approved. 19 more waiting."). */
+  remaining?: number;
+  /** Browser-local "Mark as handled" of an Unconfirmed answer. */
+  onMarkHandled?: () => void;
+  /** The delivery row the question card shows changed. */
+  onDeliveryRow?: (view: DeliveryView | null) => void;
+}
+
+export interface ActionRowProps extends QuestionCardRowProps {
   /** Scopes sessionStorage drafts and the polite-region key. */
   rowId: string;
   descriptors: NotificationActionDescriptor[];
@@ -67,14 +78,6 @@ export interface ActionRowProps {
   needsYou?: boolean;
   /** Overrides the shared connectivity reason (Offline, Reconnecting, Updating...). */
   disabledReason?: string;
-  /** The durable question behind this row: renders the shared question form and its delivery line. */
-  guidance?: PlainGuidanceRequest;
-  /** Approvals of the same session still pending behind this row after it is decided ("Approved. 19 more waiting."). */
-  remaining?: number;
-  /** Browser-local "Mark as handled" of an Unconfirmed answer. */
-  onMarkHandled?: () => void;
-  /** The delivery row the question card shows changed. */
-  onDeliveryRow?: (view: DeliveryView | null) => void;
 }
 
 type Step = "row" | "deny" | "confirm" | "retry-anyway" | "more" | "create-rule";
