@@ -304,7 +304,7 @@ func (s *SessionService) UpdateSession(
 		if instance.AutonomousMode {
 			s.StartAutonomousDriverForInstance(instance)
 		} else {
-			s.AutonomousSvc.stopAndDeregisterDriver(instance.Title)
+			s.AutonomousSvc.StopDriverForSession(instance.Title)
 		}
 		updatedFields = append(updatedFields, "autonomous_mode")
 		sideEffectChanged = true

@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 // Nudge-versus-respawn decision tests (Tasks 3.2.3b-3.2.3d): every observed
 // state, every flag combination, every nudge failure class, and a stop that
@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
@@ -84,7 +85,7 @@ func newStallNudgeFixture(t *testing.T, title string, itemStatus domain.BacklogS
 	base.itemID, base.itemSes = item.ID, is.ID
 
 	f := &stallNudgeFixture{charFixture: base, nudger: &fakeStallNudger{}, respawner: newSignalingRespawner()}
-	svc := base.svc.AutonomousSvc
+	svc := base.svc
 	svc.SetStallNudger(f.nudger)
 	svc.SetNudgeFlagReaders(func() bool { return diagnoseOn }, func() bool { return stallOn })
 	svc.SetAutonomousStuckRespawner(f.respawner)
@@ -321,7 +322,7 @@ func TestStallRecovery_StopDuringNudgeCancelsIt(t *testing.T) {
 		t.Fatal("the nudger was never reached")
 	}
 
-	f.svc.AutonomousSvc.StopDriverForSession(f.title)
+	f.svc.StopDriverForSession(f.title)
 
 	select {
 	case <-done:
@@ -405,7 +406,7 @@ func TestStallRecovery_CancelledStopsNeverNudgeOrRestart(t *testing.T) {
 func TestStallRecovery_FlagTurnedOffBeforeClaimRespawns(t *testing.T) {
 	f := newStallNudgeFixture(t, "flag-flips", domain.BacklogStatusInProgress, true, true)
 	var reads int
-	f.svc.AutonomousSvc.SetNudgeFlagReaders(func() bool { return true }, func() bool {
+	f.svc.SetNudgeFlagReaders(func() bool { return true }, func() bool {
 		reads++
 		return reads == 1 // on for planning, off at the claim
 	})
@@ -420,9 +421,9 @@ func TestStallRecovery_FlagTurnedOffBeforeClaimRespawns(t *testing.T) {
 // A stop landing between the last canRestart and driver registration must drop the new driver.
 func TestStallRecovery_StopDuringReattachDropsNewDriver(t *testing.T) {
 	f := newStallNudgeFixture(t, "stop-in-reattach", domain.BacklogStatusInProgress, true, true)
-	svc := f.svc.AutonomousSvc
+	svc := f.svc
 	f.restartFn = func() error {
-		svc.registerDriver(f.title, autonomous.NewAutonomousDriver(f.inst, nil, "goal", 1))
+		svc.RegisterDriver(f.title, autonomous.NewAutonomousDriver(f.inst, nil, "goal", 1))
 		f.inst.SetAutonomousMode(false, "")
 		return nil
 	}
@@ -440,7 +441,7 @@ func TestStallRecovery_StopDuringReattachDropsNewDriver(t *testing.T) {
 // A delivered nudge followed by a stop before re-attach reports the delivery and attaches nothing.
 func TestStallRecovery_StopAfterDeliveryDetaches(t *testing.T) {
 	f := newStallNudgeFixture(t, "detached", domain.BacklogStatusInProgress, true, true)
-	f.svc.AutonomousSvc.SetStallNudger(stopAfterNudge{inner: f.nudger, inst: f.inst})
+	f.svc.SetStallNudger(stopAfterNudge{inner: f.nudger, inst: f.inst})
 
 	f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
 
@@ -478,7 +479,7 @@ func TestStallRecovery_ItemMovedOnBeforeMarkStuckSkipsRecovery(t *testing.T) {
 	f := newStallNudgeFixture(t, "item-moved", domain.BacklogStatusInProgress, true, true)
 	moved := false
 	// The flag reader runs during planning, after the item was loaded and before MarkStuck.
-	f.svc.AutonomousSvc.SetNudgeFlagReaders(func() bool {
+	f.svc.SetNudgeFlagReaders(func() bool {
 		if !moved {
 			moved = true
 			_, err := f.storage.RawTransitionBacklogItemStatus(context.Background(), f.itemID, domain.BacklogStatusReview, nil, "test")
@@ -499,13 +500,13 @@ func TestOnAutonomousDriverComplete_ReplacedDriverCallbackLeavesNewDriver(t *tes
 	f := newCharFixture(t, "replaced-driver", instance.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
-	svc := f.svc.AutonomousSvc
+	svc := f.svc
 	oldDriver := autonomous.NewAutonomousDriver(f.inst, nil, "goal", 1)
 	newDriver := autonomous.NewAutonomousDriver(f.inst, nil, "goal", 1)
 	autonomous.TestSetAutonomousDriverRunID(t, oldDriver, 1)
 	autonomous.TestSetAutonomousDriverRunID(t, newDriver, 2)
-	svc.registerDriver(f.title, oldDriver)
-	svc.registerDriver(f.title, newDriver)
+	svc.RegisterDriver(f.title, oldDriver)
+	svc.RegisterDriver(f.title, newDriver)
 
 	out := stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError)
 	out.RunID = 1

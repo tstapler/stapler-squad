@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 // Characterization tests for onAutonomousDriverComplete's work-role stall arm.
 // They were written green against the pre-extraction code (Task 3.1.1a) and pin
@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
@@ -23,7 +24,7 @@ import (
 
 // charFixture is one backlog-linked autonomous session with a subscribed event channel.
 type charFixture struct {
-	svc     *SessionService
+	svc     *AutonomousOrchestrationService
 	storage *session.Storage
 	inst    *instance.Instance
 	title   string
@@ -44,8 +45,7 @@ func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status domain.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	bus := events.NewEventBus(100)
-	svc := NewSessionService(storage, bus)
-	t.Cleanup(func() { svc.Shutdown() })
+	svc := newTestService(storage, bus)
 	svc.SetLifecycleContext(ctx)
 
 	inst := &instance.Instance{
@@ -54,7 +54,7 @@ func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status domain.
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
+	svc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	ch, _ := bus.Subscribe(ctx)
 	return &charFixture{svc: svc, storage: storage, inst: inst, title: title, ch: ch}
@@ -73,7 +73,7 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus domain.B
 }
 
 func (f *charFixture) complete(outcome autonomous.AutonomousDriverOutcome) {
-	f.svc.AutonomousSvc.OnAutonomousDriverComplete(f.title, outcome)
+	f.svc.OnAutonomousDriverComplete(f.title, outcome)
 }
 
 // drain returns every event already published; the callback publishes synchronously.

@@ -1,4 +1,4 @@
-package services
+package autonomysvc
 
 // Observability of every stop: the stuck row's context, the single log line and
 // the notification body (Story 3.1.4).
@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/autonomous"

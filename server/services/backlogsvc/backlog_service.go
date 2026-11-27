@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
@@ -99,7 +100,7 @@ type BacklogService struct {
 	oneShotRunner PRRunner
 	// staleWorkInspector snapshots and nudges a stale work session before
 	// RemediateStaleWorkSession restarts it. nil keeps the plain restart.
-	staleWorkInspector services.StaleWorkInspector
+	staleWorkInspector autonomysvc.StaleWorkInspector
 	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
 	// (the default — Jules disabled, or its dependencies unresolvable at
 	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
@@ -693,7 +694,7 @@ func (s *BacklogService) Shutdown() {
 }
 
 // SetStaleWorkInspector wires the optional inspect-and-nudge step of RemediateStaleWorkSession.
-func (s *BacklogService) SetStaleWorkInspector(i services.StaleWorkInspector) {
+func (s *BacklogService) SetStaleWorkInspector(i autonomysvc.StaleWorkInspector) {
 	s.staleWorkInspector = i
 }
 

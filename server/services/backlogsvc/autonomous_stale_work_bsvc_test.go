@@ -7,21 +7,23 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-type fakeStaleInspector struct{ result services.StaleWorkDisposition }
+type fakeStaleInspector struct {
+	result autonomysvc.StaleWorkDisposition
+}
 
-func (f fakeStaleInspector) InspectStaleWork(context.Context, string, *backlogdto.BacklogItemData) services.StaleWorkDisposition {
+func (f fakeStaleInspector) InspectStaleWork(context.Context, string, *backlogdto.BacklogItemData) autonomysvc.StaleWorkDisposition {
 	return f.result
 }
 
 func TestRemediateStaleWorkSession_should_leaveSessionOpen_When_InspectorNudgesOrSkips(t *testing.T) {
-	for name, disp := range map[string]services.StaleWorkDisposition{"nudged": services.StaleWorkNudged, "skipped": services.StaleWorkSkipped, "respawn": services.StaleWorkRespawn} {
+	for name, disp := range map[string]autonomysvc.StaleWorkDisposition{"nudged": autonomysvc.StaleWorkNudged, "skipped": autonomysvc.StaleWorkSkipped, "respawn": autonomysvc.StaleWorkRespawn} {
 		t.Run(name, func(t *testing.T) {
 			storage := svctest.CreateTestStorage(t)
 			creator := &mockSessionCreator{}
@@ -41,7 +43,7 @@ func TestRemediateStaleWorkSession_should_leaveSessionOpen_When_InspectorNudgesO
 
 			sessions, err := storage.ListItemSessions(t.Context(), itemID)
 			require.NoError(t, err)
-			restarted := disp == services.StaleWorkRespawn
+			restarted := disp == autonomysvc.StaleWorkRespawn
 			assert.Equal(t, restarted, slices.Contains(stopper.KilledPaneUUIDs, "stale-uuid"))
 			assert.Equal(t, restarted, len(creator.calls) == 1)
 			for _, is := range sessions {

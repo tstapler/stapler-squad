@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -48,7 +49,7 @@ func newHibernationIdentityFixture(t *testing.T) (*SessionService, *instance.Ins
 	poller.AddInstance(canonical)
 	svc := &SessionService{
 		storage: store, eventBus: bus, registry: reg, ReviewQueuePoller: poller,
-		AutonomousSvc: &AutonomousOrchestrationService{},
+		AutonomousSvc: &autonomysvc.AutonomousOrchestrationService{},
 	}
 	release := instance.HoldHibernationTeardownForTest(t, canonical)
 	t.Cleanup(func() {

@@ -1,10 +1,11 @@
-package services
+package autonomysvc
 
 import (
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 )
