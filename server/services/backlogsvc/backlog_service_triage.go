@@ -2463,7 +2463,10 @@ func (s *BacklogService) spawnPRFixSession(ctx context.Context, item *backlogdto
 	// harder-to-diagnose collision (the PR #157 pattern: a branch drifted from main
 	// with nobody proactively resyncing it until it hit a hard conflict). Never
 	// blocks the spawn — any failure here is logged and swallowed.
-	if syncNote := s.syncPRBranchWithMain(ctx, itemID, sessions); syncNote != "" {
+	// A PR in another repo has no branch here to sync.
+	if repo, cross := instance.CrossRepoPR(item.PrURL, item.RepoPath); cross {
+		fixContext = fmt.Sprintf("The PR is in %s, not this workspace's repository.\n\n%s", repo, fixContext)
+	} else if syncNote := s.syncPRBranchWithMain(ctx, itemID, sessions); syncNote != "" {
 		fixContext = syncNote + "\n\n" + fixContext
 	}
 

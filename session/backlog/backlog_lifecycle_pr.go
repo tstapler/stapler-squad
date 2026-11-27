@@ -699,6 +699,10 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 	// Create (or locate existing) PR.
 	var prURL string
 	var prNumber int
+	if repo, cross := instance.CrossRepoPR(item.PrURL, wt.RepoPath); cross && item.PrNumber > 0 {
+		l.keepCrossRepoPR(ctx, item, repo)
+		return
+	}
 	reuse, reuseErr := l.canReuseTrackedPR(ctx, item, wt)
 	if reuseErr != nil {
 		l.stayInReviewAndNotify(ctx, item.ID, item.Title, "could not verify the tracked PR", reuseErr)
@@ -787,14 +791,6 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 	// operator must merge it manually, so this needs a notification, not just a log line
 	// (same silent-failure pattern found and fixed elsewhere in this codebase — see
 	// docs/tasks/backlog-feature-improvement.md).
-	// EnablePRAutoMerge and RequestCopilotReview act on the workspace repo, where
-	// a cross-repo PR's number belongs to an unrelated PR.
-	if _, cross := instance.CrossRepoPR(prURL, wt.RepoPath); cross {
-		if transErr := l.resolveToPRPending(ctx, item.ID, "", "pushAndCreatePR"); transErr != nil {
-			l.handlePRPendingTransitionFailed(ctx, item.ID, "pushAndCreatePR", transErr)
-		}
-		return
-	}
 	preflightSent := l.autoMergePreflight(wt.RepoPath, item.ID)
 	if autoErr := g.EnablePRAutoMerge(ctx, prNumber); autoErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR auto-merge item=%s pr=%d: %v", item.ID, prNumber, autoErr)
@@ -833,6 +829,40 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 		return
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
+}
+
+// keepCrossRepoPR leaves a PR from another repo tracked as it is. Pushing,
+// replacing or auto-merging it from the workspace repo would act on the wrong
+// repo, where its number belongs to an unrelated PR.
+func (l *BacklogLifecycleListener) keepCrossRepoPR(ctx context.Context, item *backlogdto.BacklogItemData, repo github.RepoRef) {
+	if transErr := l.resolveToPRPending(ctx, item.ID, "", "pushAndCreatePR"); transErr != nil {
+		l.handlePRPendingTransitionFailed(ctx, item.ID, "pushAndCreatePR", transErr)
+		return
+	}
+	l.notify(item.ID,
+		"Auto-merge not enabled",
+		fmt.Sprintf("%s — PR #%d is in %s, not this workspace's repo. Merge it there once checks pass.", item.Title, item.PrNumber, repo),
+		8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+		false, true, // urgent, important
+	)
+}
+
+// holdUnverifiedCrossRepoPR stops another repo's PR feedback from reaching an
+// autonomous session unless the PR verified as the item's; it notifies instead,
+// at most once per claimPreflight window.
+func (l *BacklogLifecycleListener) holdUnverifiedCrossRepoPR(item *ent.BacklogItem, prURL string, verified bool) bool {
+	if _, cross := instance.CrossRepoPR(prURL, item.RepoPath); !cross || verified {
+		return false
+	}
+	if l.claimPreflight("cross-repo-unverified:" + item.ID.String() + ":" + prURL) {
+		l.notify(item.ID.String(),
+			"Cross-repo PR needs you",
+			fmt.Sprintf("%s — %s is closed or failing, but nothing ties it to this item's work, so no fix session was started.", item.Title, prURL),
+			8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, true, // urgent, important
+		)
+	}
+	return true
 }
 
 // canReuseTrackedPR reports whether pushAndCreatePR may reuse the item's recorded PR.
@@ -1903,8 +1933,12 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: PR #%d closed without merging but no PRFixSpawner configured", item.ID, closedPrNum)
 			return
 		}
+		verified := l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, closedPrURL, closedPrNum)
+		if l.holdUnverifiedCrossRepoPR(item, closedPrURL, verified) {
+			return
+		}
 		fixCtx := fmt.Sprintf("PR #%d (%s) was closed without merging. Investigate why, address any concerns, and open a fresh PR.", closedPrNum, closedPrURL)
-		if !l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, closedPrURL, closedPrNum) {
+		if !verified {
 			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
@@ -2045,8 +2079,12 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: CI/review issues found but no PRFixSpawner configured", item.ID)
 		return
 	}
+	verified := l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, item.PrURL, item.PrNumber)
+	if l.holdUnverifiedCrossRepoPR(item, item.PrURL, verified) {
+		return
+	}
 	fixCtx := fmt.Sprintf("PR #%d (%s) needs fixes:\n\n%s", item.PrNumber, item.PrURL, prStatus.FeedbackText)
-	if !l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, item.PrURL, item.PrNumber) {
+	if !verified {
 		fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress for PR fix (CI=%v, reviews=%v, conflict=%v, feedback=%v)",

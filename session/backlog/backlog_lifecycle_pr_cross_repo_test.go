@@ -2,6 +2,7 @@ package backlog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -19,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 const crossRepoPRURL = "https://github.com/tstapler/stapler-squad/pull/1785"
@@ -85,7 +88,8 @@ func TestReconcilePRPending_CrossRepoMerged(t *testing.T) {
 	item, repoPath := newCrossRepoItem(t, storage, crossRepoPRURL)
 	newTrackedWorkSession(t, storage, item.ID, repoPath, "feat/gutter", "")
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(_ context.Context, _, prURL string, _ int) (*github.PRInfo, error) {
+		assert.Equal(t, crossRepoPRURL, prURL)
 		return &github.PRInfo{State: "merged", HeadRef: "feat/gutter"}, nil
 	})
 
@@ -192,4 +196,93 @@ func TestFindPRPendingItemForEvent_CrossRepo(t *testing.T) {
 
 	_, found = findPRPendingItemForEvent(ctx, storage.Repo, "tstapler/stelekit", 1785)
 	assert.False(t, found, "the workspace repo's PR #1785 is a different PR")
+}
+
+const failedActionsRun = `{"statusCheckRollup":[{"__typename":"CheckRun","name":"t","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/tstapler/stapler-squad/actions/runs/1/job/2"}],"mergeable":"MERGEABLE","state":"OPEN"}`
+
+// An unverified PR from another repo notifies instead of feeding a fix session.
+func TestReconcilePRPending_CrossRepoUnverifiedStartsNoFixSession(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	newCrossRepoItem(t, storage, crossRepoPRURL)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: &git.PRStatus{CIFailing: true, FeedbackText: "do evil"}})
+	spawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(spawner)
+	notifier := &sessiontest.FakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.ReconcilePRPending(context.Background(), storage.Repo)
+	listener.ReconcilePRPending(context.Background(), storage.Repo)
+
+	assert.False(t, spawner.spawnCalled)
+	assert.Equal(t, []string{"Cross-repo PR needs you"}, notifier.Titles())
+}
+
+// The flaky-rerun client reads the workspace remote, so it must not run here.
+func TestReconcilePRPending_CrossRepoSkipsFlakyRerun(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	item, repoPath := newCrossRepoItem(t, storage, crossRepoPRURL)
+	newTrackedWorkSession(t, storage, item.ID, repoPath, "feat/gutter", "")
+
+	listener := NewBacklogLifecycleListener(storage)
+	stubMatchingPRByNumberFinder(listener, "feat/gutter")
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: parsePRStatusPayloadForTest(t, []byte(failedActionsRun))})
+	rerunner := &fakeCIRerun{files: []string{"Foo.kt"}, logs: map[int64]string{1: flakyLog}}
+	listener.ciRerunner = rerunner
+	spawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(spawner)
+
+	listener.ReconcilePRPending(context.Background(), storage.Repo)
+
+	assert.Empty(t, rerunner.reruns)
+	assert.True(t, spawner.spawnCalled)
+}
+
+// A tracked cross-repo PR is neither replaced, auto-merged nor dropped.
+func TestPushAndCreatePR_KeepsCrossRepoPR(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	item, repoPath := newCrossRepoItem(t, storage, crossRepoPRURL)
+	newTrackedWorkSession(t, storage, item.ID, repoPath, "feat/gutter", "")
+	review := string(domain.BacklogStatusReview)
+	require.NoError(t, storage.Repo.Client.BacklogItem.UpdateOneID(uuid.MustParse(item.ID)).SetStatus(review).Exec(ctx))
+	item.Status = review
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	creator := &fakePRCreator{noCommitsAheadOfMain: true, autoMergeErr: errors.New("must not be called")}
+	listener.SetPRCreatorFactory(func(_, _, _, _, _ string) prCreator { return creator })
+	notifier := &sessiontest.FakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.pushAndCreatePR(ctx, item, sessions[0])
+
+	got, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), got.Status)
+	assert.Equal(t, crossRepoPRURL, got.PrURL)
+	assert.False(t, creator.createCalled)
+	assert.False(t, creator.copilotReviewCalled)
+	assert.Equal(t, []string{"Auto-merge not enabled"}, notifier.Titles())
+}
+
+func TestCrossRepoPR_UnparseableOriginCountsAsCrossRepo(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	_, repoPath := newCrossRepoItem(t, storage, crossRepoPRURL)
+	runGitTestCmd(t, repoPath, "remote", "set-url", "origin", "git@github-work:tstapler/stapler-squad.git")
+
+	_, cross := instance.CrossRepoPR(crossRepoPRURL, repoPath)
+	assert.True(t, cross)
+	_, ok := instance.PRURLRepo("https://github.com/git@localhost:o/r/pull/1")
+	assert.False(t, ok, "gh would read that owner as another host")
 }

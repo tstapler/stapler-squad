@@ -585,7 +585,7 @@ func GetPRByNumber(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, err
 	}
 
 	wantFullName := owner + "/" + repo
-	if prResp.Base.Repo.FullName != wantFullName {
+	if !strings.EqualFold(prResp.Base.Repo.FullName, wantFullName) { // GitHub names ignore case
 		return nil, fmt.Errorf("PR #%d base.repo.full_name %q does not match requested repo %q",
 			prNumber, prResp.Base.Repo.FullName, wantFullName)
 	}
