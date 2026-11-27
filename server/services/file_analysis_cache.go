@@ -14,8 +14,7 @@ import (
 const (
 	analysisCacheEntries     = 32
 	analysisDefaultParallel  = 1
-	rangeHashCapBytes        = 64 << 20 // ADR-036 S-T2: hash_cap_bytes confirmed
-	rangeReadCeilingBytes    = 1 << 30  // ADR-036 S-T2: read ceiling confirmed
+	rangeReadCeilingBytes    = 1 << 30 // ADR-036 S-T2: read ceiling confirmed
 	analysisStateUnspecified = sessionv1.FileAnalysisState_FILE_ANALYSIS_STATE_UNSPECIFIED
 	analysisStatePending     = sessionv1.FileAnalysisState_FILE_ANALYSIS_STATE_PENDING
 	analysisStateReady       = sessionv1.FileAnalysisState_FILE_ANALYSIS_STATE_READY

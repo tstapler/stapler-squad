@@ -12,12 +12,14 @@ import (
 
 // filesViewerTestFiles is the fixed list of files-viewer test files the hygiene
 // guard scans (BUG-067: they must not make the server/services -race suite slower).
-// Files that do not exist yet are skipped so the list can name the whole plan.
+// Every entry must exist, so a moved file cannot silently drop out of the scan.
 var filesViewerTestFiles = []string{
-	"content_search_test.go",
-	"content_search_handler_test.go",
-	"content_search_fixture_test.go",
-	"content_search_bench_test.go",
+	"contentsearch/content_search_test.go",
+	"contentsearch/content_search_handler_test.go",
+	"contentsearch/content_search_fixture_test.go",
+	"contentsearch/content_search_bench_test.go",
+	"content_search_golden_test.go",
+	"files_fixtures_test.go",
 	"file_atomic_test.go",
 	"file_write_test.go",
 	"file_write_corpus_test.go",
@@ -80,9 +82,6 @@ func TestFilesViewerGoTests_ShouldNotCallCreateTestStorageOrStartTmux_And_ShortS
 
 	for _, name := range filesViewerTestFiles {
 		src, err := os.ReadFile(name)
-		if os.IsNotExist(err) {
-			continue
-		}
 		require.NoError(t, err)
 		require.Empty(t, scanFilesTestHygiene(name, string(src)))
 	}

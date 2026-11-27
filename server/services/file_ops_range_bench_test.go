@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/contentsearch"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
@@ -74,7 +75,7 @@ func BenchmarkRangeRead(b *testing.B) {
 	}
 }
 
-// BenchmarkLargeFileSearch searches one 63 MiB file (under rangeHashCapBytes) with large_files on, through the production walker.
+// BenchmarkLargeFileSearch searches one 63 MiB file (under fsops.RangeHashCapBytes) with large_files on, through the production walker.
 func BenchmarkLargeFileSearch(b *testing.B) {
 	dir := b.TempDir()
 	transportFile(b, dir, lineStyles[0], 63)
@@ -83,13 +84,13 @@ func BenchmarkLargeFileSearch(b *testing.B) {
 		b.Fatal(err)
 	}
 	defer func() { _ = r.Close() }()
-	opts := literalOpts(searchBenchQuery)
+	opts := contentsearch.SearchOptions{Pattern: searchBenchQuery, Match: contentsearch.MatchLiteral, Case: contentsearch.CaseSensitive, Word: contentsearch.WordAny}
 	opts.LargeFiles = true
 	b.SetBytes(63 * mib)
 	b.ReportAllocs()
 	for b.Loop() {
 		matches := 0
-		stats, err := NewWalkSearcher().Search(context.Background(), r.FS(), opts, func(ms []SearchMatch) error { matches += len(ms); return nil })
+		stats, err := contentsearch.NewWalkSearcher().Search(context.Background(), r.FS(), opts, func(ms []contentsearch.SearchMatch) error { matches += len(ms); return nil })
 		if err != nil {
 			b.Fatal(err)
 		}

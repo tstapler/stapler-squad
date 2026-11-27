@@ -1,4 +1,4 @@
-package services
+package contentsearch
 
 import (
 	"bufio"
@@ -28,6 +28,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // writeTree writes files (slash paths) under a fresh temp dir and returns the dir and a
@@ -775,7 +776,7 @@ func TestContentSearch_ShouldFindMatchIn40MbFile_When_LargeFilesTrue_And_ReportS
 
 	t.Run("file past the raised cap is reported", func(t *testing.T) {
 		d := t.TempDir()
-		writeLogFile(t, filepath.Join(d, "over.log"), rangeHashCapBytes+(1<<20), 5_200_000, marker)
+		writeLogFile(t, filepath.Join(d, "over.log"), fsops.RangeHashCapBytes+(1<<20), 5_200_000, marker)
 		opts := literalOpts(marker)
 		opts.LargeFiles = true
 		got, stats := runSearch(t, openRootFS(t, d), opts)
@@ -795,6 +796,12 @@ func TestNewSearchOptions_ShouldCarryLargeFiles_When_RequestSetsIt(t *testing.T)
 	opts, err := NewSearchOptions(&sessionv1.SearchOptions{Pattern: "needle", LargeFiles: true})
 	require.NoError(t, err)
 	assert.True(t, opts.LargeFiles)
-	assert.EqualValues(t, rangeHashCapBytes, opts.fileCap())
+	assert.EqualValues(t, fsops.RangeHashCapBytes, opts.fileCap())
 	assert.EqualValues(t, searchFileCap, literalOpts("needle").fileCap())
+}
+
+func TestContentSearch_ShouldNotMatchAtomicTempFiles(t *testing.T) {
+	_, root := writeTree(t, map[string]string{"a.txt": "needle\n", ".a.txt.ssq-tmp-abc": "needle\n"})
+	got, _ := runSearch(t, root, literalOpts("needle"))
+	assert.Equal(t, []string{"a.txt"}, matchedPaths(got))
 }

@@ -219,11 +219,18 @@ func goldenErr(err error) string {
 	return out
 }
 
+// goldenCallTimeout bounds every wire call, so a cap that stops refusing fails the test instead of hanging it.
+const goldenCallTimeout = 15 * time.Second
+
 // search returns the order-independent description of one SearchContent call.
 func (r *goldenRig) search(msg *sessionv1.SearchContentRequest) string {
 	r.t.Helper()
-	st, err := r.client.SearchContent(context.Background(), connect.NewRequest(msg))
-	require.NoError(r.t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), goldenCallTimeout)
+	defer cancel()
+	st, err := r.client.SearchContent(ctx, connect.NewRequest(msg))
+	if !assert.NoError(r.t, err) {
+		return err.Error()
+	}
 	var lines []string
 	var tail []string
 	for st.Receive() {
@@ -348,7 +355,9 @@ func (r *goldenRig) recordBusy(out *bytes.Buffer) {
 }
 
 func (r *goldenRig) readRange(session string) error {
-	_, err := r.client.ReadFileRange(context.Background(), connect.NewRequest(&sessionv1.ReadFileRangeRequest{SessionId: session, Path: "src/a.go", Anchor: &sessionv1.ReadFileRangeRequest_Lines{Lines: &sessionv1.LineAnchor{AnchorLine: 1, WantLines: 2}}}))
+	ctx, cancel := context.WithTimeout(context.Background(), goldenCallTimeout)
+	defer cancel()
+	_, err := r.client.ReadFileRange(ctx, connect.NewRequest(&sessionv1.ReadFileRangeRequest{SessionId: session, Path: "src/a.go", Anchor: &sessionv1.ReadFileRangeRequest_Lines{Lines: &sessionv1.LineAnchor{AnchorLine: 1, WantLines: 2}}}))
 	return err
 }
 

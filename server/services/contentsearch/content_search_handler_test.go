@@ -1,4 +1,4 @@
-package services
+package contentsearch
 
 import (
 	"context"
@@ -81,9 +81,12 @@ type handlerRig struct {
 func newRig(t testing.TB, ws dirWorkspaces) *handlerRig {
 	t.Helper()
 	tel := &recordingTelemetry{}
-	ops := NewFileOps(FilePolicy{Workspace: ws, Telemetry: tel}, fsops.OsRootBackend{})
-	h := newSearchHandler(ops, testFilesFlags().ViewerV2)
-	h.viewerV2 = func(context.Context) bool { return true }
+	h := NewSearchHandler(Ports{
+		Workspace: ws,
+		Backend:   fsops.OsRootBackend{},
+		Telemetry: func() fsops.FilesTelemetry { return tel },
+		ViewerV2:  func(context.Context) bool { return true },
+	})
 	return &handlerRig{h: h, tel: tel}
 }
 
@@ -451,7 +454,7 @@ func (h *SearchHandler) gateWaiting() int {
 	return len(h.gate.waiters)
 }
 
-func (l *ipLimiter) heldTotal() int {
+func (l *IPLimiter) heldTotal() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.total
@@ -518,7 +521,7 @@ func TestStreamLimiter_ShouldNotRefuseSupersedingSearch_When_SameIpHoldsThreeAnd
 }
 
 func TestStreamLimiter_ShouldEnforceTotalCap_And_AcceptNewStream_When_OneOfThreeEnds(t *testing.T) {
-	l := newIPLimiter(ipCaps{PerHost: maxSearchStreamsPerOrigin, Total: maxSearchStreamsTotal})
+	l := NewIPLimiter(IPCaps{PerHost: maxSearchStreamsPerOrigin, Total: maxSearchStreamsTotal})
 	var releases []func()
 	for i := 0; i < maxSearchStreamsTotal; i++ {
 		rel, why := l.Acquire(fmt.Sprintf("10.0.0.%d:1", i))
@@ -535,7 +538,7 @@ func TestStreamLimiter_ShouldEnforceTotalCap_And_AcceptNewStream_When_OneOfThree
 	rel()
 	assert.Equal(t, maxSearchStreamsTotal-1, l.heldTotal())
 
-	h := newIPLimiter(ipCaps{PerHost: 3, Total: 8})
+	h := NewIPLimiter(IPCaps{PerHost: 3, Total: 8})
 	for i := 0; i < 3; i++ {
 		_, why := h.Acquire("1.2.3.4:1")
 		require.Empty(t, why)
@@ -546,7 +549,7 @@ func TestStreamLimiter_ShouldEnforceTotalCap_And_AcceptNewStream_When_OneOfThree
 
 func TestStreamLimiter_ShouldKeepCountersWithinCaps_When_FiftyGoroutinesOpenAndCloseUnderRace(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	l := newIPLimiter(ipCaps{PerHost: 3, Total: 8})
+	l := NewIPLimiter(IPCaps{PerHost: 3, Total: 8})
 	var wg sync.WaitGroup
 	var violations atomic.Int64
 	for g := 0; g < 50; g++ {
@@ -560,7 +563,7 @@ func TestStreamLimiter_ShouldKeepCountersWithinCaps_When_FiftyGoroutinesOpenAndC
 					continue
 				}
 				l.mu.Lock()
-				if l.total < 0 || l.total > 8 || l.perHost[remoteHost(addr)] > 3 {
+				if l.total < 0 || l.total > 8 || l.perHost[RemoteHost(addr)] > 3 {
 					violations.Add(1)
 				}
 				l.mu.Unlock()
@@ -575,18 +578,17 @@ func TestStreamLimiter_ShouldKeepCountersWithinCaps_When_FiftyGoroutinesOpenAndC
 }
 
 func TestStreamLimiter_ShouldKeyOnRemoteAddr_And_IgnoreForwardedHeaders(t *testing.T) {
-	assert.Equal(t, remoteHost("1.2.3.4:5000"), remoteHost("1.2.3.4:6000"))
-	assert.NotEqual(t, remoteHost("1.2.3.4:5000"), remoteHost("1.2.3.5:5000"))
-	assert.Equal(t, "::1", remoteHost("[::1]:80"))
+	assert.Equal(t, RemoteHost("1.2.3.4:5000"), RemoteHost("1.2.3.4:6000"))
+	assert.NotEqual(t, RemoteHost("1.2.3.4:5000"), RemoteHost("1.2.3.5:5000"))
+	assert.Equal(t, "::1", RemoteHost("[::1]:80"))
 
 	rig := newRig(t, dirWorkspaces{"s1": fillWorktree(t, map[string]string{"a.txt": "x\n"})})
 	gs := newGatedSearcher()
 	rig.h.searcher = gs
 	rig.h.gate = newWalkGate(maxSearchStreamsTotal)
 	gs.emitFirst = true
-	fs := &FileService{ops: rig.h.ops, search: rig.h}
 	mux := http.NewServeMux()
-	mux.Handle(sessionv1connect.NewSessionServiceHandler(&searchOnlyService{files: fs}))
+	mux.Handle(sessionv1connect.NewSessionServiceHandler(&searchOnlyService{search: rig.h}))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
@@ -626,11 +628,11 @@ func TestStreamLimiter_ShouldKeyOnRemoteAddr_And_IgnoreForwardedHeaders(t *testi
 
 type searchOnlyService struct {
 	sessionv1connect.UnimplementedSessionServiceHandler
-	files *FileService
+	search *SearchHandler
 }
 
 func (s *searchOnlyService) SearchContent(ctx context.Context, req *connect.Request[sessionv1.SearchContentRequest], st *connect.ServerStream[sessionv1.SearchContentResponse]) error {
-	return s.files.SearchContent(ctx, req, st)
+	return s.search.Handle(ctx, req.Msg, req.Peer().Addr, st.Send)
 }
 
 func TestSearchContentHandler_ShouldLogQueryLenNotText_When_SearchRuns(t *testing.T) {
@@ -748,7 +750,7 @@ func TestSearchHandler_ShouldKeepRunningSearch_When_RefusedRequestForSameKeyCome
 	gs := newGatedSearcher()
 	rig.h.searcher = gs
 	rig.h.gate = newWalkGate(4)
-	rig.h.limiter = newIPLimiter(ipCaps{PerHost: 1, Total: 1})
+	rig.h.limiter = NewIPLimiter(IPCaps{PerHost: 1, Total: 1})
 	first := make(chan error, 1)
 	go func() {
 		first <- rig.h.Handle(context.Background(), searchReq("s1", "tab", "needle"), "10.0.0.1:1", (&sink{}).send)

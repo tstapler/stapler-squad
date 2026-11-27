@@ -1,4 +1,4 @@
-package services
+package contentsearch
 
 import (
 	"context"
@@ -72,7 +72,7 @@ type SearchOptions struct {
 	Word    WordMode
 	Scope   SearchScope
 	Limits  SearchLimits
-	// LargeFiles raises the per-file cap from searchFileCap to rangeHashCapBytes under a
+	// LargeFiles raises the per-file cap from searchFileCap to fsops.RangeHashCapBytes under a
 	// per-file time budget (ADR-030 amendment 7a).
 	LargeFiles bool
 }
@@ -80,7 +80,7 @@ type SearchOptions struct {
 // fileCap is the request-scoped per-file read cap.
 func (o SearchOptions) fileCap() int64 {
 	if o.LargeFiles {
-		return rangeHashCapBytes
+		return fsops.RangeHashCapBytes
 	}
 	return searchFileCap
 }
@@ -439,7 +439,7 @@ func (t *treeWalk) skipDir(name, rel string) bool {
 	if t.opts.Scope.IncludeIgnored {
 		return false
 	}
-	return hardSkipDirs[name] || t.ignore.Ignored(rel, true)
+	return fsops.HardSkipDirs[name] || t.ignore.Ignored(rel, true)
 }
 
 func (t *treeWalk) wantFile(rel string) bool {
