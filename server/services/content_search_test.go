@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -607,14 +608,67 @@ func peakHeapGrowth(fn func()) uint64 {
 	return peak.Load()
 }
 
-func TestContentSearch_ShouldKeepPeakHeapGrowthUnder64MB_When_EveryFileMatches(t *testing.T) {
-	ceiling := uint64(64 << 20)
-	if raceDetectorOn() {
-		// The race runtime slows the GC so allocate-black garbage from the sampler's own
-		// cycle inflates HeapAlloc (observed 23-83 MiB on 5k files vs 2 MiB without -race),
-		// so the strict 64 MiB ceiling is only asserted in the non-race run.
-		ceiling = 192 << 20
+// heapCheckpointFS measures heap growth at fixed points inside a search, not on a timer:
+// a timed sample counts everything allocated while its own GC runs, which grows with the
+// process's total heap and CPU load. Every Open, Read and ReadDir takes mu, so while one
+// call measures (on a Read, with scan buffers live), the others stop at their next fs call.
+type heapCheckpointFS struct {
+	root  fs.FS
+	every int
+
+	mu          sync.Mutex
+	ops         int
+	checkpoints int
+	base, peak  uint64
+}
+
+// liveHeap collects twice so sync.Pool victim caches do not count.
+func liveHeap() uint64 {
+	runtime.GC()
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+func (c *heapCheckpointFS) checkpoint() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ops++; c.ops%c.every != 0 {
+		return
 	}
+	c.checkpoints++
+	if live := liveHeap(); live > c.base {
+		c.peak = max(c.peak, live-c.base)
+	}
+}
+
+func (c *heapCheckpointFS) Open(name string) (fs.File, error) {
+	c.checkpoint()
+	f, err := c.root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return heapCheckpointFile{File: f, c: c}, nil
+}
+
+type heapCheckpointFile struct {
+	fs.File
+	c *heapCheckpointFS
+}
+
+func (f heapCheckpointFile) Read(p []byte) (int, error) {
+	f.c.checkpoint()
+	return f.File.Read(p)
+}
+
+func (c *heapCheckpointFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	c.checkpoint()
+	return fs.ReadDir(c.root, name)
+}
+
+func TestContentSearch_ShouldKeepPeakHeapGrowthUnder64MB_When_EveryFileMatches(t *testing.T) {
+	const ceiling = uint64(64 << 20)
 	sizes := []int{5000}
 	if !testing.Short() {
 		sizes = append(sizes, 50000)
@@ -624,18 +678,23 @@ func TestContentSearch_ShouldKeepPeakHeapGrowthUnder64MB_When_EveryFileMatches(t
 		root := openRootFS(t, genFixtureTree(t, n))
 		// A match-everything query stops at the 1000-result cap; the never-matching one
 		// forces the whole tree through the scanners, which is the memory-relevant path.
-		for _, q := range []string{"a ", "zzzz-never-matches"} {
-			peak := peakHeapGrowth(func() {
-				_, err := NewWalkSearcher().Search(context.Background(), root, literalOpts(q), func([]SearchMatch) error { return nil })
-				require.NoError(t, err)
-			})
-			t.Logf("files=%d query=%q peak heap growth=%d KiB", n, q, peak/kibibyte)
-			assert.Less(t, peak, ceiling, "files=%d query=%q", n, q)
-			peaks[n] = max(peaks[n], peak)
+		// The capped query opens only a few dozen files, so it needs a shorter interval.
+		for _, run := range []struct {
+			q     string
+			every int
+		}{{"a ", 20}, {"zzzz-never-matches", 2000}} {
+			q := run.q
+			measured := &heapCheckpointFS{root: root, every: run.every, base: liveHeap()}
+			_, err := NewWalkSearcher().Search(context.Background(), measured, literalOpts(q), func([]SearchMatch) error { return nil })
+			require.NoError(t, err)
+			require.Positive(t, measured.checkpoints, "files=%d query=%q: nothing was measured", n, q)
+			t.Logf("files=%d query=%q peak heap growth=%d KiB over %d checkpoints", n, q, measured.peak/kibibyte, measured.checkpoints)
+			assert.Less(t, measured.peak, ceiling, "files=%d query=%q", n, q)
+			peaks[n] = max(peaks[n], measured.peak)
 		}
 	}
 	if big, ok := peaks[50000]; ok {
-		assert.Less(t, big, 5*max(peaks[5000], 8<<20), "heap must not scale with file count (no retained path list)")
+		assert.Less(t, big, 5*max(peaks[5000], 8<<20), "heap must not scale with file count")
 	}
 }
 
