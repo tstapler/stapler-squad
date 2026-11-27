@@ -286,11 +286,67 @@ test.describe("backlog-jump-to-session", () => {
         await page.keyboard.press("Control+k");
         await expect(page.getByRole("dialog")).toBeVisible();
         await expect(menu).toBeHidden();
+        await page.keyboard.press("Escape");
+        await expect(page.getByRole("dialog")).toBeHidden();
+
+        // Enter on a trigger that has been scrolled away must bring it back, not flash the menu.
+        await trigger.evaluate((el) => el.focus());
+        await scrollTriggerTo(5000);
+        await expect(trigger).not.toBeInViewport();
+        await page.keyboard.press("Enter");
+        await expect(trigger).toBeInViewport();
+        await expect(menu).toBeInViewport({ ratio: 1 });
       } finally {
         if (itemId) await archiveItem(request, itemId);
       }
     });
   }
+
+  test("keeps the role menu open when the loading terminal autofocuses", async ({ page, request }) => {
+    const itemTitle = `jump-to-session-autofocus-${Date.now()}`;
+    let itemId: string | undefined;
+    let realSessionId: string | undefined;
+
+    try {
+      itemId = await createInProgressItem(request, itemTitle);
+      const realSession = await client.createSession({
+        title: `jump-to-session-autofocus-target-${Date.now()}`,
+        path: "/tmp",
+        program: "bash",
+      });
+      realSessionId = realSession.id;
+      await injectItemSessions(page, itemId, [
+        { id: "e2e-work-session-entity", sessionUuid: "e2e-autofocus-work", sessionRole: "work" },
+        { id: "e2e-review-session-entity", sessionUuid: realSessionId, sessionRole: "review" },
+      ]);
+      // Holds the session fetch so the menu is open before the terminal exists.
+      let release = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      await page.route("**/api/session.v1.SessionService/GetSession", async (route) => {
+        await held;
+        await route.continue();
+      });
+
+      await openDetail(page, itemTitle);
+      await page.getByTestId("jump-to-session-button").click();
+      await page.getByTestId("jump-to-session-role-menu-trigger").click();
+      const menu = page.getByTestId("jump-to-session-role-menu");
+      await expect(menu).toBeVisible();
+      await page.evaluate(() => {
+        document.addEventListener("focusin", (e) => {
+          if ((e.target as Element).tagName === "TEXTAREA") document.body.dataset.terminalFocused = "true";
+        });
+      });
+      release();
+
+      await expect(page.locator("body[data-terminal-focused]")).toHaveCount(1, { timeout: 15000 });
+      await expect(menu).toBeVisible();
+      await expect(page.getByTestId("jump-to-session-role-item-review")).toBeFocused();
+    } finally {
+      if (realSessionId) await client.deleteSession(realSessionId, true).catch(() => {});
+      if (itemId) await archiveItem(request, itemId);
+    }
+  });
 
   test("renders a touch-sized jump button at mobile width", async ({ page, request }) => {
     const itemTitle = `jump-to-session-mobile-${Date.now()}`;

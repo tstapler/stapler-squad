@@ -1,5 +1,5 @@
 import React from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { LinkedSession } from "@/lib/hooks/useBacklogService";
@@ -199,7 +199,7 @@ describe("JumpToSessionPanel", () => {
       delete (document.documentElement as { clientHeight?: number }).clientHeight;
     });
 
-    async function openRoleMenu() {
+    async function openRoleMenu(wrapper?: React.JSXElementConstructor<{ children: React.ReactNode }>) {
       const user = userEvent.setup();
       render(
         <JumpToSessionPanel
@@ -209,7 +209,8 @@ describe("JumpToSessionPanel", () => {
           ]}
           backlogItemId="item1"
           getSession={jest.fn().mockResolvedValue(makeFullSession("w1"))}
-        />
+        />,
+        { wrapper }
       );
       await user.click(screen.getByTestId("jump-to-session-role-menu-trigger"));
       return screen.getByTestId("jump-to-session-role-menu");
@@ -241,11 +242,90 @@ describe("JumpToSessionPanel", () => {
       const outside = document.body.appendChild(document.createElement("input"));
       await openRoleMenu();
 
+      // Ctrl+K as the Omnibar sees it: a key press, then focus moves.
+      fireEvent.keyDown(screen.getAllByRole("menuitem")[0], { key: "k", ctrlKey: true });
       act(() => outside.focus());
 
       expect(screen.queryByTestId("jump-to-session-role-menu")).not.toBeInTheDocument();
       expect(outside).toHaveFocus();
       outside.remove();
+    });
+
+    it("JumpToSessionPanel_should_StayOpenAndKeepFocus_When_SomethingAutofocusesWithoutInput", async () => {
+      trigger = box(300, 20, 44, 44);
+      const user = userEvent.setup();
+      const terminal = document.body.appendChild(document.createElement("textarea"));
+      const menu = await openRoleMenu();
+      const [first, second] = screen.getAllByRole("menuitem");
+
+      act(() => terminal.focus());
+      expect(menu).toBeInTheDocument();
+      expect(first).toHaveFocus();
+
+      // Neither Tab nor a click inside the menu counts as the user leaving.
+      await user.tab();
+      await user.click(menu);
+      act(() => terminal.focus());
+      expect(menu).toBeInTheDocument();
+      expect(first).toHaveFocus();
+      expect(second).not.toHaveFocus();
+      terminal.remove();
+    });
+
+    it("JumpToSessionPanel_should_Close_When_ADialogTakesFocusWithoutInput", async () => {
+      trigger = box(300, 20, 44, 44);
+      const dialog = document.body.appendChild(document.createElement("div"));
+      dialog.setAttribute("role", "alertdialog");
+      const confirm = dialog.appendChild(document.createElement("button"));
+      await openRoleMenu();
+
+      act(() => confirm.focus());
+
+      expect(screen.queryByTestId("jump-to-session-role-menu")).not.toBeInTheDocument();
+      expect(confirm).toHaveFocus();
+      dialog.remove();
+    });
+
+    it("JumpToSessionPanel_should_CloseFromItsTrigger_When_ClickGivesTheButtonFocus", async () => {
+      trigger = box(300, 20, 44, 44);
+      const user = userEvent.setup();
+      await openRoleMenu();
+
+      await user.click(screen.getByTestId("jump-to-session-role-menu-trigger"));
+
+      expect(screen.queryByTestId("jump-to-session-role-menu")).not.toBeInTheDocument();
+    });
+
+    it("JumpToSessionPanel_should_CloseFromItsTrigger_When_ClickFocusesAnAncestorAsSafariDoes", async () => {
+      trigger = box(300, 20, 44, 44);
+      await openRoleMenu(({ children }) => <main tabIndex={-1}>{children}</main>);
+      const menuTrigger = screen.getByTestId("jump-to-session-role-menu-trigger");
+
+      // Safari's sequence: mousedown focuses <main>, not the button, then click fires.
+      fireEvent.pointerDown(menuTrigger);
+      fireEvent.mouseDown(menuTrigger);
+      act(() => screen.getByRole("main").focus());
+      fireEvent.mouseUp(menuTrigger);
+      fireEvent.click(menuTrigger);
+
+      expect(screen.queryByTestId("jump-to-session-role-menu")).not.toBeInTheDocument();
+    });
+
+    it("JumpToSessionPanel_should_ScrollTriggerIntoView_When_OpeningTheMenuOnly", async () => {
+      trigger = box(300, 20, 44, 44);
+      const scrollIntoView = jest.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      try {
+        const user = userEvent.setup();
+        await openRoleMenu();
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+        expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByTestId("jump-to-session-role-menu-trigger"));
+
+        await user.click(screen.getByTestId("jump-to-session-role-menu-trigger"));
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      } finally {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
     });
 
     it("JumpToSessionPanel_should_CycleItemsAndStayOpen_When_TabPressedInMenu", async () => {

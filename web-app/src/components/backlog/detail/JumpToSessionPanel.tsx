@@ -125,17 +125,36 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
     menuTriggerRef.current?.focus({ preventScroll: true });
   }, []);
 
-  // Not useFocusTrap: it would pull focus back, leaving this menu painted over whatever took it.
+  // Not useFocusTrap: it would pull focus back from an overlay, leaving this menu painted over it.
   useEffect(() => {
     if (!menuOpen) return;
-    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-    const onFocusIn = (e: FocusEvent) => {
-      const node = e.target as Node;
-      if (menuTriggerRef.current?.contains(node) || menuRef.current?.contains(node)) return;
-      closeMenu();
+    const focusFirstItem = () => menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    focusFirstItem();
+
+    let userActed = false;
+    const onInput = (e: Event) => {
+      // Input that only moves around inside the menu is not a reason to leave it.
+      const staysInMenu = e.type === "pointerdown" || (e as globalThis.KeyboardEvent).key === "Tab";
+      if (!(staysInMenu && menuRef.current?.contains(e.target as Node))) userActed = true;
     };
+    const onFocusIn = (e: FocusEvent) => {
+      const node = e.target as HTMLElement;
+      const trigger = menuTriggerRef.current;
+      // Safari and Mac Firefox focus an ancestor of a clicked button; closing then would reopen it.
+      if (node.contains(trigger) || menuRef.current?.contains(node)) return;
+      const dialog = node.closest('[role="dialog"], [role="alertdialog"]');
+      // Without input or a new dialog this is an autofocus, such as the terminal finishing loading.
+      if (userActed || (dialog && !dialog.contains(trigger))) closeMenu();
+      else focusFirstItem();
+    };
+    window.addEventListener("keydown", onInput, true);
+    window.addEventListener("pointerdown", onInput, true);
     document.addEventListener("focusin", onFocusIn);
-    return () => document.removeEventListener("focusin", onFocusIn);
+    return () => {
+      window.removeEventListener("keydown", onInput, true);
+      window.removeEventListener("pointerdown", onInput, true);
+      document.removeEventListener("focusin", onFocusIn);
+    };
   }, [menuOpen, closeMenu]);
 
   // IntersectionObserver also sees the trigger clipped by the detail pane's own scrolling.
@@ -212,7 +231,11 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
             // Opens/closes a disclosure menu, not an action — mirrors
             // MoveToMenu.tsx's identical untracked trigger.
             // analytics-exempt
-            onClick={() => setMenuOpen((open) => !open)}
+            onClick={(e) => {
+              // A keyboard-activated trigger can be scrolled away, which would close the menu at once.
+              if (!menuOpen) e.currentTarget.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+              setMenuOpen(!menuOpen);
+            }}
           >
             <ChevronDown size={16} aria-hidden="true" />
           </button>
