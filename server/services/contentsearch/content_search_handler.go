@@ -111,7 +111,7 @@ type Ports struct {
 }
 
 // NewSearchHandler builds the production handler with the process-wide walk and stream caps.
-// Workspace and Backend are not checked: a host with no sessions may leave them nil.
+// Workspace and Backend are not checked, so a nil one builds but panics on the first search the viewer flag lets through.
 func NewSearchHandler(ports Ports) *SearchHandler {
 	if ports.ViewerV2 == nil {
 		panic("contentsearch: NewSearchHandler requires Ports.ViewerV2")

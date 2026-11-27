@@ -35,13 +35,16 @@ func TestStreamLimiter_ShouldKeyOnWirePeerAddr_When_FileServiceServesSearchConte
 		r.RemoteAddr = r.Header.Get("X-Test-Peer") // stands in for distinct client machines
 		mux.ServeHTTP(w, r)
 	}))
-	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), goldenCallTimeout)
+	var held sync.WaitGroup
 	release := ws.arm()
-	t.Cleanup(release) // runs before srv.Close, which waits for the held handlers
+	// LIFO: open the gate, wait for the held calls so none asserts after the test, close, cancel.
+	t.Cleanup(cancel)
+	t.Cleanup(srv.Close)
+	t.Cleanup(held.Wait)
+	t.Cleanup(release)
 
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
-	ctx, cancel := context.WithTimeout(context.Background(), goldenCallTimeout)
-	t.Cleanup(cancel)
 	search := func(ctx context.Context, session, peer string, n int) error {
 		req := connect.NewRequest(&sessionv1.SearchContentRequest{
 			SessionId: session, ClientId: fmt.Sprint("tab", n),
@@ -59,7 +62,6 @@ func TestStreamLimiter_ShouldKeyOnWirePeerAddr_When_FileServiceServesSearchConte
 		return st.Err()
 	}
 
-	var held sync.WaitGroup
 	for i := range 3 {
 		held.Add(1)
 		go func() {

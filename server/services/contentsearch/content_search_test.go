@@ -403,9 +403,9 @@ func TestIgnoreMatcher_ShouldSkipCommentsBlankLinesAndOverlongLines_And_LetDeepe
 // subprocess, acceptable under prefer-go-git-over-subshells: git itself is the oracle.
 func gitCheckIgnore(t *testing.T, dir string, paths []string) map[string]bool {
 	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
+	// Fail rather than skip: Bazel would cache a skip as a pass.
+	_, err := exec.LookPath("git")
+	require.NoError(t, err, "git is required as the ignore oracle")
 	run := func(stdin string, args ...string) []byte {
 		cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"-c", "core.excludesFile=/dev/null"}, args...)...)
 		cmd.Dir = dir
@@ -804,4 +804,21 @@ func TestContentSearch_ShouldNotMatchAtomicTempFiles(t *testing.T) {
 	_, root := writeTree(t, map[string]string{"a.txt": "needle\n", ".a.txt.ssq-tmp-abc": "needle\n"})
 	got, _ := runSearch(t, root, literalOpts("needle"))
 	assert.Equal(t, []string{"a.txt"}, matchedPaths(got))
+}
+
+func TestContentSearch_ShouldSkipHardSkipDirs_When_NoGitignoreNamesThem(t *testing.T) {
+	names := []string{"node_modules", "vendor", ".tox", "__pycache__", "target", ".gradle", "dist", "build"}
+	files := map[string]string{"src/a.txt": "needle\n"}
+	for _, n := range names {
+		files[n+"/hit.txt"] = "needle\n"
+	}
+	_, root := writeTree(t, files)
+
+	got, _ := runSearch(t, root, literalOpts("needle"))
+	assert.Equal(t, []string{"src/a.txt"}, matchedPaths(got))
+
+	opts := literalOpts("needle")
+	opts.Scope.IncludeIgnored = true
+	got, _ = runSearch(t, root, opts)
+	assert.Len(t, matchedPaths(got), len(names)+1, "IncludeIgnored searches them")
 }
