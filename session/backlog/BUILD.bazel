@@ -71,6 +71,7 @@ go_test(
         "backlog_lifecycle_noop_test.go",
         "backlog_lifecycle_pr_branch_guard_test.go",
         "backlog_lifecycle_pr_characterization_test.go",
+        "backlog_lifecycle_pr_cross_repo_test.go",
         "backlog_lifecycle_pr_test.go",
         "backlog_lifecycle_pr_trigger_test.go",
         "backlog_lifecycle_stuck_test.go",

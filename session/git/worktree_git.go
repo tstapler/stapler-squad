@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -101,6 +102,10 @@ func registerGHCommandTelemetryWithMeter(meter metric.Meter) {
 	}
 }
 
+// SetGHRepo points `gh pr` and `gh run` calls at repo ("[HOST/]OWNER/REPO")
+// instead of the one gh infers from the worktree's remote.
+func (g *GitWorktree) SetGHRepo(repo string) { g.ghRepo = repo }
+
 // runGHCommand wraps a `gh` CLI invocation routed through g.commandRunner()
 // with span/metric telemetry, matching github/gh_exec.go's runGHCLICommand
 // shape for the sites that adapter can't reach (see ghCommandCallsTotal's
@@ -119,6 +124,10 @@ func (g *GitWorktree) runGHCommand(ctx context.Context, callSite string, args ..
 		attribute.String("github.call_site", callSite),
 	}
 	span.SetAttributes(attrs...)
+
+	if g.ghRepo != "" && len(args) > 0 && (args[0] == "pr" || args[0] == "run") {
+		args = append(slices.Clip(args), "--repo", g.ghRepo)
+	}
 
 	start := time.Now()
 	output, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)

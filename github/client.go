@@ -619,6 +619,9 @@ func ghRepoArg(ref RepoRef) string {
 	return fmt.Sprintf("%s/%s", ref.Owner(), ref.Repo())
 }
 
+// GHArg is ref as the value of gh's --repo flag.
+func (r RepoRef) GHArg() string { return ghRepoArg(r) }
+
 // setGHHostEnv sets GH_HOST=host on cmd's environment when host is a GitHub
 // Enterprise host. gh's --repo flag alone is not always sufficient to pick
 // the right auth context; GH_HOST is the documented way to point the whole

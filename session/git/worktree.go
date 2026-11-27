@@ -97,6 +97,9 @@ type GitWorktree struct {
 	// refBackend overrides the process-wide backend for git operations; nil means gitprovider.Backend().
 	refBackend backend.Backend
 
+	// ghRepo, when set, is the --repo value for `gh pr` and `gh run` calls.
+	ghRepo string
+
 	// retrySleep overrides the backoff sleep in the Ground-Truth Re-Query loops;
 	// nil means time.Sleep. Tests inject it to run the race winner at a loop
 	// boundary instead of on a wall-clock timer.

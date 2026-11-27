@@ -1159,7 +1159,7 @@ func parsePRStatusPayloadForTest(t *testing.T, raw []byte) *git.PRStatus {
 // factory lives on the listener instance, not a shared package var.
 func overridePRPendingChecker(t *testing.T, listener *BacklogLifecycleListener, checker *fakePRPendingChecker) {
 	t.Helper()
-	listener.SetPRPendingCheckerFactory(func(repoPath string) prPendingChecker { return checker })
+	listener.SetPRPendingCheckerFactory(func(repoPath, _ string) prPendingChecker { return checker })
 }
 
 // redirectInfoLog redirects log.InfoLog's output to a returned buffer for

@@ -143,3 +143,14 @@ func TestWithWorktreeOpener_should_CarryCallersOpener(t *testing.T) {
 	assert.Nil(t, WorktreeOpenerFromOptions())
 	assert.NotNil(t, WorktreeOpenerFromOptions(WithWorktreeOpener(realWorktreeOpener)))
 }
+
+func TestStuckReportCheckerFactory_PointsGHAtThePRsRepo(t *testing.T) {
+	for url, want := range map[string]string{
+		"https://github.com/tstapler/stapler-squad/pull/1785": "tstapler/stapler-squad",
+		"not-a-url": "",
+	} {
+		fake := &fakeWorktree{}
+		stuckReportCheckerFactory(recordingOpener(fake))("/repo", url)
+		assert.Equal(t, want, fake.ghRepo, url)
+	}
+}

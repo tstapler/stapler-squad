@@ -1,6 +1,9 @@
 package mcp
 
-import "github.com/tstapler/stapler-squad/session/git"
+import (
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
+)
 
 // Worktree is the slice of *git.GitWorktree the VCS and stuck-report tools use.
 // A fake lets those tools run without a real git checkout or the gh CLI.
@@ -29,11 +32,15 @@ func WorktreeOpenerFromOptions(opts ...CoreOption) WorktreeOpener {
 
 // stuckReportCheckerFactory adapts an opener to the stuck report's per-repo
 // factory; nil when no opener is injected.
-func stuckReportCheckerFactory(o WorktreeOpener) func(repoPath string) stuckReportPRChecker {
+func stuckReportCheckerFactory(o WorktreeOpener) func(repoPath, prURL string) stuckReportPRChecker {
 	if o == nil {
 		return nil
 	}
-	return func(repoPath string) stuckReportPRChecker {
-		return o(repoPath, repoPath, "", "", "")
+	return func(repoPath, prURL string) stuckReportPRChecker {
+		wt := o(repoPath, repoPath, "", "", "")
+		if ref, ok := instance.PRURLRepo(prURL); ok && wt != nil {
+			wt.SetGHRepo(ref.GHArg())
+		}
+		return wt
 	}
 }

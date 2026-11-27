@@ -128,6 +128,7 @@ type fakeStuckReportPRChecker struct {
 	status    *git.PRStatus
 	diffFiles []string
 	checkLogs map[git.CheckRunRef]string
+	ghRepo    string
 }
 
 func (f *fakeStuckReportPRChecker) GetPRStatus(ctx context.Context, prNumber int) (*git.PRStatus, error) {
@@ -137,6 +138,8 @@ func (f *fakeStuckReportPRChecker) GetPRStatus(ctx context.Context, prNumber int
 func (f *fakeStuckReportPRChecker) GetPRDiffFiles(ctx context.Context, prNumber int) ([]string, error) {
 	return f.diffFiles, nil
 }
+
+func (f *fakeStuckReportPRChecker) SetGHRepo(repo string) { f.ghRepo = repo }
 
 func (f *fakeStuckReportPRChecker) GetCheckRunLog(ctx context.Context, ref git.CheckRunRef) (string, error) {
 	return f.checkLogs[ref], nil
@@ -186,7 +189,7 @@ func TestGetBacklogStuckReport_CICrossCheck_FlagsOutOfDiffFailureAndSuggestsReru
 
 	handler := &backlogHandlers{
 		storage:          storage,
-		prCheckerFactory: func(string) stuckReportPRChecker { return checker },
+		prCheckerFactory: func(string, string) stuckReportPRChecker { return checker },
 	}
 	req := makeToolReq(map[string]interface{}{"item_id": item.ID})
 	result, callErr := handler.getBacklogStuckReport(ctx, req)

@@ -980,3 +980,41 @@ func TestParsePRStatusPayload_FailedRunIDs(t *testing.T) {
 		t.Fatal("non-Actions failure must report allActions=false")
 	}
 }
+
+func TestGitWorktree_PRCommands_RepoOverride(t *testing.T) {
+	t.Parallel()
+	for _, repo := range []string{"", "tstapler/stapler-squad"} {
+		spy := &gitSpyCommandRunner{runOut: []byte(`{}`)}
+		g := NewGitWorktreeFromStorageWithExecutor("/fake/repo", "/fake/worktree", "s", "b", "", WithCommandRunner(spy))
+		g.SetGHRepo(repo)
+		ctx := context.Background()
+
+		_, _ = g.IsPRMerged(ctx, 7)
+		_, _ = g.GetPRStatus(ctx, 7)
+		_, _ = g.GetPRDiffFiles(ctx, 7)
+		_ = g.ClosePR(ctx, 7, "bye")
+		_, _ = g.GetCheckRunLog(ctx, CheckRunRef{RunID: "1", JobID: "2"})
+
+		scoped := 0
+		for _, c := range spy.runCalls {
+			joined := strings.Join(c.args, " ")
+			switch {
+			case c.args[0] == "auth":
+				if strings.Contains(joined, "--repo") {
+					t.Errorf("gh auth must not take --repo: %q", joined)
+				}
+			case repo == "":
+				if strings.Contains(joined, "--repo") {
+					t.Errorf("no override, got %q", joined)
+				}
+			case !strings.HasSuffix(joined, "--repo "+repo):
+				t.Errorf("gh %q is missing --repo %s", joined, repo)
+			default:
+				scoped++
+			}
+		}
+		if repo != "" && scoped < 5 {
+			t.Errorf("scoped gh calls = %d, want at least 5: %+v", scoped, spy.runCalls)
+		}
+	}
+}
