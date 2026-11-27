@@ -112,11 +112,11 @@ func TestTaggingClassifierService_should_PreferEnv_When_EnvOverridesSet(t *testi
 }
 
 func TestTaggingClassifierService_should_LiveUpdatePoller_When_Updated(t *testing.T) {
-	svc := isolatedClassifierService(t)
+	svctest.WithIsolatedStateDir(t)
 
 	// Attach a poller with no sessions: Update must still hot-apply without error, and a
 	// later Get must report the new hierarchy (persistence + live path together).
-	svc = NewClassifierService(tagpoller.NewSessionTagClassificationPoller(nil, nil))
+	svc := NewClassifierService(tagpoller.NewSessionTagClassificationPoller(nil, nil))
 	_, err := svc.UpdateTaggingClassifierConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateTaggingClassifierConfigRequest{
 		Config: &sessionv1.TaggingClassifierConfigProto{Model: "sonnet", FallbackModels: []string{"proxy-free"}},
 	}))
