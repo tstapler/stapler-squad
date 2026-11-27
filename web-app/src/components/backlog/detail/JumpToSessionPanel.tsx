@@ -2,6 +2,7 @@
 // +feature: backlog:jump-to-session
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
@@ -10,7 +11,6 @@ import { SessionDetail } from "@/components/sessions/SessionDetail";
 import { SessionPeekModal } from "@/components/sessions/SessionPeekModal";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { useAnalytics } from "@/lib/analytics";
-import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAnchoredMenuPosition } from "@/lib/hooks/useAnchoredMenuPosition";
 import { formatDate } from "@/lib/backlog/formatDate";
 import {
@@ -67,7 +67,6 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
   const menuId = useId();
   const fetchSeqRef = useRef(0);
 
-  useFocusTrap(menuRef, menuOpen, menuTriggerRef);
   const menuPos = useAnchoredMenuPosition(menuTriggerRef, menuRef, menuOpen);
 
   const target = selectedRole
@@ -119,6 +118,47 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
   }, []);
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
+
+  // For dismissals that start inside the menu; when focus has already gone elsewhere, leave it there.
+  const closeMenuAndRefocus = useCallback(() => {
+    setMenuOpen(false);
+    menuTriggerRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Not useFocusTrap: it would pull focus back, leaving this menu painted over whatever took it.
+  useEffect(() => {
+    if (!menuOpen) return;
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    const onFocusIn = (e: FocusEvent) => {
+      const node = e.target as Node;
+      if (menuTriggerRef.current?.contains(node) || menuRef.current?.contains(node)) return;
+      closeMenu();
+    };
+    document.addEventListener("focusin", onFocusIn);
+    return () => document.removeEventListener("focusin", onFocusIn);
+  }, [menuOpen, closeMenu]);
+
+  // IntersectionObserver also sees the trigger clipped by the detail pane's own scrolling.
+  useEffect(() => {
+    const trigger = menuTriggerRef.current;
+    if (!menuOpen || !trigger || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[entries.length - 1].isIntersecting) return;
+      if (menuRef.current?.contains(document.activeElement)) closeMenuAndRefocus();
+      else closeMenu();
+    });
+    observer.observe(trigger);
+    return () => observer.disconnect();
+  }, [menuOpen, closeMenu, closeMenuAndRefocus]);
+
+  const handleMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") closeMenuAndRefocus();
+    if (e.key !== "Tab") return;
+    e.preventDefault();
+    const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    items[(current + (e.shiftKey ? -1 : 1) + items.length) % items.length]?.focus();
+  };
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -188,9 +228,9 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
             className={styles.roleMenu}
             style={menuPos}
             data-testid="jump-to-session-role-menu"
-            onKeyDown={(e) => {
-              if (e.key === "Escape") closeMenu();
-            }}
+            // Focusable so a click on the menu's padding keeps focus (and Escape) inside it.
+            tabIndex={-1}
+            onKeyDown={handleMenuKeyDown}
           >
             {roleOptions.map((s) => (
               <button
@@ -203,7 +243,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
                   setSelectedRole(s.role);
                   if (isMobile) setModalOpen(true);
                   else setExpanded(true);
-                  closeMenu();
+                  closeMenuAndRefocus();
                   track({
                     name: "backlog_jump_to_session",
                     category: "user_action",

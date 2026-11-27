@@ -238,29 +238,54 @@ test.describe("backlog-jump-to-session", () => {
           const m = (await menu.boundingBox())!;
           return Math.round(Math.min(Math.abs(m.y - (t.y + t.height)), Math.abs(t.y - (m.y + m.height))));
         };
-        const before = (await trigger.boundingBox())!.y;
+        // Sideways, because moving it vertically this way would clip it out of its section.
+        const before = (await trigger.boundingBox())!.x;
         await trigger.evaluate((el) => {
           el.parentElement!.style.position = "relative";
-          el.parentElement!.style.top = "-80px";
+          el.parentElement!.style.left = "-150px";
         });
-        expect((await trigger.boundingBox())!.y).toBeLessThan(before);
+        const after = (await trigger.boundingBox())!.x;
+        expect(after).toBeLessThan(before);
+        await expect.poll(async () => (await menu.boundingBox())!.x).toBe(after);
         await expect.poll(distance).toBe(4);
         await expect(menu).toBeInViewport({ ratio: 1 });
 
+        // Scrolls the detail pane until the trigger's top edge is at targetY, or as near as it goes.
+        const scrollTriggerTo = (targetY: number) =>
+          trigger.evaluate((el, y) => {
+            let pane = el.parentElement!;
+            while (!/auto|scroll/.test(getComputedStyle(pane).overflowY) || pane.scrollHeight <= pane.clientHeight) {
+              pane = pane.parentElement!;
+            }
+            pane.scrollTop += el.getBoundingClientRect().top - y;
+          }, targetY);
+
         if (viewport.width < 640) {
-          // Low enough that the menu opens over the bottom nav, which it must paint above.
+          // Low enough that the menu opens over the bottom nav, which it must paint above. Taller,
+          // because at 568px the pane's scroll area is too short for the trigger to get there.
           // Retried as a unit because the detail header can still reflow and move the trigger.
+          const height = 700;
+          await page.setViewportSize({ width: viewport.width, height });
           await expect(async () => {
-            await trigger.evaluate((el, targetY) => {
-              const parent = el.parentElement!;
-              parent.style.top = `${parseFloat(parent.style.top) + targetY - el.getBoundingClientRect().top}px`;
-            }, viewport.height - 170);
+            await scrollTriggerTo(height - 170);
+            if (!(await menu.isVisible())) await trigger.click();
             await expect.poll(distance, { timeout: 1000 }).toBe(4);
-            expect((await menu.boundingBox())!.y).toBeGreaterThan(viewport.height - 130);
+            expect((await menu.boundingBox())!.y).toBeGreaterThan(height - 130);
             // A trial click runs the hit test: it fails if anything covers the item.
             await page.getByTestId("jump-to-session-role-item-work").click({ trial: true, timeout: 1000 });
-          }).toPass();
+          }).toPass({ timeout: 10000 });
         }
+
+        // Scrolled out of view: the menu closes instead of staying pinned to an edge.
+        await scrollTriggerTo(5000);
+        await expect(menu).toBeHidden();
+
+        // A keyboard-opened overlay takes focus: the menu must not stay painted over it.
+        await trigger.click();
+        await expect(menu).toBeVisible();
+        await page.keyboard.press("Control+k");
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await expect(menu).toBeHidden();
       } finally {
         if (itemId) await archiveItem(request, itemId);
       }

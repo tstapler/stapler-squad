@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { LinkedSession } from "@/lib/hooks/useBacklogService";
@@ -208,7 +208,7 @@ describe("JumpToSessionPanel", () => {
             makeLinkedSession({ sessionId: "r1", role: "review" }),
           ]}
           backlogItemId="item1"
-          getSession={jest.fn()}
+          getSession={jest.fn().mockResolvedValue(makeFullSession("w1"))}
         />
       );
       await user.click(screen.getByTestId("jump-to-session-role-menu-trigger"));
@@ -228,6 +228,90 @@ describe("JumpToSessionPanel", () => {
 
       trigger = box(226, 20, 44, 44);
       await waitFor(() => expect(menu).toHaveStyle({ top: "274px" }));
+    });
+
+    it("JumpToSessionPanel_should_ClampToBottomEdge_When_TriggerIsBelowViewport", async () => {
+      trigger = box(700, 20, 44, 44);
+      const menu = await openRoleMenu();
+      expect(menu).toHaveStyle({ top: "460px" });
+    });
+
+    it("JumpToSessionPanel_should_CloseWithoutStealingFocus_When_FocusLeavesMenu", async () => {
+      trigger = box(300, 20, 44, 44);
+      const outside = document.body.appendChild(document.createElement("input"));
+      await openRoleMenu();
+
+      act(() => outside.focus());
+
+      expect(screen.queryByTestId("jump-to-session-role-menu")).not.toBeInTheDocument();
+      expect(outside).toHaveFocus();
+      outside.remove();
+    });
+
+    it("JumpToSessionPanel_should_CycleItemsAndStayOpen_When_TabPressedInMenu", async () => {
+      trigger = box(300, 20, 44, 44);
+      const user = userEvent.setup();
+      const menu = await openRoleMenu();
+      const [first, second] = screen.getAllByRole("menuitem");
+      expect(first).toHaveFocus();
+
+      await user.tab();
+      expect(second).toHaveFocus();
+      await user.tab();
+      expect(first).toHaveFocus();
+      await user.tab({ shift: true });
+      expect(second).toHaveFocus();
+      expect(menu).toBeInTheDocument();
+    });
+
+    it("JumpToSessionPanel_should_ReturnFocusToTrigger_When_EscapePressedOrRoleChosen", async () => {
+      trigger = box(300, 20, 44, 44);
+      const user = userEvent.setup();
+      await openRoleMenu();
+      const menuTrigger = screen.getByTestId("jump-to-session-role-menu-trigger");
+
+      await user.keyboard("{Escape}");
+      expect(screen.queryByTestId("jump-to-session-role-menu")).not.toBeInTheDocument();
+      expect(menuTrigger).toHaveFocus();
+
+      await user.click(menuTrigger);
+      await user.click(screen.getByTestId("jump-to-session-role-item-work"));
+      expect(menuTrigger).toHaveFocus();
+    });
+
+    it("JumpToSessionPanel_should_StillCloseOnEscape_When_MenuPaddingClicked", async () => {
+      trigger = box(300, 20, 44, 44);
+      const user = userEvent.setup();
+      const menu = await openRoleMenu();
+
+      await user.click(menu);
+      expect(menu).toHaveFocus();
+      await user.keyboard("{Escape}");
+      expect(menu).not.toBeInTheDocument();
+    });
+
+    it("JumpToSessionPanel_should_CloseMenu_When_TriggerScrollsOutOfView", async () => {
+      trigger = box(300, 20, 44, 44);
+      let report: (isIntersecting: boolean) => void = () => {};
+      const original = window.IntersectionObserver;
+      const observe = jest.fn();
+      window.IntersectionObserver = jest.fn((callback: IntersectionObserverCallback) => {
+        report = (isIntersecting) =>
+          callback([{ isIntersecting } as IntersectionObserverEntry], {} as IntersectionObserver);
+        return { observe, disconnect: jest.fn() };
+      }) as unknown as typeof IntersectionObserver;
+      try {
+        await openRoleMenu();
+        expect(observe).toHaveBeenCalledWith(screen.getByTestId("jump-to-session-role-menu-trigger"));
+        act(() => report(true));
+        expect(screen.getByTestId("jump-to-session-role-menu")).toBeInTheDocument();
+
+        act(() => report(false));
+        expect(screen.queryByTestId("jump-to-session-role-menu")).not.toBeInTheDocument();
+        expect(screen.getByTestId("jump-to-session-role-menu-trigger")).toHaveFocus();
+      } finally {
+        window.IntersectionObserver = original;
+      }
     });
   });
 
