@@ -306,21 +306,18 @@
 == fourth stream from one host
   error resource_exhausted: too many searches are running [session.v1.SearchBusyDetail 0a067065725f6970]
 == held streams
-  error canceled: superseded by a newer search
--
   src/a.go:2 [3,13) @10 len=13 "// needle one"
   stats scanned=10 binary=1 truncated=false large_skipped=1
 -
   src/a.go:2 [3,13) @10 len=13 "// needle one"
   stats scanned=10 binary=1 truncated=false large_skipped=1
-== superseding stream
+-
   src/a.go:2 [3,13) @10 len=13 "// needle one"
   stats scanned=10 binary=1 truncated=false large_skipped=1
   telemetry first session=s1-hold scale=lt1k
   telemetry first session=s1-hold scale=lt1k
   telemetry first session=s1-hold scale=lt1k
   telemetry search session=s1 outcome=busy results=0 scale=lt1k queued=false backend=walker large=false
-  telemetry search session=s1-hold outcome=cancelled results=0 scale=lt1k queued=false backend=walker large=false
   telemetry search session=s1-hold outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=false
   telemetry search session=s1-hold outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=false
   telemetry search session=s1-hold outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=false

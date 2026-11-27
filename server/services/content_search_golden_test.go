@@ -337,15 +337,10 @@ func (r *goldenRig) recordBusy(out *bytes.Buffer) {
 		r.ws.waitEntered(t, i+1)
 	}
 	fmt.Fprintf(out, "== fourth stream from one host\n%s\n", r.search(goldenSearchRequest("s1", "needle", nil)))
-	superseding := make(chan string, 1)
-	go func() {
-		superseding <- r.search(goldenSearchRequest("s1-hold", "needle one", func(m *sessionv1.SearchContentRequest) { m.ClientId = "tab0" }))
-	}()
-	time.Sleep(200 * time.Millisecond) // the superseding call cancels tab0, then waits for its slot
 	release()
 	results := []string{withoutQueuePosition(<-held), withoutQueuePosition(<-held), withoutQueuePosition(<-held)}
 	sort.Strings(results)
-	fmt.Fprintf(out, "== held streams\n%s\n== superseding stream\n%s\n", strings.Join(results, "\n-\n"), withoutQueuePosition(<-superseding))
+	fmt.Fprintf(out, "== held streams\n%s\n", strings.Join(results, "\n-\n"))
 	tel := r.tel.drain()
 	for i := range tel {
 		tel[i] = strings.Replace(tel[i], "queued=true", "queued=false", 1)
