@@ -107,7 +107,7 @@ func destroyMCPCreatedSession(t *testing.T, svc any, id string) {
 }
 
 // TestCreateSession_should_AcceptPreviouslyUnreachableBuiltin_When_ProgramIsBash
-// pins AC1: "bash" was a real, always-supported built-in (services.BuiltInPrograms)
+// pins AC1: "bash" was a real, always-supported built-in (sessiondefaults.BuiltInPrograms)
 // that the old hardcoded Enum("claude", "aider") silently rejected before it ever
 // reached the backend. It must also carry no ProgramWarning, since it is a
 // recognized program (Story 1.2.1's AC).

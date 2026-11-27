@@ -46,7 +46,7 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=103 loc=28917 imports=96
+server/services files=99 loc=27465 imports=97
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
@@ -125,3 +125,6 @@ server/services/rules files=6 loc=3264 imports=10
 server/services/prs files=6 loc=627 imports=14
 server/services/contentsearch files=5 loc=1329 imports=3
 server/services/autonomysvc files=5 loc=1970 imports=16
+server/services/sessiondefaults files=2 loc=946 imports=5
+server/services/claudeconfig files=1 loc=123 imports=2
+server/services/workspacedb files=1 loc=391 imports=6

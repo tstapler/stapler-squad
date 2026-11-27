@@ -1,4 +1,5 @@
-package services
+// Package claudeconfig serves the RPCs that read and write the files under ~/.claude.
+package claudeconfig
 
 import (
 	"context"

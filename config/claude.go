@@ -127,7 +127,7 @@ func toValidUTF8(content []byte) string {
 
 // resolveConfigPath joins filename onto claudeDir and rejects any result that
 // escapes claudeDir (e.g. filename containing "../"). filename ultimately
-// comes from RPC requests (see server/services/config_service.go), so it must
+// comes from RPC requests (see server/services/claudeconfig/config_service.go), so it must
 // not be trusted to stay within the Claude config directory.
 func resolveConfigPath(claudeDir, filename string) (string, error) {
 	base := filepath.Clean(claudeDir)
