@@ -401,6 +401,7 @@ go_test(
         "no_flag_default_global_test.go",
         "notification_action_fixtures_test.go",
         "notification_action_remote_tierb_test.go",
+        "notification_action_wiring_sources_test.go",
         "notification_action_wiring_test.go",
         "notification_classification_test.go",
         "notification_quality_metrics_test.go",

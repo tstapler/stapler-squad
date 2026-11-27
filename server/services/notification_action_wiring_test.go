@@ -137,7 +137,7 @@ func (e *wiredEnv) cards(t *testing.T) string {
 	t.Helper()
 	resp, err := e.svc.GetNotificationHistory(context.Background(), connect.NewRequest(&sessionv1.GetNotificationHistoryRequest{}))
 	require.NoError(t, err)
-	var rows []string
+	rows := make([]string, 0, len(resp.Msg.GetNotifications()))
 	for _, r := range resp.Msg.GetNotifications() {
 		row := r.GetId()
 		if r.GetIsRead() {
@@ -167,8 +167,8 @@ func (e *wiredEnv) invoke(t *testing.T, kind sessionv1.ActionKind, key, idem, ch
 }
 
 // The collaborators WireNotificationActions hands the dispatcher must reach their
-// action kinds, and the non-question lookups their cards.
-func TestWireNotificationActions_ShouldReachEveryWiredCollaborator(t *testing.T) {
+// action kinds, and the approval, backlog and guidance lookups their cards.
+func TestWireNotificationActions_ShouldReachDispatcherCollaboratorsAndStorageLookups(t *testing.T) {
 	e := newWiredEnv(t)
 	assert.Equal(t, "n1 APPROVE,OPEN | n2 BACKLOG_DECISION,OPEN | n3 ANSWER_GUIDANCE,OPEN", e.cards(t))
 
