@@ -156,13 +156,6 @@ func (s *SessionService) SetEscapeAggregateReader(r *escapedb.Reader) {
 	s.escapeAggregates = r
 }
 
-func (s *SessionService) escapeAggregateReader() *escapedb.Reader {
-	if s.escapeAggregates != nil {
-		return s.escapeAggregates
-	}
-	return escapedb.NewReader(s.escapeEventsClient, nil, escapedb.RollupTiers{}, nil)
-}
-
 // GetEventBus returns the event bus instance for wiring up reactive components.
 func (s *SessionService) GetEventBus() *events.EventBus {
 	return s.eventBus

@@ -9,6 +9,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { BackgroundSegment, NotificationTray, openNotificationTray, clickWhenScrollIdle } from './pages/NotificationPanel';
 import { ScheduledPromptsFake, ScheduledPromptsSection, type FakeTrigger } from './pages/ScheduledPromptsPage';
+import { recordTexts } from './pages/recordTexts';
 import { profiles } from './helpers/viewport-profiles';
 import { baseUrl } from './helpers/base-url';
 
@@ -48,9 +49,10 @@ for (const key of ['V1', 'V2'] as const) {
       expect(fake.calls.cancel).toEqual([]);
 
       await clickWhenScrollIdle(page, first.getByRole('button', { name: 'Cancel prompt' }));
+      const announced = await recordTexts(section.announcer);
       await clickWhenScrollIdle(page, first.getByRole('button', { name: 'Yes, cancel' }));
       await expect(section.rows).toHaveCount(1);
-      await expect(section.announcer).toHaveText('Prompt cancelled');
+      await expect.poll(announced).toContain('Prompt cancelled');
       expect(fake.calls.cancel).toEqual(['w1']);
     });
 

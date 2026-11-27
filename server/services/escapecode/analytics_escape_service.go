@@ -1,4 +1,4 @@
-package services
+package escapecode
 
 import (
 	"context"
@@ -17,9 +17,27 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// QueryService answers the escape-analytics RPCs over the persisted escape events.
+type QueryService struct {
+	client     *ent.Client
+	aggregates *escapedb.Reader
+}
+
+// NewQueryService takes the escape-events client (nil: the RPCs answer Unavailable) and
+// the rollup-backed reader (nil: summaries count raw rows only).
+func NewQueryService(client *ent.Client, aggregates *escapedb.Reader) *QueryService {
+	return &QueryService{client: client, aggregates: aggregates}
+}
+
+func (s *QueryService) aggregateReader() *escapedb.Reader {
+	if s.aggregates != nil {
+		return s.aggregates
+	}
+	return escapedb.NewReader(s.client, nil, escapedb.RollupTiers{}, nil)
+}
+
 // QueryEscapeAnalytics returns paginated escape event records for a session.
-// +api: escape:query
-func (s *SessionService) QueryEscapeAnalytics(
+func (s *QueryService) QueryEscapeAnalytics(
 	ctx context.Context,
 	req *connect.Request[sessionv1.QueryEscapeAnalyticsRequest],
 ) (*connect.Response[sessionv1.QueryEscapeAnalyticsResponse], error) {
@@ -27,7 +45,7 @@ func (s *SessionService) QueryEscapeAnalytics(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
 	}
 
-	if s.escapeEventsClient == nil {
+	if s.client == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("escape analytics not available"))
 	}
 
@@ -58,12 +76,12 @@ func (s *SessionService) QueryEscapeAnalytics(
 		filters = append(filters, escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
 	}
 
-	totalCount, err := s.escapeEventsClient.EscapeEvent.Query().Where(filters...).Count(ctx)
+	totalCount, err := s.client.EscapeEvent.Query().Where(filters...).Count(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	query := s.escapeEventsClient.EscapeEvent.Query().
+	query := s.client.EscapeEvent.Query().
 		Where(filters...).
 		Order(ent.Asc(escapeevent.FieldSessionSeq)).
 		Limit(pageSize + 1) // fetch one extra to determine if there's a next page
@@ -128,8 +146,7 @@ func (s *SessionService) QueryEscapeAnalytics(
 }
 
 // GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
-// +api: escape:summary
-func (s *SessionService) GetEscapeAnalyticsSummary(
+func (s *QueryService) GetEscapeAnalyticsSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetEscapeAnalyticsSummaryRequest],
 ) (*connect.Response[sessionv1.GetEscapeAnalyticsSummaryResponse], error) {
@@ -137,7 +154,7 @@ func (s *SessionService) GetEscapeAnalyticsSummary(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
 	}
 
-	if s.escapeEventsClient == nil {
+	if s.client == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("escape analytics not available"))
 	}
 
@@ -150,7 +167,7 @@ func (s *SessionService) GetEscapeAnalyticsSummary(
 		end := req.Msg.EndTime.AsTime()
 		q.End = &end
 	}
-	events, err := s.escapeAggregateReader().Aggregate(ctx, q)
+	events, err := s.aggregateReader().Aggregate(ctx, q)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -225,12 +242,11 @@ func escapeCorrelationCoverage(source, matched int64) float64 {
 
 // GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
 // across all sessions, plus a per-session breakdown to spot outliers.
-// +api: analytics:get-escape-global-summary
-func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
+func (s *QueryService) GetEscapeAnalyticsGlobalSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetEscapeAnalyticsGlobalSummaryRequest],
 ) (*connect.Response[sessionv1.GetEscapeAnalyticsGlobalSummaryResponse], error) {
-	if s.escapeEventsClient == nil {
+	if s.client == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("escape analytics not available"))
 	}
 
@@ -245,7 +261,7 @@ func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
 	}
 	// Rollups answer old ranges and raw rows the partial hours at the ends, so the number
 	// of rows is bounded by distinct dimension combinations, not event volume.
-	events, err := s.escapeAggregateReader().Aggregate(ctx, q)
+	events, err := s.aggregateReader().Aggregate(ctx, q)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
