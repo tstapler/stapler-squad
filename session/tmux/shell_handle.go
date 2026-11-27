@@ -86,7 +86,7 @@ func (h *ShellTmuxHandle) Spawn(workDir, command string) error {
 	// Build: tmux [-L socket] new-session -d -s {sessionName} -c {workDir} -- /bin/sh -c {command}
 	// Using "-- /bin/sh -c {command}" avoids shell interpolation of the command string in the
 	// tmux argument (SEC-4: no exec.Command("sh", "-c", fmt.Sprintf("... %s ...", command)) pattern).
-	cmd := h.buildCmd("new-session", "-d", "-s", h.sessionName, "-c", workDir, "--", "/bin/sh", "-c", command)
+	cmd := h.buildCmd(sizedNewSessionArgs(h.sessionName, workDir, nil, "--", "/bin/sh", "-c", command)...)
 	if err := h.cmdExec.Run(cmd); err != nil {
 		return fmt.Errorf("ShellTmuxHandle.Spawn: tmux new-session failed for %q: %w", h.sessionName, err)
 	}

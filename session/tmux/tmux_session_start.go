@@ -218,15 +218,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// nested Claude Code sessions are not blocked by the "nested session" guard.
 	historyPath := fmt.Sprintf("%s/.stapler_squad_history", workDir)
 	programWithHistory := fmt.Sprintf("env HISTFILE=%s %s", historyPath, t.program)
-	newSessionArgs := []string{"new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE="}
-	for _, kv := range t.ExtraEnv {
-		newSessionArgs = append(newSessionArgs, "-e", kv)
-	}
-	for _, kv := range t.extraEnv {
-		newSessionArgs = append(newSessionArgs, "-e", kv)
-	}
-	newSessionArgs = append(newSessionArgs, "-c", workDir, programWithHistory)
-	cmd := t.buildTmuxCommand(newSessionArgs...)
+	cmd := t.buildTmuxCommand(t.newSessionArgs(workDir, programWithHistory)...)
 
 	// Use cmdExec.Run() instead of pty.Start() for detached session creation
 	// since detached sessions don't need PTY attachment during creation.
@@ -635,15 +627,15 @@ func (t *TmuxSession) recreateMissingSession(workDir string) error {
 // the child environment so a nested Claude Code session isn't blocked by the
 // "nested session" guard.
 func (t *TmuxSession) newSessionArgs(workDir, program string) []string {
-	args := make([]string, 0, 6+2*len(t.ExtraEnv)+2*len(t.extraEnv)+3)
-	args = append(args, "new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=")
+	flags := make([]string, 0, 2+2*len(t.ExtraEnv)+2*len(t.extraEnv))
+	flags = append(flags, "-e", "CLAUDECODE=")
 	for _, kv := range t.ExtraEnv {
-		args = append(args, "-e", kv)
+		flags = append(flags, "-e", kv)
 	}
 	for _, kv := range t.extraEnv {
-		args = append(args, "-e", kv)
+		flags = append(flags, "-e", kv)
 	}
-	return append(args, "-c", workDir, program)
+	return sizedNewSessionArgs(t.sanitizedName, workDir, flags, program)
 }
 
 // runNewSessionCommand executes cmd (built by newSessionArgs) and interprets

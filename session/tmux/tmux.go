@@ -39,6 +39,19 @@ const ProgramGemini = "gemini"
 const defaultAttachCols = 220
 const defaultAttachRows = 50
 
+// sizedNewSessionArgs builds a "new-session ; ... ; respawn-pane" argv that starts command in a
+// pane already at the default size. Under "window-size latest" tmux sizes a new window from
+// another client (possibly 10x6), ignoring -x/-y, and the reflow on the first wide attach can
+// erase early output. Resizing a placeholder first avoids racing the program's startup.
+func sizedNewSessionArgs(session, workDir string, flags []string, command ...string) []string {
+	args := append([]string{"new-session", "-d", "-s", session}, flags...)
+	args = append(args, "-c", workDir, "cat",
+		";", "resize-window", "-t", session, "-x", strconv.Itoa(defaultAttachCols), "-y", strconv.Itoa(defaultAttachRows),
+		";", "set-option", "-w", "-t", session, "-u", "window-size",
+		";", "respawn-pane", "-k", "-t", session, "-c", workDir)
+	return append(args, command...)
+}
+
 // TmuxSession represents a managed tmux session
 type TmuxSession struct {
 	// Initialized by NewTmuxSession
