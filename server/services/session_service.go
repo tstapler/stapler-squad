@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/fileops"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
+	"github.com/tstapler/stapler-squad/server/services/pathcomplete"
 	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
@@ -248,10 +250,10 @@ type SessionService struct {
 	userPRCache *githubpkg.UserPRCache
 
 	// fileSvc handles file tree browsing RPCs (ListFiles, GetFileContent).
-	fileSvc *FileService
+	fileSvc *fileops.FileService
 
 	// pathCompletionSvc handles filesystem path completion RPCs.
-	pathCompletionSvc *PathCompletionService
+	pathCompletionSvc *pathcomplete.PathCompletionService
 
 	// slashCommandSvc resolves slash commands from disk and built-ins.
 	slashCommandSvc *SlashCommandService
@@ -1008,8 +1010,8 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		taggingEngine:               taggingEngine,
 		approvalStore:               approvalStore,
 		databaseSvc:                 NewDatabaseService(),
-		fileSvc:                     NewFileService(workspaceSvc),
-		pathCompletionSvc:           NewPathCompletionService(),
+		fileSvc:                     fileops.NewFileService(workspaceSvc),
+		pathCompletionSvc:           pathcomplete.NewPathCompletionService(),
 		slashCommandSvc:             NewSlashCommandService(),
 		defaultsSvc:                 NewDefaultsService(),
 		slackConfigSvc:              notify.NewSlackConfigService(notify.NewSlackNotifier()),

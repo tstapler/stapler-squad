@@ -25,7 +25,7 @@ const (
 // negativeHostnameCache remembers hostnames that recently failed
 // hostnameValidator so repeated attempts for the same bad hostname don't
 // each re-trigger a DNS lookup. Mirrors GitignoreCache's bounded-TTL,
-// evict-oldest-on-insert design (server/services/gitignore_cache.go).
+// evict-oldest-on-insert design (server/services/fileops/gitignore_cache.go).
 type negativeHostnameCache struct {
 	mu      sync.Mutex
 	entries map[string]time.Time // hostname -> failedAt
