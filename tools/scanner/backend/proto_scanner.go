@@ -380,7 +380,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
 	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
 	// not left as a followup like headless.proto, since it was cheap here.
-	// Tagging-classifier RPCs (tagging_classifier_service.go).
+	// Tagging-classifier RPCs (session_service_escape_tagging.go delegates to taggingrules).
 	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
 	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
 	"GetBackgroundModels":           "background-models:get",

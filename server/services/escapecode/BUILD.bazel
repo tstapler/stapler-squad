@@ -3,12 +3,22 @@ load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "escapecode",
-    srcs = ["escape_code_handler.go"],
+    srcs = [
+        "analytics_escape_service.go",
+        "escape_code_handler.go",
+    ],
     importpath = "github.com/tstapler/stapler-squad/server/services/escapecode",
     visibility = ["//visibility:public"],
     deps = [
         "//log",
         "//pkg/analytics",
+        "//proto/session/v1:sessionv1_go",
+        "//server/analytics/escapedb",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:escapeevent",
+        "//tools/bzl/ent:predicate",
+        "@com_connectrpc_connect//:connect",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
 
@@ -21,16 +31,25 @@ alias(
 go_test(
     name = "escapecode_test",
     srcs = [
+        "analytics_escape_service_test.go",
         "escape_code_handler_golden_test.go",
         "escape_code_handler_test.go",
+        "testmain_test.go",
     ],
     data = glob(["testdata/**"]),
     embed = [":escapecode"],
     deps = [
         "//log",
         "//pkg/analytics",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/internal/svctest",
+        "//session",
+        "//tools/bzl/ent",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
 

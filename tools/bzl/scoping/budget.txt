@@ -46,7 +46,7 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=117 loc=33253 imports=98
+server/services files=116 loc=32804 imports=96
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
@@ -106,13 +106,13 @@ server/services/forwardsync files=2 loc=618 imports=9
 server/services/piextension files=2 loc=281 imports=1
 server/services/searchrpc files=8 loc=1877 imports=11
 server/services/adminmisc files=4 loc=521 imports=6
-server/services/escapecode files=1 loc=208 imports=2
+server/services/escapecode files=2 loc=569 imports=7
 server/services/triggerlimit files=1 loc=65 imports=0
 server/services/webhooks files=7 loc=1573 imports=12
 server/services/gatestats files=6 loc=568 imports=5
 server/services/backlogmisc files=4 loc=599 imports=10
 server/services/quota files=3 loc=811 imports=9
-server/services/taggingrules files=2 loc=554 imports=5
+server/services/taggingrules files=3 loc=746 imports=8
 server/services/healthnotify files=2 loc=382 imports=7
 server/services/streamhubrollout files=1 loc=170 imports=4
 server/services/domainage files=1 loc=229 imports=1
@@ -121,3 +121,4 @@ server/services/notify files=13 loc=2529 imports=20
 server/services/approvals files=11 loc=3489 imports=26
 server/services/notifyactions files=7 loc=1259 imports=17
 server/services/qareply files=8 loc=1597 imports=15
+server/services/rules files=6 loc=3264 imports=10
