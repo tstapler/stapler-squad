@@ -22,7 +22,7 @@
 ## Files Likely Affected
 
 - `server/services/credkit/credentials.go` — `CredentialChain`, `ClaudeOAuthCredentialSource`, `AgyCredentialSource` — the `os.UserHomeDir()` call sites.
-- `server/services/capacity_monitor.go` — `CapacityMonitor.Start` — the call site that should have a test-mode guard, mirroring `session_service.go:607`'s existing pattern.
+- `server/services/capacity/capacity_monitor.go` — `CapacityMonitor.Start` — the call site that should have a test-mode guard, mirroring `session_service.go:607`'s existing pattern.
 - `server/services/session_service.go:607` — the existing `config.IsTestMode()` guard to use as the precedent/template for the fix.
 
 ## Fix Approach

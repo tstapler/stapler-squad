@@ -182,7 +182,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	})
 	// wireDepsIntoServer unconditionally calls SessionService.SetLifecycleContext,
 	// which starts CapacityMonitor's real Anthropic/Gemini QueryLimits polling
-	// (server/services/capacity_monitor.go, session_service.go:1387-1389) --
+	// (server/services/capacity/capacity_monitor.go, session_service.go:1387-1389) --
 	// independent of how ServerDependencies was constructed, so narrowing
 	// deps construction alone doesn't stop it. CapacityMonitor only makes an
 	// outbound HTTP call when CredentialChain.Resolve actually finds a

@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -107,21 +106,4 @@ func TestWriteToSession_ShouldReturnFailedPreconditionWithZeroWrites_WhenTheLeas
 		}
 		return free
 	}, 5*time.Second, time.Millisecond)
-}
-
-// The default compactor is the chain's acquirer: a busy lease is an error the
-// monitor already logs, not a blocked cycle.
-func TestCapacityMonitorDefaultCompactor_ShouldReturnErrLeaseBusyWithZeroWrites_WhenTheLeaseIsHeld(t *testing.T) {
-	inst, pm := leaseTestInstance(t, "compactor-lease")
-	m := NewCapacityMonitor(CapacityMonitorParams{})
-	held, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
-	require.True(t, ok)
-
-	err := m.compactor(context.Background(), inst, "/compact")
-	require.ErrorIs(t, err, instance.ErrLeaseBusy)
-	assert.Empty(t, pm.writes())
-
-	held.Release()
-	require.NoError(t, m.compactor(context.Background(), inst, "/compact"))
-	assert.Equal(t, []string{"/compact", instance.EnterKeySequence}, pm.writes(), fmt.Sprint(pm.writes()))
 }

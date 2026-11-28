@@ -1,0 +1,51 @@
+usage {SessionDispatched:1 SessionCompleted:2 SessionFailed:1 APIRateLimited:1 APIError:1}
+=== bare
+get {"config":{"enabled":false,"hasApiKey":false,"egressAcknowledgedRepos":[],"maxConcurrentJulesSessions":0,"maxJulesSessionsPerDay":0,"authReconnectRequired":false,"usage":{"sessionDispatched":"0","sessionCompleted":"0","sessionFailed":"0","apiRateLimited":"0","apiError":"0"}}}
+update  {"config":{"enabled":true,"hasApiKey":false,"egressAcknowledgedRepos":[],"maxConcurrentJulesSessions":3,"maxJulesSessionsPerDay":9,"authReconnectRequired":false,"usage":{"sessionDispatched":"0","sessionCompleted":"0","sessionFailed":"0","apiRateLimited":"0","apiError":"0"}}}
+update __clear__ err code=unavailable unavailable: jules key storage is not available
+update bad key err code=unavailable unavailable: jules key storage is not available
+update AIzaSyD-EXAMPLE err code=unavailable unavailable: jules key storage is not available
+test  err code=invalid_argument invalid_argument: repo_path is required
+test https://github.com/o/r {"ok":false,"message":"julesisnotconfiguredonthisserver"}
+test https://github.com/o/unknown {"ok":false,"message":"julesisnotconfiguredonthisserver"}
+confirm  err code=invalid_argument invalid_argument: repo_path is required
+confirm /r/a {"egressAcknowledgedRepos":["/r/a"]}
+confirm /r/a {"egressAcknowledgedRepos":["/r/a"]}
+confirm /r/b {"egressAcknowledgedRepos":["/r/a","/r/b"]}
+revoke  err code=invalid_argument invalid_argument: repo_path is required
+revoke /r/a {"egressAcknowledgedRepos":["/r/b"]}
+revoke /r/a {"egressAcknowledgedRepos":["/r/b"]}
+revoke /r/b {"egressAcknowledgedRepos":[]}
+get-after {"config":{"enabled":true,"hasApiKey":false,"egressAcknowledgedRepos":[],"maxConcurrentJulesSessions":3,"maxJulesSessionsPerDay":9,"authReconnectRequired":false,"usage":{"sessionDispatched":"0","sessionCompleted":"0","sessionFailed":"0","apiRateLimited":"0","apiError":"0"}}}
+=== wired
+get {"config":{"enabled":true,"hasApiKey":false,"egressAcknowledgedRepos":[],"maxConcurrentJulesSessions":3,"maxJulesSessionsPerDay":9,"authReconnectRequired":true,"usage":{"sessionDispatched":"1","sessionCompleted":"2","sessionFailed":"1","apiRateLimited":"1","apiError":"1"}}}
+update  {"config":{"enabled":true,"hasApiKey":false,"egressAcknowledgedRepos":[],"maxConcurrentJulesSessions":3,"maxJulesSessionsPerDay":9,"authReconnectRequired":true,"usage":{"sessionDispatched":"1","sessionCompleted":"2","sessionFailed":"1","apiRateLimited":"1","apiError":"1"}}}
+update __clear__ {"config":{"enabled":true,"hasApiKey":false,"egressAcknowledgedRepos":[],"maxConcurrentJulesSessions":3,"maxJulesSessionsPerDay":9,"authReconnectRequired":true,"usage":{"sessionDispatched":"1","sessionCompleted":"2","sessionFailed":"1","apiRateLimited":"1","apiError":"1"}}}
+update bad key {"config":{"enabled":true,"hasApiKey":true,"egressAcknowledgedRepos":[],"maxConcurrentJulesSessions":3,"maxJulesSessionsPerDay":9,"authReconnectRequired":true,"usage":{"sessionDispatched":"1","sessionCompleted":"2","sessionFailed":"1","apiRateLimited":"1","apiError":"1"}}}
+update AIzaSyD-EXAMPLE {"config":{"enabled":true,"hasApiKey":true,"egressAcknowledgedRepos":[],"maxConcurrentJulesSessions":3,"maxJulesSessionsPerDay":9,"authReconnectRequired":true,"usage":{"sessionDispatched":"1","sessionCompleted":"2","sessionFailed":"1","apiRateLimited":"1","apiError":"1"}}}
+test  err code=invalid_argument invalid_argument: repo_path is required
+test https://github.com/o/r {"ok":true,"message":""}
+test https://github.com/o/unknown {"ok":false,"message":"jules:sourcenotregistered:o/unknown"}
+confirm  err code=invalid_argument invalid_argument: repo_path is required
+confirm /r/a {"egressAcknowledgedRepos":["/r/a"]}
+confirm /r/a {"egressAcknowledgedRepos":["/r/a"]}
+confirm /r/b {"egressAcknowledgedRepos":["/r/a","/r/b"]}
+revoke  err code=invalid_argument invalid_argument: repo_path is required
+revoke /r/a {"egressAcknowledgedRepos":["/r/b"]}
+revoke /r/a {"egressAcknowledgedRepos":["/r/b"]}
+revoke /r/b {"egressAcknowledgedRepos":[]}
+get-after {"config":{"enabled":true,"hasApiKey":true,"egressAcknowledgedRepos":[],"maxConcurrentJulesSessions":3,"maxJulesSessionsPerDay":9,"authReconnectRequired":true,"usage":{"sessionDispatched":"1","sessionCompleted":"2","sessionFailed":"1","apiRateLimited":"1","apiError":"1"}}}
+=== dispatch
+request ["" "main" "p"] -> {ItemID: Branch: Prompt:} err=jules: item id must not be empty
+request ["id" "" "p"] -> {ItemID: Branch: Prompt:} err=jules: branch ref must not be empty
+request ["id" "bad branch" "p"] -> {ItemID:id Branch:bad branch Prompt:p} err=<nil>
+request ["id" "main" ""] -> {ItemID: Branch: Prompt:} err=jules: prompt must not be empty
+request ["id" "main" "p"] -> {ItemID:id Branch:main Prompt:p} err=<nil>
+nil-config name="" err=jules dispatch is not enabled: jules: not configured (invalid or missing API key) inFlight=false egress=false calls=0 open=0 usage={SessionDispatched:0 SessionCompleted:0 SessionFailed:0 APIRateLimited:0 APIError:0}
+disabled name="" err=jules dispatch is not enabled: jules: not configured (invalid or missing API key) inFlight=false egress=false calls=0 open=0 usage={SessionDispatched:0 SessionCompleted:0 SessionFailed:0 APIRateLimited:0 APIError:0}
+no-consent name="" err=the contents of tstapler/stapler-squad have not been acknowledged for Jules dispatch — dispatching would send its contents to Google's cloud VM to run this session; confirm this in the Jules dispatch dialog before continuing: egress consent not acknowledged for this repository inFlight=false egress=true calls=0 open=0 usage={SessionDispatched:0 SessionCompleted:0 SessionFailed:0 APIRateLimited:0 APIError:0}
+rate-limited name="" err=jules: creating session: jules: rate limited inFlight=false egress=false calls=1 open=0 usage={SessionDispatched:0 SessionCompleted:0 SessionFailed:0 APIRateLimited:1 APIError:0}
+transient name="" err=jules: creating session: jules: transient server error inFlight=false egress=false calls=1 open=0 usage={SessionDispatched:0 SessionCompleted:0 SessionFailed:0 APIRateLimited:0 APIError:1}
+success name="sessions/golden" err=<nil> inFlight=false egress=false calls=1 open=1 usage={SessionDispatched:1 SessionCompleted:0 SessionFailed:0 APIRateLimited:0 APIError:0}
+again name="" err=jules: item <item> already has an open dispatch: jules: dispatch already in flight for this item inFlight=true egress=false calls=0 open=1 usage={SessionDispatched:0 SessionCompleted:0 SessionFailed:0 APIRateLimited:0 APIError:0}
+transitions=1

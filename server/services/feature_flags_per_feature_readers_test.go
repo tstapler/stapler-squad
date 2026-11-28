@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/forwardsync"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/updatecheck"
 )
 
 // Slice 4 readers: each resolves its default from the registry it is given, so an injected registry
@@ -31,8 +32,8 @@ func TestPerFeatureReaders_ShouldUseInjectedRegistryDefault(t *testing.T) {
 		flag string
 		read func(*featureflags.Registry) bool
 	}{
-		{"changelog", featureflags.ChangelogFlagName, func(r *featureflags.Registry) bool { return ChangelogEnabled(cfg, r) }},
-		{"update-check", featureflags.UpdateCheckFlagName, func(r *featureflags.Registry) bool { return UpdateCheckFlagEnabled(cfg, r) }},
+		{"changelog", featureflags.ChangelogFlagName, func(r *featureflags.Registry) bool { return updatecheck.ChangelogEnabled(cfg, r) }},
+		{"update-check", featureflags.UpdateCheckFlagName, func(r *featureflags.Registry) bool { return updatecheck.UpdateCheckFlagEnabled(cfg, r) }},
 		{"sdd-default-pipeline", featureflags.SddDefaultPipelineFlagName, SddDefaultPipelineEnabled},
 		{"github-progress-comments", featureflags.GithubIssueProgressCommentsFlagName, forwardsync.GitHubIssueProgressCommentsEnabled},
 		{"program-cli-probe", flagsvc.ProgramCLIFlagProbeFlagName, flagsvc.ProgramCLIFlagProbeEnabled},

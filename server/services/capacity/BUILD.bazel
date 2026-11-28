@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "capacity",
+    srcs = ["capacity_monitor.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/capacity",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//pkg/events",
+        "//server/events",
+        "//server/services/credkit",
+        "//session/dbpool",
+        "//session/domain",
+        "//session/instance",
+        "//session/tokens",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":capacity",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "capacity_test",
+    srcs = [
+        "capacity_golden_test.go",
+        "capacity_monitor_guardrails_test.go",
+        "capacity_monitor_test.go",
+        "compactor_lease_test.go",
+        "testmain_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":capacity"],
+    deps = [
+        "//config",
+        "//server/events",
+        "//server/services/credkit",
+        "//server/services/internal/svctest",
+        "//session/domain",
+        "//session/instance",
+        "//session/tokens",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

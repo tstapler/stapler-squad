@@ -201,7 +201,7 @@ func (g *QuotaGate) StatusDetail() string {
 // control-mode callbacks, RPC handlers, the session driver) — a direct field
 // read here would be a genuine cross-goroutine data race. See
 // session/instance.go's documented Snapshot() contract and
-// server/services/capacity_monitor.go's evaluate() for the established precedent.
+// server/services/capacity/capacity_monitor.go's evaluate() for the established precedent.
 func foregroundSessionActive(instances []*instance.Instance) bool {
 	for _, inst := range instances {
 		if inst == nil {

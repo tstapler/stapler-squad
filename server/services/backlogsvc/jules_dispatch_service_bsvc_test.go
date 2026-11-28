@@ -11,8 +11,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -42,9 +42,9 @@ func createTestJulesReadyItemForRPC(t *testing.T, ctx context.Context, storage *
 // production (server/dependencies.go, Task 2.4.4a): the service itself is
 // passed as JulesDispatchService's transitionGuard, since *BacklogService
 // satisfies julesTransitionGuard structurally.
-func newTestBacklogServiceWithJules(storage *session.Storage, cfg *config.Config, client services.JulesSessionCreator, sources *jules.JulesSourceRegistry) *BacklogService {
+func newTestBacklogServiceWithJules(storage *session.Storage, cfg *config.Config, client julesrpc.JulesSessionCreator, sources *jules.JulesSourceRegistry) *BacklogService {
 	svc := NewBacklogService(storage, nil, cfg, nil, nil, nil)
-	dispatchSvc := services.NewJulesDispatchService(storage, svc, client, sources, func() *config.Config { return cfg })
+	dispatchSvc := julesrpc.NewJulesDispatchService(storage, svc, client, sources, func() *config.Config { return cfg })
 	svc.SetJulesDispatcher(dispatchSvc)
 	return svc
 }

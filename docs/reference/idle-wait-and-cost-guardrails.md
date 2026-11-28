@@ -1,6 +1,6 @@
 # Idle-wait and cost guardrails
 
-`CapacityMonitor` (`server/services/capacity_monitor.go`) polls live Claude sessions every `poll_interval_seconds` and applies these guardrails. They exist because a triage session once spent $106 re-reading a cached history across ~1,000 "still waiting" wake turns (#882).
+`CapacityMonitor` (`server/services/capacity/capacity_monitor.go`) polls live Claude sessions every `poll_interval_seconds` and applies these guardrails. They exist because a triage session once spent $106 re-reading a cached history across ~1,000 "still waiting" wake turns (#882).
 
 ## Cost
 

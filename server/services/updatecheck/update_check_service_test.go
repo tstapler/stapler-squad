@@ -1,4 +1,4 @@
-package services
+package updatecheck
 
 import (
 	"context"

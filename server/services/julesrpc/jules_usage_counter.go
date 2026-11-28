@@ -1,4 +1,4 @@
-package services
+package julesrpc
 
 // jules_usage_counter.go — Epic 4.1, Task 4.1.1a: the process-wide spend/
 // activity counters the Observability Plan names

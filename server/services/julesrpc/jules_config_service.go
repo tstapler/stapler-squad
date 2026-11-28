@@ -1,4 +1,4 @@
-package services
+package julesrpc
 
 // jules_config_service.go — Epic 2.4: GetJulesConfig / UpdateJulesConfig /
 // TestJulesConnection / ConfirmEgressConsent, the RPCs that let a user set
@@ -32,7 +32,7 @@ const julesAPIKeyClearSentinel = "__clear__"
 // JulesConfigService needs — declared locally so tests can fake it without a
 // real OS keychain (mirrors this codebase's consumer-owned-interface
 // convention, e.g. julesSessionCreator in jules_dispatch_service.go).
-type julesKeyManager interface {
+type JulesKeyManager interface {
 	APIKey(ctx context.Context) (jules.JulesAPIKey, error)
 	SetJulesAPIKey(ctx context.Context, key jules.JulesAPIKey) error
 	DeleteJulesAPIKey(ctx context.Context) error
@@ -40,7 +40,7 @@ type julesKeyManager interface {
 
 // julesSourceResolver is the narrow slice of *jules.JulesSourceRegistry
 // TestJulesConnection needs.
-type julesSourceResolver interface {
+type JulesSourceResolver interface {
 	Resolve(ctx context.Context, owner, repo string) (jules.JulesSourceName, error)
 }
 
@@ -50,7 +50,7 @@ type julesSourceResolver interface {
 // dependency (feature off / poller not started) is trivially representable
 // and a test can fake it without a real poller. *sessionjules.JulesSessionPoller
 // satisfies this structurally.
-type julesAuthReconnectReporter interface {
+type JulesAuthReconnectReporter interface {
 	AuthReconnectRequired() bool
 }
 
@@ -59,7 +59,7 @@ type julesAuthReconnectReporter interface {
 // (feature off / counter not wired) is trivially representable and a test
 // can fake it without a real JulesUsageCounter. *JulesUsageCounter satisfies
 // this structurally.
-type julesUsageSnapshotter interface {
+type JulesUsageSnapshotter interface {
 	Snapshot() JulesUsageSnapshot
 }
 
@@ -74,10 +74,10 @@ type JulesConfigService struct {
 	// writers of Jules config state) never race each other.
 	cfgMu sync.Mutex
 
-	keys    julesKeyManager
-	sources julesSourceResolver
-	poller  julesAuthReconnectReporter
-	usage   julesUsageSnapshotter
+	keys    JulesKeyManager
+	sources JulesSourceResolver
+	poller  JulesAuthReconnectReporter
+	usage   JulesUsageSnapshotter
 }
 
 // NewJulesConfigService constructs a JulesConfigService. keys and sources
@@ -85,7 +85,7 @@ type JulesConfigService struct {
 // handling and TestJulesConnection then fail loudly rather than silently
 // no-op); poller may be nil (feature off / not yet started), in which case
 // auth_reconnect_required is always false.
-func NewJulesConfigService(keys julesKeyManager, sources julesSourceResolver, poller julesAuthReconnectReporter) *JulesConfigService {
+func NewJulesConfigService(keys JulesKeyManager, sources JulesSourceResolver, poller JulesAuthReconnectReporter) *JulesConfigService {
 	return &JulesConfigService{keys: keys, sources: sources, poller: poller}
 }
 
@@ -93,7 +93,7 @@ func NewJulesConfigService(keys julesKeyManager, sources julesSourceResolver, po
 // — needed because the poller (server/dependencies.go, Task 2.4.4a) may be
 // constructed after JulesConfigService in the dependency graph. nil is a
 // valid value (feature off).
-func (s *JulesConfigService) SetPoller(poller julesAuthReconnectReporter) {
+func (s *JulesConfigService) SetPoller(poller JulesAuthReconnectReporter) {
 	s.poller = poller
 }
 
@@ -102,7 +102,7 @@ func (s *JulesConfigService) SetPoller(poller julesAuthReconnectReporter) {
 // server/dependencies.go constructs the counter after JulesConfigService in
 // the dependency graph. nil is a valid value (feature off / not yet wired),
 // in which case GetJulesConfig's usage field reports all zeros.
-func (s *JulesConfigService) SetUsageCounter(usage julesUsageSnapshotter) {
+func (s *JulesConfigService) SetUsageCounter(usage JulesUsageSnapshotter) {
 	s.usage = usage
 }
 

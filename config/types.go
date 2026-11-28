@@ -636,7 +636,7 @@ type CapacityConfig struct {
 	// ProviderPriority lists fallback providers in order of preference.
 	ProviderPriority []ProviderPriority `json:"provider_priority,omitempty"`
 	// IdleWaitTurnCeiling is how many consecutive "still waiting on
-	// background work" turns (see server/services/capacity_monitor.go's
+	// background work" turns (see server/services/capacity/capacity_monitor.go's
 	// isIdleWaitTurn) trigger an auto-compact, then an escalation if the
 	// pattern continues past a second ceiling's worth of turns after that.
 	// A real incident ran into the hundreds of such turns before anyone
