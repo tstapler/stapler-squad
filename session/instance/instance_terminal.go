@@ -342,7 +342,7 @@ func (i *Instance) GetStatusIconForType() string {
 	}
 
 	// Managed instance - use standard status icons
-	switch i.Status {
+	switch i.liveStatus() {
 	case domain.Active:
 		return "●"
 	case domain.Creating:

@@ -43,8 +43,8 @@ func (i *Instance) MarkCrashed(exitReason string) error {
 		log.Warn("markCrashed: failed to kill stale dead-pane session", "session", i.Title, "err", err)
 	}
 	err := i.sendSyncErr(func(s *instanceState) error {
-		if s.inst.Status != domain.Active {
-			return domain.ErrInvalidTransition{From: s.inst.Status, To: domain.Crashed}
+		if status := s.inst.liveStatus(); status != domain.Active {
+			return domain.ErrInvalidTransition{From: status, To: domain.Crashed}
 		}
 		s.inst.mu.Lock()
 		s.inst.ExitReason = exitReason
@@ -68,8 +68,8 @@ func (i *Instance) MarkExitedNormally() error {
 		log.Warn("markExitedNormally: failed to kill stale dead-pane session", "session", i.Title, "err", err)
 	}
 	err := i.sendSyncErr(func(s *instanceState) error {
-		if s.inst.Status != domain.Active {
-			return domain.ErrInvalidTransition{From: s.inst.Status, To: domain.Stopped}
+		if status := s.inst.liveStatus(); status != domain.Active {
+			return domain.ErrInvalidTransition{From: status, To: domain.Stopped}
 		}
 		return transitionToLocked(s, context.Background(), domain.Stopped)
 	})

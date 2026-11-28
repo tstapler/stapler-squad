@@ -1408,7 +1408,7 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		// could publish the SessionUpdated event while the transition is still
 		// in-flight, racing GetStatus()/Snapshot() reads on the delivery path.
 		if err := i.sendSyncErr(func(s *instanceState) error {
-			if s.inst.Status == domain.Active {
+			if s.inst.liveStatus() == domain.Active {
 				if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 				}
@@ -1578,7 +1578,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			reviveOutcome = domain.ReviveOutcomeResumeLive
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
-			workDir := i.Path
+			workDir := i.GetPath()
 			if i.gitManager.HasWorktree() {
 				workDir = i.gitManager.GetWorktreePath()
 			}
@@ -1696,11 +1696,9 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	}
 
 	// Transition to Active — no stateMutex needed inside actor command.
-	if i.Status != domain.Active {
-		if err := transitionToLocked(actorState, context.Background(), domain.Active); err != nil {
-			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
-			return setupErr
-		}
+	if err := ensureActiveLocked(actorState, context.Background()); err != nil {
+		setupErr = fmt.Errorf("failed to transition to Active: %w", err)
+		return setupErr
 	}
 	i.started.Store(true)
 	// buildSnapshot reads every mutable field; take i.mu here (even though this
@@ -1871,7 +1869,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// for an already-running session, but we still allocate so the screencast
 			// goroutine can connect to Chrome if it is already running.
 			i.allocateCDPPort()
-			workDir := i.Path
+			workDir := i.GetPath()
 			if i.gitManager.HasWorktree() {
 				workDir = i.gitManager.GetWorktreePath()
 			}
@@ -2226,7 +2224,7 @@ func pauseLocked(s *instanceState) error {
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
 	}
-	if i.Status == domain.Paused {
+	if i.liveStatus() == domain.Paused {
 		return fmt.Errorf("instance is already paused")
 	}
 	if !i.started.Load() {
@@ -2451,14 +2449,14 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
 	}
-	if i.Status == domain.Stopped {
+	if i.liveStatus() == domain.Stopped {
 		return fmt.Errorf("instance is already stopped")
 	}
 	// Validate the transition before any destructive side effect (kill tmux, remove
 	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
 	// the tmux session and worktree untouched.
 	if !canTransitionLocked(s, domain.Stopped) {
-		return domain.ErrInvalidTransition{From: i.Status, To: domain.Stopped}
+		return domain.ErrInvalidTransition{From: i.liveStatus(), To: domain.Stopped}
 	}
 
 	// Fail closed before any side effect — see pauseLocked.
@@ -2593,7 +2591,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessMa
 		}
 	}
 
-	waspaused := i.Status == domain.Paused
+	waspaused := i.liveStatus() == domain.Paused
 
 	// Capture terminal output if requested
 	var savedOutput string

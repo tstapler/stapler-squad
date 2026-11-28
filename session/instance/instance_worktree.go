@@ -49,7 +49,7 @@ func (i *Instance) RepoName() (string, error) {
 	if !i.started.Load() {
 		return "", fmt.Errorf("cannot get repo name for instance that has not been started")
 	}
-	if i.Status == domain.Paused {
+	if i.liveStatus() == domain.Paused {
 		return "", fmt.Errorf("cannot get repo name for paused instance")
 	}
 	if !i.gitManager.HasWorktree() {

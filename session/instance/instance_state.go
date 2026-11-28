@@ -6,6 +6,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -65,6 +66,25 @@ func (i *Instance) transitionTo(ctx context.Context, to domain.Status) error {
 		def.After(ctx, i)
 	}
 	return nil
+}
+
+// liveStatus reads Status under i.mu. Actor confinement does not cover it: RecoverFromStopped
+// and friends write from any goroutine, and a plain *Instance has no actor. Caller must not hold i.mu.
+func (i *Instance) liveStatus() domain.Status {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.Status
+}
+
+// ensureActiveLocked transitions to Active unless already there. The check and the transition
+// share one status read, so a concurrent move to Active is not an invalid Active -> Active edge.
+func ensureActiveLocked(s *instanceState, ctx context.Context) error {
+	err := transitionToLocked(s, ctx, domain.Active)
+	var invalid domain.ErrInvalidTransition
+	if errors.As(err, &invalid) && invalid.From == domain.Active {
+		return nil
+	}
+	return err
 }
 
 // transitionToLocked executes a state transition from within an actor command.
@@ -285,15 +305,16 @@ func (i *Instance) TransitionToStoppedIfActiveOrLoad(ctx context.Context) error 
 func (i *Instance) transitionIf(ctx context.Context, from, to domain.Status, loadOnError bool) error {
 	type result struct{ err error }
 	res, _ := sendCtxValue(ctx, i, func(s *instanceState) (result, error) {
-		s.inst.mu.RLock()
-		status := s.inst.Status
-		s.inst.mu.RUnlock()
-		if status != from {
+		if s.inst.liveStatus() != from {
 			return result{}, nil
 		}
 		err := transitionToLocked(s, context.Background(), to)
 		if err != nil && loadOnError {
+			s.inst.mu.Lock()
 			s.inst.loadStatus(to)
+			snap := BuildSnapshot(s.inst)
+			s.inst.mu.Unlock()
+			s.inst.snapshot.Store(snap)
 		}
 		return result{err}, nil
 	})
