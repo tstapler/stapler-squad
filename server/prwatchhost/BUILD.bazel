@@ -73,6 +73,11 @@ go_test(
     ],
 )
 
+exports_files(
+    ["sessions.go"],
+    visibility = ["//session:__pkg__"],
+)
+
 # Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
 filegroup(
     name = "go_sources",
