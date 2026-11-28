@@ -4,9 +4,9 @@
 
 import { useEffect, useState } from "react";
 import { Modal, ModalContent, ModalTitle, ModalClose } from "@/components/ui/Modal";
-import { WorkflowProto } from "@/gen/session/v1/session_pb";
+import type { WorkflowProto } from "@/gen/session/v1/session_pb";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
-import { WorkflowFormData } from "@/lib/hooks/useWorkflows";
+import type { WorkflowFormData } from "@/lib/hooks/useWorkflows";
 import {
   ruleModalContent, modalHeader, modalTitleRow, modalBody, modalCloseButton,
   formSection, formSectionHeader, formGrid, label as labelClass, input as inputClass,
@@ -320,6 +320,7 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
                     disabled={isEdit}
                     data-testid={`trigger-type-${t.value}`}
                   >
+                    {/* analytics-exempt */}
                     {t.label}
                   </button>
                 ))}
@@ -535,6 +536,7 @@ export function TriggerFormModal({ open, editTrigger, onSave, onClose }: Trigger
                 {saving ? "Saving…" : isEdit ? "Save Changes" : "Create Trigger"}
               </button>
               <button type="button" className={cancelButton} onClick={onClose} disabled={saving}>
+                {/* analytics-exempt */}
                 Cancel
               </button>
             </div>
@@ -584,6 +586,7 @@ function SecretField({
         <div className={secretRow}>
           <span className={secretMasked} data-testid="trigger-secret-masked">•••• (unchanged)</span>
           <button type="button" className={secretButton} onClick={onStartRotate} data-testid="trigger-secret-rotate">
+            {/* analytics-exempt */}
             Rotate secret
           </button>
         </div>
@@ -609,10 +612,12 @@ function SecretField({
             disabled={generationUnsupported}
             data-testid="trigger-secret-generate"
           >
+            {/* analytics-exempt */}
             {generatedSecret ? "Regenerate" : "Generate secret"}
           </button>
           {generatedSecret && (
             <button type="button" className={secretButton} onClick={() => onCopy(generatedSecret)} data-testid="trigger-secret-copy">
+              {/* analytics-exempt */}
               {secretCopied ? "Copied ✓" : "Copy"}
             </button>
           )}
