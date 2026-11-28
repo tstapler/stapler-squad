@@ -89,6 +89,8 @@ go_test(
         "testmain_test.go",
         "tilde_test.go",
     ],
+    # spawn_test.go and pipeline_wiring_test.go parse the package sources.
+    data = glob(["*.go"]),
     embed = [":sessioncreate"],
     deps = [
         "//config",
