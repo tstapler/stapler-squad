@@ -1,4 +1,5 @@
-package server
+// Package tlscert issues and serves the server's local CA and per-network leaf certificates.
+package tlscert
 
 import (
 	"crypto/ecdsa"

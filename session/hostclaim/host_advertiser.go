@@ -52,7 +52,7 @@ func NewHostAdvertiser(identity HostIdentity, registry *HostRegistry, addresses 
 		addresses: addresses,
 		// TLSClientConfig.InsecureSkipVerify: every peer's --remote-port
 		// server (server/server.go's StartRemote) always serves TLS with a
-		// locally-minted self-signed CA (server/tls.go) -- there is no
+		// locally-minted self-signed CA (server/tlscert/tls.go) -- there is no
 		// shared CA between independently-provisioned hosts for per-
 		// connection certificate verification to succeed against. Per
 		// docs/adr/ADR-002-workspace-host-registry-gossip.md, peer identity is instead authenticated at the

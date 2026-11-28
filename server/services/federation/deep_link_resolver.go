@@ -96,7 +96,7 @@ func NewRegistryHostResolver(stateDir string, ttl time.Duration) *registryHostRe
 // stapler-squad instance's --remote-port server (server/server.go's
 // StartRemote always calls ServeTLS -- there is no plaintext-HTTP remote
 // listener). Certificate verification is deliberately skipped: each
-// instance mints its own local, self-signed TLS CA (server/tls.go) with no
+// instance mints its own local, self-signed TLS CA (server/tlscert/tls.go) with no
 // mechanism for two independently-provisioned hosts to share or exchange
 // CAs, so per-connection TLS verification cannot succeed between peers by
 // construction. Authentication instead happens at the application layer,

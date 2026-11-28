@@ -61,7 +61,7 @@ leaves: `xsync` bucket locks and `singleflight` internals. `SharedObjectStore.mu
 
 ## Where the counters live
 
-- `report.go`: `BuildReport(scanner)` (served at `/actuator/unfinished-scanner`, `server/actuator.go`) and the
+- `report.go`: `BuildReport(scanner)` (served at `/actuator/unfinished-scanner`, `server/actuator/actuator.go`) and the
   one startup INFO line (`LogStartup`).
 - `metrics_repostate.go`: the `unfinished.repostate.*` OTel catalog and its per-cache inputs;
   `metrics_duration.go`: graph-extension timing; `metrics.go`: scan cycles, full-walk reasons.

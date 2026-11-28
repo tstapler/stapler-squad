@@ -18,7 +18,7 @@ import (
 // *tls.Config alongside the client-side *x509.CertPool that trusts it.
 //
 // This is a fresh, test-only implementation rather than a wrapper around
-// server/tls.go's generateCA/generateServerCert: those helpers are
+// server/tlscert/tls.go's generateCA/generateServerCert: those helpers are
 // unexported in package server, and testutil must remain importable from
 // packages (like server/services' external services_test package) that
 // cannot reach unexported production symbols. Shared by server's and

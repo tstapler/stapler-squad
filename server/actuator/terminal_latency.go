@@ -1,4 +1,4 @@
-package server
+package actuator
 
 import (
 	"encoding/json"
@@ -25,9 +25,9 @@ const terminalLatencyNote = "ms for duration stages, counts for *_depth stages; 
 	"echo_* and ttfp_* are browser-measured; the rest are server-side. " +
 	"alerting lists stages whose p95 is over its limit (echo_paint: " + termlat.EnvEchoP95Ms + ", default 150 ms; input_total: 100 ms)."
 
-// handleActuatorTerminalLatency serves the rolling terminal latency report. JSON by default;
+// TerminalLatency serves the rolling terminal latency report. JSON by default;
 // ?format=text for a terminal. Read-only, aggregate data with no session identifiers.
-func handleActuatorTerminalLatency(rec *termlat.Recorder) http.HandlerFunc {
+func TerminalLatency(rec *termlat.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

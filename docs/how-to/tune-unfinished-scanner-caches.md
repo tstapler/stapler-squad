@@ -12,7 +12,7 @@ change below needs a restart (`FlagsFromConfig` in `session/unfinished/flags.go`
 curl -s localhost:8543/actuator/unfinished-scanner | jq .
 ```
 
-The handler is `handleActuatorUnfinishedScanner` (`server/actuator.go`); it renders
+The handler is `actuator.UnfinishedScanner` (`server/actuator/actuator.go`); it renders
 `unfinished.BuildReport(scanner)` (`session/unfinished/report.go`), built from atomics with no lock. Keys:
 
 | Key | Meaning |

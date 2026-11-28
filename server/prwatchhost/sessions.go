@@ -1,4 +1,4 @@
-package server
+package prwatchhost
 
 import (
 	"context"
@@ -21,8 +21,8 @@ type prwatchSessionView interface {
 	IsReadyForSteer(sessionUUID string) bool
 }
 
-// prwatchBacklogStore is the Storage subset used for the D4 exclusion.
-type prwatchBacklogStore interface {
+// BacklogStore is the Storage subset used for the D4 exclusion.
+type BacklogStore interface {
 	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]backlogdto.ItemSessionSummary, error)
 	GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error)
 	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)
@@ -63,7 +63,7 @@ func detectRemote(path string) (owner, repo, host string, resolved bool) {
 type prwatchSessions struct {
 	snapshots   func() []*domain.InstanceSnapshot
 	view        prwatchSessionView
-	store       prwatchBacklogStore
+	store       BacklogStore
 	ignoreRepos []string
 	resolve     prwatchRemoteResolver
 	clock       func() time.Time
@@ -78,7 +78,7 @@ type prwatchSessions struct {
 
 var _ prwatch.Sessions = (*prwatchSessions)(nil)
 
-func newPRWatchSessions(snapshots func() []*domain.InstanceSnapshot, view prwatchSessionView, store prwatchBacklogStore, ignoreRepos []string) *prwatchSessions {
+func newPRWatchSessions(snapshots func() []*domain.InstanceSnapshot, view prwatchSessionView, store BacklogStore, ignoreRepos []string) *prwatchSessions {
 	return &prwatchSessions{
 		snapshots: snapshots, view: view, store: store, ignoreRepos: ignoreRepos,
 		resolve: detectRemote, clock: time.Now,
@@ -188,7 +188,7 @@ func (s *prwatchSessions) IsBusy(sessionUUID string) bool {
 
 // prwatchBacklogLinks implements prwatch.BacklogLinks (D4): one batched link
 // query, then at most one GetBacklogItem per distinct linked item.
-type prwatchBacklogLinks struct{ store prwatchBacklogStore }
+type prwatchBacklogLinks struct{ store BacklogStore }
 
 func (l *prwatchBacklogLinks) Pending(ctx context.Context, uuids []string) (pending, failed map[string]bool, err error) {
 	links, err := l.store.ListItemSessionsBySessionUUIDs(ctx, uuids)

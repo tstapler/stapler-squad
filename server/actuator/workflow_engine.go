@@ -1,4 +1,4 @@
-package server
+package actuator
 
 import (
 	"context"
@@ -34,15 +34,6 @@ type WorkflowEngineSoakSource struct {
 	Now func() time.Time
 }
 
-// SetWorkflowEngineSoakSource wires the actuator's soak data.
-func (s *Server) SetWorkflowEngineSoakSource(src *WorkflowEngineSoakSource) {
-	s.workflowEngineSoak.Store(src)
-}
-
-func (s *Server) handleActuatorWorkflowEngine(w http.ResponseWriter, r *http.Request) {
-	writeWorkflowEngineSoak(w, r, s.workflowEngineSoak.Load())
-}
-
 var soakClasses = []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem}
 
 // soakSeries is one labeled counter in the JSON body.
@@ -68,7 +59,7 @@ type workflowEngineReport struct {
 	ConfigDiffMessage string                        `json:"config_diff_error,omitempty"`
 }
 
-func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *WorkflowEngineSoakSource) {
+func ServeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *WorkflowEngineSoakSource) {
 	if src == nil || src.Ledger == nil {
 		w.Header().Set("X-Workflow-Engine-Soak-Exit", "2")
 		http.Error(w, "workflow engine soak is not wired in this process", http.StatusServiceUnavailable)

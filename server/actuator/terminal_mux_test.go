@@ -1,4 +1,4 @@
-package server
+package actuator
 
 import (
 	"net/http"
@@ -15,7 +15,7 @@ import (
 func muxActuatorStatus(t *testing.T, listener, method, query string, b *wsconn.TerminalMuxBridge) (int, int) {
 	t.Helper()
 	h := access.WithRequestRecord(listener, listener == access.ListenerRemote)(
-		handleActuatorTerminalMux(func() *wsconn.TerminalMuxBridge { return b }))
+		TerminalMux(func() *wsconn.TerminalMuxBridge { return b }))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(method, "/actuator/terminal-mux"+query, nil))
 	size := -1

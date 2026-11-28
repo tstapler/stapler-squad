@@ -1,0 +1,76 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "actuator",
+    srcs = [
+        "actuator.go",
+        "terminal_latency.go",
+        "workflow_engine.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/actuator",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/termlat",
+        "//profiling",
+        "//server/prwatch",
+        "//server/services/access",
+        "//server/services/wsconn",
+        "//session/dbmaint",
+        "//session/dbobs",
+        "//session/dbpool",
+        "//session/domain",
+        "//session/gitwiring",
+        "//session/nudgeoutcomes",
+        "//session/tmux",
+        "//session/unfinished",
+        "//session/workflowengine",
+        "//tools/bzl/ent",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":actuator",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "actuator_test",
+    srcs = [
+        "actuator_test.go",
+        "nudge_outcomes_test.go",
+        "terminal_input_test.go",
+        "terminal_latency_test.go",
+        "terminal_mux_test.go",
+        "workflow_engine_w21a_test.go",
+    ],
+    embed = [":actuator"],
+    deps = [
+        "//internal/termlat",
+        "//profiling",
+        "//server/services/access",
+        "//server/services/wsconn",
+        "//session",
+        "//session/backlog/shadowledger",
+        "//session/dbpool",
+        "//session/domain",
+        "//session/gitwiring",
+        "//session/nudgeoutcomes",
+        "//session/stagecfg",
+        "//session/tmux",
+        "//session/workflowengine",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogstage",
+        "//tools/bzl/ent:stagetransition",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

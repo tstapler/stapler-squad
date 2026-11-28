@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server"
 	serverauth "github.com/tstapler/stapler-squad/server/auth"
 	"github.com/tstapler/stapler-squad/server/middleware"
+	"github.com/tstapler/stapler-squad/server/tlscert"
 	"go.uber.org/goleak"
 )
 
@@ -314,7 +315,7 @@ func hostnameHasRPID(h *serverauth.Handler, hostname string) bool {
 
 // certStoreHasSAN reports whether certStore's current cert map contains
 // hostname in any network's SANs.
-func certStoreHasSAN(certStore *server.NetworkCertStore, hostname string) bool {
+func certStoreHasSAN(certStore *tlscert.NetworkCertStore, hostname string) bool {
 	for _, cert := range certStore.Load() {
 		if slices.Contains(cert.SANs, hostname) {
 			return true
@@ -332,8 +333,8 @@ type gateTestDetectorConfig struct {
 	detectFn      func(context.Context) []string
 	resolveFn     func(context.Context, string) []string
 	waHandler     *serverauth.Handler
-	certStore     *server.NetworkCertStore
-	certPublisher func(map[string][]string) (string, map[string]*server.NetworkCert, error)
+	certStore     *tlscert.NetworkCertStore
+	certPublisher func(map[string][]string) (string, map[string]*tlscert.NetworkCert, error)
 	validateFn    func(context.Context, string) bool
 }
 
@@ -364,7 +365,7 @@ func TestHostnameDetector_Redetect_UnverifiedHostnameNeverReachesRPIDOrTLS(t *te
 	const spoofed = "evil-onyx.local"
 
 	h := newTestWAHandler(t, seedRPID)
-	certStore := server.NewNetworkCertStore(nil)
+	certStore := tlscert.NewNetworkCertStore(nil)
 	srv := &server.Server{}
 
 	d := newGateTestDetector(gateTestDetectorConfig{
@@ -373,7 +374,7 @@ func TestHostnameDetector_Redetect_UnverifiedHostnameNeverReachesRPIDOrTLS(t *te
 		resolveFn:     func(context.Context, string) []string { return []string{spoofed} },
 		waHandler:     h,
 		certStore:     certStore,
-		certPublisher: server.EnsureNetworkTLSCerts,
+		certPublisher: tlscert.EnsureNetworkTLSCerts,
 		validateFn:    func(context.Context, string) bool { return false },
 	})
 
@@ -404,7 +405,7 @@ func TestHostnameDetector_Redetect_VerifiedHostnameReachesRPIDAndTLS(t *testing.
 	const verified = "netflix1.newwifi.local"
 
 	h := newTestWAHandler(t, seedRPID)
-	certStore := server.NewNetworkCertStore(nil)
+	certStore := tlscert.NewNetworkCertStore(nil)
 	srv := &server.Server{}
 
 	d := newGateTestDetector(gateTestDetectorConfig{
@@ -413,7 +414,7 @@ func TestHostnameDetector_Redetect_VerifiedHostnameReachesRPIDAndTLS(t *testing.
 		resolveFn:     func(context.Context, string) []string { return []string{verified} },
 		waHandler:     h,
 		certStore:     certStore,
-		certPublisher: server.EnsureNetworkTLSCerts,
+		certPublisher: tlscert.EnsureNetworkTLSCerts,
 		validateFn:    func(context.Context, string) bool { return true },
 	})
 
@@ -471,10 +472,10 @@ func TestHostnameDetector_Redetect_CertIssuanceFailureDoesNotRollbackRPID(t *tes
 	const verified = "netflix1.newwifi.local"
 
 	h := newTestWAHandler(t, seedRPID)
-	certStore := server.NewNetworkCertStore(nil)
+	certStore := tlscert.NewNetworkCertStore(nil)
 	srv := &server.Server{}
 
-	failingPublisher := func(map[string][]string) (string, map[string]*server.NetworkCert, error) {
+	failingPublisher := func(map[string][]string) (string, map[string]*tlscert.NetworkCert, error) {
 		return "", nil, fmt.Errorf("simulated cert issuance failure")
 	}
 
@@ -512,13 +513,13 @@ func TestHostnameDetector_Redetect_RepeatedNoOpCyclesAreStable(t *testing.T) {
 	const verified = "netflix1.newwifi.local"
 
 	h := newTestWAHandler(t, seedRPID)
-	certStore := server.NewNetworkCertStore(nil)
+	certStore := tlscert.NewNetworkCertStore(nil)
 	srv := &server.Server{}
 
 	var publisherCalls int32
-	countingPublisher := func(networks map[string][]string) (string, map[string]*server.NetworkCert, error) {
+	countingPublisher := func(networks map[string][]string) (string, map[string]*tlscert.NetworkCert, error) {
 		atomic.AddInt32(&publisherCalls, 1)
-		return server.EnsureNetworkTLSCerts(networks)
+		return tlscert.EnsureNetworkTLSCerts(networks)
 	}
 
 	d := newGateTestDetector(gateTestDetectorConfig{

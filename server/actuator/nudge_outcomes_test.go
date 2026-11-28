@@ -1,4 +1,4 @@
-package server
+package actuator
 
 import (
 	"encoding/json"
@@ -15,7 +15,7 @@ func TestHandleActuatorNudgeOutcomes_ServesTotalsAndSince(t *testing.T) {
 	rec.Record(nudgeoutcomes.NudgeKindStall, nudgeoutcomes.NudgeOutcomeDelivered, "S1")
 
 	w := httptest.NewRecorder()
-	handleActuatorNudgeOutcomes(w, httptest.NewRequest(http.MethodGet, "/actuator/nudge-outcomes", nil))
+	NudgeOutcomes(w, httptest.NewRequest(http.MethodGet, "/actuator/nudge-outcomes", nil))
 
 	var body nudgeoutcomes.NudgeOutcomeReport
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {

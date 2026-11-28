@@ -1,22 +1,28 @@
-package server
+// Package prwatchhost runs the server/prwatch engine inside the web server: the
+// adapters onto the server's session service, store, inbox and event bus, and the
+// poller's lifecycle. The server's composition root supplies Deps.
+package prwatchhost
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/internal/proflabel"
-	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/steertext"
 	"net"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/proflabel"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/steertext"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/prwatch/inbox"
 	"github.com/tstapler/stapler-squad/server/wakes"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const prwatchLeaderLockName = "prwatch.leader.lock"
@@ -104,12 +110,12 @@ func reportPRWatchNonLoopback(w prwatchWiring) *prwatch.StatusTracker {
 }
 
 // Start runs the poller, the leader-lock release and the self-login resolver
-// under srv.backgroundTasksWG; all end when ctx is cancelled. The resolver
+// through goBackground; all end when ctx is cancelled. The resolver
 // waits for the flag so a flag-off process never calls GitHub.
-func (m *prwatchModule) Start(ctx context.Context, srv *Server) {
-	srv.goBackground(func() { proflabel.Do("pr_watch_poller", func() { m.poller.Run(ctx) }) })
-	srv.goBackground(func() { m.leader.Watch(ctx) })
-	srv.goBackground(func() {
+func (m *prwatchModule) Start(ctx context.Context, goBackground func(func())) {
+	goBackground(func() { proflabel.Do("pr_watch_poller", func() { m.poller.Run(ctx) }) })
+	goBackground(func() { m.leader.Watch(ctx) })
+	goBackground(func() {
 		if !m.waitEnabled(ctx) {
 			return
 		}
@@ -192,13 +198,30 @@ func prwatchSettings(c config.InboxPRWatchSettings, host, statusURL, guide, lock
 	}
 }
 
-// startPRWatch builds the PR watch consumer and starts it on srv's background
-// WaitGroup. The flag is read live every tick, so with it off nothing polls and
-// nothing touches the inbox. A non-loopback URL builds no poller (one warning).
-func startPRWatch(ctx context.Context, srv *Server, deps *ServerDependencies) {
-	if deps.SessionService == nil || deps.Storage == nil {
-		return
-	}
+// SessionService is the part of the session service the poller reads and steers through.
+type SessionService interface {
+	GetInstances() []*instance.Instance
+	prwatchSessionSteerer
+	prwatchSessionView
+}
+
+// Deps is what Start needs from its server; every field is required except Bus.
+type Deps struct {
+	// Addr is the listen address, used for the operator status URL.
+	Addr     string
+	Sessions SessionService
+	Store    BacklogStore
+	Bus      *events.EventBus
+	// Go runs fn under the server's background WaitGroup.
+	Go func(fn func())
+	// OnShutdown registers a hook the server runs when it shuts down.
+	OnShutdown func(hook func())
+}
+
+// Start builds the PR watch consumer and runs it through d.Go. The flag is read
+// live every tick, so with it off nothing polls and nothing touches the inbox.
+// A non-loopback URL builds no poller (one warning).
+func Start(ctx context.Context, d Deps) {
 	cfg := config.LoadConfig()
 	cs, corrections := cfg.InboxPRWatchSettings()
 	config.LogInboxPRWatchCorrections(corrections, log.Warn)
@@ -207,7 +230,7 @@ func startPRWatch(ctx context.Context, srv *Server, deps *ServerDependencies) {
 		host = "unknown"
 	}
 	leader, lockPath := prwatchLeaderGuard()
-	settings := prwatchSettings(cs, host, prwatchStatusURL(srv.GetAddr()), prwatchGuidePath(), lockPath)
+	settings := prwatchSettings(cs, host, prwatchStatusURL(d.Addr), prwatchGuidePath(), lockPath)
 	client, err := inbox.NewClient(inbox.Config{URL: settings.URL, TokenPath: settings.TokenPath, ConsumerID: settings.ConsumerID})
 	if err != nil {
 		if errors.Is(err, inbox.ErrNonLoopbackURL) {
@@ -215,11 +238,11 @@ func startPRWatch(ctx context.Context, srv *Server, deps *ServerDependencies) {
 			log.Warn("prwatch not started: inbox url is not a loopback address")
 			if prwatchEnabled() {
 				status := reportPRWatchNonLoopback(prwatchWiring{
-					Settings: settings, Notifier: prwatchNotifier{bus: deps.EventBus},
+					Settings: settings, Notifier: prwatchNotifier{bus: d.Bus},
 					Clock: prwatchClock{}, Log: prwatchLogger{},
 				})
-				SetPRWatchStatusProvider(func() prwatch.Status { return status.Snapshot(nil) })
-				srv.shutdownHooks = append(srv.shutdownHooks, func() { SetPRWatchStatusProvider(nil) })
+				SetStatusProvider(func() prwatch.Status { return status.Snapshot(nil) })
+				d.OnShutdown(func() { SetStatusProvider(nil) })
 			}
 			return
 		}
@@ -230,7 +253,7 @@ func startPRWatch(ctx context.Context, srv *Server, deps *ServerDependencies) {
 	for _, c := range corrections {
 		sc = append(sc, prwatch.SettingCorrection{Key: c.Key, Bad: c.Value, Effective: c.Effective})
 	}
-	svc := deps.SessionService
+	svc := d.Sessions
 	snapshots := func() []*domain.InstanceSnapshot {
 		insts := svc.GetInstances()
 		out := make([]*domain.InstanceSnapshot, 0, len(insts))
@@ -243,16 +266,16 @@ func startPRWatch(ctx context.Context, srv *Server, deps *ServerDependencies) {
 	}
 	m := newPRWatchModule(prwatchWiring{
 		Settings: settings, Corrections: sc, Inbox: prwatchInbox{c: client},
-		Sessions:  newPRWatchSessions(snapshots, svc, deps.Storage, settings.IgnoreRepos),
+		Sessions:  newPRWatchSessions(snapshots, svc, d.Store, settings.IgnoreRepos),
 		Steerer:   prwatchSteerer{svc: svc},
 		Snapshots: newPRWatchSnapshots(snapshots),
 		SelfLogin: prwatchSelfLogin{},
-		Notifier:  prwatchNotifier{bus: deps.EventBus},
+		Notifier:  prwatchNotifier{bus: d.Bus},
 		Leader:    leader, Clock: prwatchClock{}, Log: prwatchLogger{},
 		Enabled: prwatchEnabled,
 	})
-	SetPRWatchStatusProvider(m.Status)
-	srv.shutdownHooks = append(srv.shutdownHooks, func() { SetPRWatchStatusProvider(nil) })
-	m.Start(ctx, srv)
+	SetStatusProvider(m.Status)
+	d.OnShutdown(func() { SetStatusProvider(nil) })
+	m.Start(ctx, d.Go)
 	log.Info("prwatch registered", "consumer", fmt.Sprint(settings.ConsumerID), "flag", config.FeatureInboxPRWatch)
 }

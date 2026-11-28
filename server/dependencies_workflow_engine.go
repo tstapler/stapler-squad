@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/actuator"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
@@ -32,7 +33,7 @@ type WorkflowEngineWiring struct {
 	// Recorder persists the shadow ledger; its Run is started with the server.
 	Recorder *shadowledger.ShadowLedgerRecorder
 	// Soak backs /actuator/workflow-engine.
-	Soak *WorkflowEngineSoakSource
+	Soak *actuator.WorkflowEngineSoakSource
 	// Status backs GetWorkflowEngineStatus; GateWired is filled by InjectTransitionGate.
 	Status *backlogsvc.WorkflowEngineStatusSource
 }
@@ -53,7 +54,7 @@ func newWorkflowEngineWiring(def *workflowengine.DefaultWorkflowEngine, cfgEngin
 		workflowengine.WithConfigLabeler(shadowledger.NewConfigLabeler(stageFingerprintFunc(entClient), nil)),
 	)
 
-	soak := &WorkflowEngineSoakSource{
+	soak := &actuator.WorkflowEngineSoakSource{
 		Ledger: func() (workflowengine.ShadowLedger, error) { return recorder.Snapshot(), nil },
 		AnyClassEnforced: func() bool {
 			cfg := loadConfig()
@@ -64,7 +65,7 @@ func newWorkflowEngineWiring(def *workflowengine.DefaultWorkflowEngine, cfgEngin
 		soak.ReproPath = shadowledger.ShadowLedgerPath(dir)
 	}
 	if entClient != nil && cfgEngine != nil {
-		soak.ConfigDiff = NewWorkflowEngineConfigDiff(entClient, cfgEngine)
+		soak.ConfigDiff = actuator.NewWorkflowEngineConfigDiff(entClient, cfgEngine)
 	}
 
 	status := &backlogsvc.WorkflowEngineStatusSource{

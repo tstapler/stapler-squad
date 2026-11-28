@@ -1,4 +1,4 @@
-package server
+package prwatchhost
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func prSnap(id string, st domain.Status) *domain.InstanceSnapshot {
 	}
 }
 
-func newTestPRWatchSessions(snaps []*domain.InstanceSnapshot, store prwatchBacklogStore) *prwatchSessions {
+func newTestPRWatchSessions(snaps []*domain.InstanceSnapshot, store BacklogStore) *prwatchSessions {
 	return newPRWatchSessions(func() []*domain.InstanceSnapshot { return snaps }, fakeSessionView{}, store, nil)
 }
 
@@ -87,21 +87,21 @@ func TestPRWatchSessions_should_NegateReadiness_When_IsBusy(t *testing.T) {
 }
 
 type countingStore struct {
-	prwatchBacklogStore
+	BacklogStore
 	batches, itemReads int
 	failItems          bool
 }
 
 func (c *countingStore) ListItemSessionsBySessionUUIDs(ctx context.Context, u []string) (map[string]backlogdto.ItemSessionSummary, error) {
 	c.batches++
-	return c.prwatchBacklogStore.ListItemSessionsBySessionUUIDs(ctx, u)
+	return c.BacklogStore.ListItemSessionsBySessionUUIDs(ctx, u)
 }
 func (c *countingStore) GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error) {
 	c.itemReads++
 	if c.failItems {
 		return nil, errors.New("boom")
 	}
-	return c.prwatchBacklogStore.GetBacklogItem(ctx, id)
+	return c.BacklogStore.GetBacklogItem(ctx, id)
 }
 
 func TestBacklogLinkLookup_should_UseBatchedLinkQueryAndOneItemReadPerDistinctItem_When_ManySessions(t *testing.T) {
@@ -124,7 +124,7 @@ func TestBacklogLinkLookup_should_UseBatchedLinkQueryAndOneItemReadPerDistinctIt
 	}
 	p1, p2, d, ip, none := link(pendingItem), link(pendingItem), link(doneItem), link(progressItem), uuid.New().String()
 
-	store := &countingStore{prwatchBacklogStore: storage}
+	store := &countingStore{BacklogStore: storage}
 	pending, failed, err := (&prwatchBacklogLinks{store: store}).Pending(ctx, []string{p1, p2, d, ip, none})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]bool{p1: true, p2: true}, pending)

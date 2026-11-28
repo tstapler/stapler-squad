@@ -101,7 +101,7 @@ Sender behavior (`mobileInput/telemetry.ts`): per-unit counts are summed and sen
 
 ### Actuator
 
-`GET /actuator/terminal-input` (JSON; `?format=text` for a terminal) returns the bounded per-session tally (LRU of 256 sessions): `sessionId`, `frames`, `bytes`, `byKind`, `byPath` (`{received, forwarded}` per path) and `lastAt`. It carries no content field. Registered beside `/actuator/ws-unary` in `server/actuator.go`.
+`GET /actuator/terminal-input` (JSON; `?format=text` for a terminal) returns the bounded per-session tally (LRU of 256 sessions): `sessionId`, `frames`, `bytes`, `byKind`, `byPath` (`{received, forwarded}` per path) and `lastAt`. It carries no content field. Registered beside `/actuator/ws-unary` in `server/actuator_routes.go`.
 
 ### Logs
 
