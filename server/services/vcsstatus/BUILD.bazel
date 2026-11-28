@@ -38,6 +38,7 @@ go_test(
         "testmain_test.go",
         "vcs_cache_coalesce_test.go",
         "vcs_range_cache_test.go",
+        "vcs_status_cache_test.go",
     ],
     embed = [":vcsstatus"],
     deps = [
@@ -48,6 +49,11 @@ go_test(
         "@com_connectrpc_connect//:connect",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        "@io_opentelemetry_go_otel_trace//:trace",
     ],
 )
 

@@ -170,7 +170,9 @@ var goldenVolatile = regexp.MustCompile(`"(statusAsOf|authoredAt|sha|headCommit|
 func goldenVCSStatus(t *testing.T, o *goldenOut) {
 	ctx := context.Background()
 	dir, baseSHA, _ := svctest.NewVCSStatusTestRepo(t)
-	plain := t.TempDir()
+	// Absolute and nonexistent: a temp dir can sit under somebody's repository (GOTMPDIR
+	// below a jj repo in $HOME), and the VCS lookup walks the parents.
+	const plain = "/ssq-golden-no-vcs/plain"
 	// out records a response with the repo's own paths, hashes and times blanked.
 	out := func(name string, ws *WorkspaceService, req *sessionv1.GetVCSStatusRequest) {
 		sub := &goldenOut{t: t}

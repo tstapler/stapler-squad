@@ -64,33 +64,33 @@ var vcsMetrics = sync.OnceValue(func() *vcsStatusMetrics {
 	var err error
 	if m.requests, err = meter.Int64Counter("vcs.status.requests",
 		metric.WithDescription("GetVCSStatus calls by outcome: cache_hit, stale_hit (stale entry served, refresh in background), computed (leader), coalesced (joined an in-flight computation), error, canceled")); err != nil {
-		log.Error("services: register vcs.status.requests", "error", err)
+		log.Error("vcsstatus: register vcs.status.requests", "error", err)
 	}
 	if m.compute, err = meter.Float64Histogram("vcs.status.compute.duration",
 		metric.WithUnit("ms"),
 		metric.WithDescription("Wall time of one shared git status computation (excludes cache hits), labeled by outcome"),
 		metric.WithExplicitBucketBoundaries(5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000)); err != nil {
-		log.Error("services: register vcs.status.compute.duration", "error", err)
+		log.Error("vcsstatus: register vcs.status.compute.duration", "error", err)
 	}
 	if m.lockWait, err = meter.Float64Histogram("vcs.status.queue_wait.duration",
 		metric.WithUnit("ms"),
 		metric.WithDescription("Time a computation waited for one of the concurrent-computation slots"),
 		metric.WithExplicitBucketBoundaries(1, 5, 10, 50, 100, 500, 1000, 5000, 30000)); err != nil {
-		log.Error("services: register vcs.status.queue_wait.duration", "error", err)
+		log.Error("vcsstatus: register vcs.status.queue_wait.duration", "error", err)
 	}
 	if m.inFlight, err = meter.Int64UpDownCounter("vcs.status.in_flight",
 		metric.WithDescription("Git status computations currently running or queued for a slot")); err != nil {
-		log.Error("services: register vcs.status.in_flight", "error", err)
+		log.Error("vcsstatus: register vcs.status.in_flight", "error", err)
 	}
 	if m.stage, err = meter.Float64Histogram("vcs.status.stage.duration",
 		metric.WithUnit("ms"),
 		metric.WithDescription("Wall time of one stage of a GetVCSStatus computation, labeled by stage (git_status, shipped_commits, diff_stat) and result (ok, error, canceled, timeout, budget_exceeded, walk_limit; the last two only for shipped_commits/diff_stat)"),
 		metric.WithExplicitBucketBoundaries(5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000)); err != nil {
-		log.Error("services: register vcs.status.stage.duration", "error", err)
+		log.Error("vcsstatus: register vcs.status.stage.duration", "error", err)
 	}
 	if m.rangeCache, err = meter.Int64Counter("vcs.status.range_cache",
 		metric.WithDescription("Shipped-commit/diff-stat cache lookups keyed by (workdir, base SHA, head SHA), by stage and result: hit, miss, negative_hit (stage recently exceeded its budget or range-walk limit)")); err != nil {
-		log.Error("services: register vcs.status.range_cache", "error", err)
+		log.Error("vcsstatus: register vcs.status.range_cache", "error", err)
 	}
 	return m
 })

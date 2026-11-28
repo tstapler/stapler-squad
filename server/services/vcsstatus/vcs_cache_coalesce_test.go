@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"connectrpc.com/connect"
@@ -298,15 +299,19 @@ func TestVCSFlights_ComputeDeadlineStartsAfterSlotAcquired(t *testing.T) {
 
 // Background refreshes yield to interactive misses: with every slot busy none is started.
 func TestRefreshVCSStatusInBackground_SkippedWhenSaturated(t *testing.T) {
-	spy := svctest.InstallStatusSpy(t, false)
-	svc, dir := vcsStatusFixture(t, spy)
-	svc.flights.init()
-	for i := 0; i < maxConcurrentVCSComputations; i++ {
-		svc.flights.slots <- struct{}{}
-	}
-	svc.refreshInBackground(context.Background(), svc.baseSHA, dir)
-	assert.Zero(t, svc.flights.waiters(dir))
-	assert.Zero(t, spy.Calls.Load())
+	vcsMetrics() // registered outside the bubble
+	synctest.Test(t, func(t *testing.T) {
+		var c Cache
+		c.flights.init()
+		for i := 0; i < maxConcurrentVCSComputations; i++ {
+			c.flights.slots <- struct{}{}
+		}
+		c.refreshInBackground(context.Background(), func() string { return "" }, "/w")
+		synctest.Wait() // a wrongly started refresh has now registered its flight
+		assert.Zero(t, c.flights.waiters("/w"))
+		// Fake time, so a wrongly started refresh gives up before the bubble ends.
+		time.Sleep(vcsComputeTimeout + time.Second) //nolint:notimesleeptest synctest fake clock
+	})
 }
 
 // The last waiter leaving mid-compute cancels the context; git calls after that fail on it. The
