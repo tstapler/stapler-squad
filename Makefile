@@ -1263,17 +1263,19 @@ ready-vt-conformance-gate: ## Blocking VT conformance gate: xterm.js and ghostty
 # Package elapsed (go test -json, compile excluded) of `go test -race -short ./server/services` on origin/main at the
 # branch merge base 51132ee23, measured 2026-10-16 on a loaded 127%-CPU machine: 270.229s, 2813 tests, all pass.
 # Refresh these two values only by re-measuring on a clean checkout, never to make a gate pass.
+# The gate now sums FILES_VIEWER_RACE_PACKAGES (run with -p 1); the baseline predates that split and was not re-measured.
+FILES_VIEWER_RACE_PACKAGES = ./server/services ./server/services/contentsearch ./server/services/fileops ./server/services/pathcomplete ./server/services/fsops
 FILES_VIEWER_RACE_BASELINE_SECONDS ?= 270
 FILES_VIEWER_RACE_BUDGET_PERCENT ?= 10
 FILES_VIEWER_JSCPD_THRESHOLD ?= 0.14
 FILES_VIEWER_JSCPD_MIN_HEADROOM ?= 0.02
 # Fixed list of test-name prefixes owned by the files viewer; extend as stories land.
-FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions|TestAnalyze|FuzzAnalyze|TestAnalysisCache|TestReadRange|TestFileOps|TestCapabilities)
+FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions|TestAnalyze|FuzzAnalyze|TestAnalysisCache|TestReadRange|TestFileOps|TestCapabilities|TestSessionServiceWriteFile|TestSessionService_ShouldServePathCompletions|TestWorkspaceService_ShouldEvictVcsStatusCache|TestNewGatedSessionService_ShouldInjectRegistryIntoFileService|TestRangeLimiter|TestFileService_SetFlagRegistry|TestListPathCompletions|TestNewFileService|TestNewFileOps)
 
 .PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
 
 files-viewer-go-tests: ensure-tools proto-gen ## Iterate on the files-viewer Go tests only, with -race (fixed -run prefix list)
-	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/contentsearch ./server/services/fsops
+	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/contentsearch ./server/services/fileops ./server/services/pathcomplete ./server/services/fsops
 
 files-viewer-perf: ensure-tools proto-gen ## Files-viewer benchmarks on full 50k-file fixtures (non-race, run in the background)
 	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services ./server/services/contentsearch
@@ -1304,13 +1306,13 @@ files-viewer-gates: ensure-tools proto-gen ## End-of-wave gates: jscpd + headroo
 	echo "== server/server.go length =="; \
 	echo "server/server.go non-blank, non-comment lines: $$(grep -vE '^[[:space:]]*(//|$$)' server/server.go | wc -l)"; \
 	if [ "$(WAVE)" = "4" ]; then $(MAKE) --no-print-directory files-viewer-server-length-probe; fi; \
-	echo "== server/services race wall-clock =="; \
+	echo "== files viewer race wall-clock =="; \
 	if [ -n "$(FILES_VIEWER_SKIP_RACE)" ]; then echo "race timing: SKIPPED (FILES_VIEWER_SKIP_RACE set)"; else \
-	  go test -race -short -timeout=22m -json ./server/services > .cache/files-race.json && rc=0 || rc=$$?; \
-	  secs=$$(jq -r 'select(.Test==null and (.Action=="pass" or .Action=="fail")) | .Elapsed' .cache/files-race.json | tail -1); \
+	  go test -p 1 -race -short -timeout=22m -json $(FILES_VIEWER_RACE_PACKAGES) > .cache/files-race.json && rc=0 || rc=$$?; \
+	  secs=$$(jq -s '[.[] | select(.Test==null and (.Action=="pass" or .Action=="fail")) | .Elapsed] | add' .cache/files-race.json); \
 	  base=$(FILES_VIEWER_RACE_BASELINE_SECONDS); \
 	  delta=$$(awk -v s=$$secs -v b=$$base 'BEGIN{printf "%.1f", (s-b)/b*100}'); \
-	  echo "server/services -race -short package elapsed: $${secs}s (baseline $${base}s, delta $${delta}%, test exit $$rc)"; \
+	  echo "files viewer -race -short summed package elapsed: $${secs}s (baseline $${base}s, delta $${delta}%, test exit $$rc)"; \
 	  awk -v d=$$delta -v m=$(FILES_VIEWER_RACE_BUDGET_PERCENT) 'BEGIN{ if (d > m) print "FLAG: delta over " m "% budget, consider Task 0.2.4d" }'; fi; \
 	exit $$jscpd_rc
 

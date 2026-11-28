@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/checkpointrpc"
+	"github.com/tstapler/stapler-squad/server/services/fileops"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/search"
@@ -926,7 +927,7 @@ func (s *SessionService) SearchFiles(
 
 // GetFileService returns the underlying FileService so callers can register
 // additional HTTP handlers (e.g. the raw file download endpoint).
-func (s *SessionService) GetFileService() *FileService {
+func (s *SessionService) GetFileService() *fileops.FileService {
 	return s.fileSvc
 }
 

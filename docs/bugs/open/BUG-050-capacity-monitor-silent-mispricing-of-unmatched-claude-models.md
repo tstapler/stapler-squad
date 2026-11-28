@@ -2,11 +2,11 @@
 
 **Status**: 🐛 Open
 **Discovered**: 2026-07-27, during `insights-cost-pricing-gaps` (AC-1..AC-7) research/planning — `research/pitfalls.md` §6 and `research/architecture.md` surfaced this as a second, independent pricing table out of scope for that project. Deferred and filed per `project_plans/insights-cost-pricing-gaps/decisions/ADR-002-capacity-monitor-pricing-scope-deferred.md` (see that ADR for full context and the two remediation options considered).
-**Impact**: `CapacityMonitor.checkThresholds` (`server/services/capacity_monitor.go:243`) compares `EstimatedCostUSD` against `config.CostBudgetUSD` (`config/types.go:257`) and returns the `cost_budget_exceeded` trigger once the budget is met/exceeded. That trigger flows into `handleTransitionTrigger` (`capacity_monitor.go:305-311`), which can **pause or stop a live autonomous session**, or auto-switch it, based on this estimate. Any Claude model whose name doesn't substring-match `opus`/`haiku`/`flash`/`pro` — e.g. `claude-sonnet-5`, or any newly-released Claude model — silently falls through to a "sonnet default" rate ($3.00/$15.00 per MTok) with **no signal anywhere that the fallback fired**. This is worse than a missing-price bug: the estimate is a plausible, nonzero cost figure, so it looks legitimate while potentially being wrong by a large factor, driving real automated pause/stop decisions on bad data.
+**Impact**: `CapacityMonitor.checkThresholds` (`server/services/capacity/capacity_monitor.go:243`) compares `EstimatedCostUSD` against `config.CostBudgetUSD` (`config/types.go:257`) and returns the `cost_budget_exceeded` trigger once the budget is met/exceeded. That trigger flows into `handleTransitionTrigger` (`capacity_monitor.go:305-311`), which can **pause or stop a live autonomous session**, or auto-switch it, based on this estimate. Any Claude model whose name doesn't substring-match `opus`/`haiku`/`flash`/`pro` — e.g. `claude-sonnet-5`, or any newly-released Claude model — silently falls through to a "sonnet default" rate ($3.00/$15.00 per MTok) with **no signal anywhere that the fallback fired**. This is worse than a missing-price bug: the estimate is a plausible, nonzero cost figure, so it looks legitimate while potentially being wrong by a large factor, driving real automated pause/stop decisions on bad data.
 
 ## Problem Description
 
-`server/services/capacity_monitor.go:351-371`:
+`server/services/capacity/capacity_monitor.go:351-371`:
 
 ```go
 func (m *CapacityMonitor) estimateCost(model string, input, output int64) float64 {
@@ -51,15 +51,15 @@ It also prices **non-Claude models** (`flash`, `pro` — Gemini families), which
 
 Two independent, hand-maintained pricing tables exist in the codebase for cost estimation:
 - `session/tokens/pricing.go`'s `PricingTable` (maintained/updated as part of `insights-cost-pricing-gaps`, Claude-scoped)
-- `server/services/capacity_monitor.go`'s `estimateCost` (out of scope for that project, substring-matched, silent-fallback, and also covers non-Claude Gemini models)
+- `server/services/capacity/capacity_monitor.go`'s `estimateCost` (out of scope for that project, substring-matched, silent-fallback, and also covers non-Claude Gemini models)
 
 `estimateCost` was never updated to route through `tokens.PricingTable`, and its substring-match approach has no "unknown model" branch — every unmatched name falls through to a default rate meant for Sonnet specifically, with no differentiation between "this is actually Sonnet" and "this is some other Claude model we don't recognize."
 
 ## Files Likely Affected
 
-- `server/services/capacity_monitor.go:351-371` — the `estimateCost` function itself
-- `server/services/capacity_monitor.go:243` — `checkThresholds`, where `EstimatedCostUSD >= config.CostBudgetUSD` produces the `cost_budget_exceeded` trigger
-- `server/services/capacity_monitor.go:305-311` — `handleTransitionTrigger`, where the trigger can pause/stop/auto-switch a live autonomous session
+- `server/services/capacity/capacity_monitor.go:351-371` — the `estimateCost` function itself
+- `server/services/capacity/capacity_monitor.go:243` — `checkThresholds`, where `EstimatedCostUSD >= config.CostBudgetUSD` produces the `cost_budget_exceeded` trigger
+- `server/services/capacity/capacity_monitor.go:305-311` — `handleTransitionTrigger`, where the trigger can pause/stop/auto-switch a live autonomous session
 - `config/types.go:257` — `CostBudgetUSD` config field being compared against
 - `session/tokens/pricing.go` — the canonical, maintained `PricingTable` this should likely be unified with for Claude models
 

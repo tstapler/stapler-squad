@@ -46,12 +46,12 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=91 loc=25339 imports=96
+server/services files=71 loc=20273 imports=95
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
 server/services/wsconn files=23 loc=9771 imports=30
-server/services/backlogsvc files=39 loc=16012 imports=45
+server/services/backlogsvc files=39 loc=16013 imports=46
 server/services/internal/svctest files=36 loc=1704 imports=23
 server/services/sessionbundle files=4 loc=862 imports=9
 server/services/devtools files=4 loc=501 imports=4
@@ -89,7 +89,7 @@ session/terminalstate files=4 loc=115 imports=2
 session/jsonmigrate files=1 loc=272 imports=2
 session/workspacepeers files=1 loc=315 imports=7
 session/backlogaux files=6 loc=308 imports=3
-server/services/fsops files=15 loc=1754 imports=6
+server/services/fsops files=17 loc=1904 imports=6
 server/services/fsops/fsopstest files=1 loc=90 imports=1
 server/services/access files=9 loc=1215 imports=8
 server/services/fsops/memfs files=1 loc=208 imports=1
@@ -128,6 +128,11 @@ server/services/autonomysvc files=5 loc=1970 imports=16
 server/services/sessiondefaults files=2 loc=946 imports=5
 server/services/claudeconfig files=1 loc=123 imports=2
 server/services/workspacedb files=1 loc=391 imports=6
+server/services/capacity files=1 loc=861 imports=9
+server/services/julesrpc files=3 loc=881 imports=9
+server/services/updatecheck files=1 loc=157 imports=5
+server/services/fileops files=14 loc=2808 imports=8
+server/services/pathcomplete files=1 loc=268 imports=4
 server/services/workflowrpc files=3 loc=1100 imports=14
 server/services/reviewqueuerpc files=1 loc=392 imports=10
 server/services/checkpointrpc files=1 loc=230 imports=7

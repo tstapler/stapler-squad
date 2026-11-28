@@ -617,6 +617,38 @@ linters:
             - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
             - github.com/tstapler/stapler-squad/log$
             - github.com/tstapler/stapler-squad/server/services/fsops$
+        # server/services/fileops owns the files viewer's policy and wire adapters over a session worktree
+        # (list, read, range, write, name search, raw serving); it never imports the services hub.
+        isolate_fileops:
+          list-mode: strict
+          files:
+            - "**/services/fileops/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/go-git/go-git/v5/plumbing/format/gitignore
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/contentsearch
+            - github.com/tstapler/stapler-squad/server/services/featureflags
+            - github.com/tstapler/stapler-squad/server/services/flagsvc
+            - github.com/tstapler/stapler-squad/server/services/fsops$
+            - github.com/tstapler/stapler-squad/session/domain$
+        # server/services/pathcomplete lists directory completions and a repository's worktrees; it never imports the hub.
+        isolate_pathcomplete:
+          list-mode: strict
+          files:
+            - "**/services/pathcomplete/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/server/services/fsops$
+            - github.com/tstapler/stapler-squad/session/git/backend$
+            - github.com/tstapler/stapler-squad/session/gitprovider$
         # server/services/escapecode owns the escape-analytics REST handler and query RPCs; it never imports the hub.
         isolate_escapecode:
           list-mode: strict
@@ -841,6 +873,54 @@ linters:
             - github.com/tstapler/stapler-squad/log$
             - github.com/tstapler/stapler-squad/server/services/fsops$
             - github.com/tstapler/stapler-squad/session/dbpool
+        # server/services/capacity, julesrpc and updatecheck are provider leaves; none imports the services
+        # hub (it builds capacity and julesrpc, and package server builds updatecheck).
+        isolate_capacity:
+          list-mode: strict
+          files:
+            - "**/services/capacity/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - modernc.org/sqlite
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/events
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/server/services/credkit
+            - github.com/tstapler/stapler-squad/session/dbpool
+            - github.com/tstapler/stapler-squad/session/domain$
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/tokens
+        isolate_julesrpc:
+          list-mode: strict
+          files:
+            - "**/services/julesrpc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/github$
+            - github.com/tstapler/stapler-squad/jules$
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance$
+        isolate_updatecheck:
+          list-mode: strict
+          files:
+            - "**/services/updatecheck/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/pkg/changelog
+            - github.com/tstapler/stapler-squad/server/services/featureflags
+            - github.com/tstapler/stapler-squad/server/services/flagsvc
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict

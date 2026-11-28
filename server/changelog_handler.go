@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/changelog"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/updatecheck"
 )
 
 // releasesRepo is the repo whose GitHub Releases the update check polls.
@@ -48,8 +49,8 @@ func loadChangelogFlags(reg *featureflags.Registry) changelogFlags {
 	}
 	cfg := config.LoadConfig()
 	c.vals = changelogFlags{
-		changelog:   services.ChangelogEnabled(cfg, reg),
-		updateCheck: services.UpdateCheckFlagEnabled(cfg, reg),
+		changelog:   updatecheck.ChangelogEnabled(cfg, reg),
+		updateCheck: updatecheck.UpdateCheckFlagEnabled(cfg, reg),
 	}
 	c.at = time.Now()
 	return c.vals
@@ -71,7 +72,7 @@ func isSourceBuild() bool {
 // registerChangelogHandlers serves /api/changelog (embedded CHANGELOG.md,
 // parsed once) and /api/update-check (opt-in GitHub Releases poll). Both
 // return 404 while the "changelog" flag is off.
-func (s *Server) registerChangelogHandlers(sessions *services.SessionService) *services.UpdateCheckService {
+func (s *Server) registerChangelogHandlers(sessions *services.SessionService) *updatecheck.UpdateCheckService {
 	reg := sessions.InjectedFlagRegistry()
 	releases := changelog.Parse(changelog.Embedded())
 	if releases == nil {
@@ -79,16 +80,16 @@ func (s *Server) registerChangelogHandlers(sessions *services.SessionService) *s
 	}
 
 	fetcher := github.NewReleaseFetcher(releasesRepo)
-	updates := services.NewUpdateCheckService(services.UpdateCheckDeps{
+	updates := updatecheck.NewUpdateCheckService(updatecheck.UpdateCheckDeps{
 		CurrentVersion: buildinfo.Version,
 		IsSourceBuild:  isSourceBuild(),
 		Enabled:        func() bool { return updateCheckEnabled(reg) },
-		Fetch: func(ctx context.Context) (*services.ReleaseInfo, error) {
+		Fetch: func(ctx context.Context) (*updatecheck.ReleaseInfo, error) {
 			rel, _, err := fetcher.Latest(ctx)
 			if err != nil {
 				return nil, err
 			}
-			return &services.ReleaseInfo{Version: rel.Version, URL: rel.HTMLURL}, nil
+			return &updatecheck.ReleaseInfo{Version: rel.Version, URL: rel.HTMLURL}, nil
 		},
 	})
 

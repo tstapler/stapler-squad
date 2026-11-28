@@ -19,7 +19,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -29,7 +29,7 @@ import (
 // is available (Task 2.4.4a) — nil (the default) makes DispatchToJules return
 // CodeFailedPrecondition, since a nil dispatcher and a disabled/unconfigured
 // Jules feature look identical from the RPC's perspective.
-func (s *BacklogService) SetJulesDispatcher(d services.JulesDispatcher) {
+func (s *BacklogService) SetJulesDispatcher(d julesrpc.JulesDispatcher) {
 	s.julesDispatcher = d
 }
 
@@ -62,7 +62,7 @@ func (s *BacklogService) DispatchToJules(
 			fmt.Errorf("branch is required — Jules can only start a session from a branch already pushed to GitHub"))
 	}
 
-	julesReq, err := services.NewJulesDispatchRequest(req.Msg.ItemId, req.Msg.Branch, req.Msg.Prompt)
+	julesReq, err := julesrpc.NewJulesDispatchRequest(req.Msg.ItemId, req.Msg.Branch, req.Msg.Prompt)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -121,12 +121,12 @@ func classifyJulesDispatchError(err error) error {
 	case errors.Is(err, jules.ErrJulesNotConfigured):
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s: %w", julesUnconfiguredMessage, err))
 	case errors.Is(err, jules.ErrJulesSourceNotRegistered),
-		errors.Is(err, services.ErrJulesDispatchInFlight),
+		errors.Is(err, julesrpc.ErrJulesDispatchInFlight),
 		errors.Is(err, domain.ErrUnresolvedBlockers):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, jules.ErrJulesRateLimited), errors.Is(err, jules.ErrJulesTransient):
 		return connect.NewError(connect.CodeUnavailable, err)
-	case errors.Is(err, services.ErrJulesEgressNotAcknowledged):
+	case errors.Is(err, julesrpc.ErrJulesEgressNotAcknowledged):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	default:
 		return connect.NewError(connect.CodeInternal, err)

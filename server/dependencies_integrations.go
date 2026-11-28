@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/triggerlimit"
 	"github.com/tstapler/stapler-squad/server/services/workflowrpc"
@@ -228,7 +229,7 @@ func buildJules(svc *ServiceDeps, cfg *config.Config, backlogSvc *backlogsvc.Bac
 	// julesUsage (JulesUsageCounter, Task 4.1.1a) is constructed unconditionally
 	// — cheap, no I/O — so GetJulesConfig always has a live (all-zero until
 	// something happens) usage snapshot to report, matching julesKeys above.
-	julesUsage := services.NewJulesUsageCounter()
+	julesUsage := julesrpc.NewJulesUsageCounter()
 	sessionService.SetJulesUsageCounter(julesUsage)
 
 	julesKeys := jules.NewKeyringTokenSource()
@@ -259,7 +260,7 @@ func buildJules(svc *ServiceDeps, cfg *config.Config, backlogSvc *backlogsvc.Bac
 			// ConfirmEgressConsent/UpdateJulesConfig/RevokeEgressConsent's writes
 			// (jules_config_service.go) would never be observed without a
 			// restart.
-			julesDispatchSvc := services.NewJulesDispatchService(storage, backlogSvc, julesClient, julesSourceRegistry, config.LoadConfig)
+			julesDispatchSvc := julesrpc.NewJulesDispatchService(storage, backlogSvc, julesClient, julesSourceRegistry, config.LoadConfig)
 			julesDispatchSvc.SetUsageCounter(julesUsage)
 			backlogSvc.SetJulesDispatcher(julesDispatchSvc)
 			julesPoller = sessionjules.NewJulesSessionPoller(julesClient, storage, sessionjules.DefaultJulesSessionPollerConfig())

@@ -1,0 +1,71 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "julesrpc",
+    srcs = [
+        "jules_config_service.go",
+        "jules_dispatch_service.go",
+        "jules_usage_counter.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/julesrpc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//github",
+        "//jules",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":julesrpc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "julesrpc_test",
+    srcs = [
+        "jules_config_service_test.go",
+        "jules_dispatch_service_test.go",
+        "jules_golden_test.go",
+        "jules_usage_counter_test.go",
+        "testmain_test.go",
+    ],
+    data = ["jules_dispatch_service.go"] + glob(["testdata/**"]),
+    embed = [":julesrpc"],
+    deps = [
+        "//config",
+        "//jules",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/internal/svctest",
+        "//session",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+        "//session/jules",
+        "//testutil/wait",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@com_github_zalando_go_keyring//:go-keyring",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

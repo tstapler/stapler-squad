@@ -1368,7 +1368,7 @@ func TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryDisp
 // no re-fire" behavior — see the doc comment on TestWaitForIdle_should_notReachSettleWindow_When_BatchedToolCallSummaryDisplayed
 // above for why that matters). It asserts RegisterTurnCallback's callback (what
 // AutonomousOrchestrationService.buildTurnCallback publishes the low-priority Alerts notification
-// from, per its doc comment in server/services/autonomous_orchestration_service.go) is never
+// from, per its doc comment in server/services/autonomysvc/autonomous_orchestration_service.go) is never
 // invoked, and that the run() loop instead exits via the startup-wait timing out.
 //
 // This discriminates pre/post fix via the completion Reason, not just turn absence: pre-fix,

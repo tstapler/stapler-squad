@@ -2,15 +2,21 @@ package services
 
 import (
 	"context"
+	"slices"
 	"testing"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/fileops"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/forwardsync"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/updatecheck"
 )
 
 // Slice 4 readers: each resolves its default from the registry it is given, so an injected registry
@@ -26,8 +32,8 @@ func TestPerFeatureReaders_ShouldUseInjectedRegistryDefault(t *testing.T) {
 		flag string
 		read func(*featureflags.Registry) bool
 	}{
-		{"changelog", featureflags.ChangelogFlagName, func(r *featureflags.Registry) bool { return ChangelogEnabled(cfg, r) }},
-		{"update-check", featureflags.UpdateCheckFlagName, func(r *featureflags.Registry) bool { return UpdateCheckFlagEnabled(cfg, r) }},
+		{"changelog", featureflags.ChangelogFlagName, func(r *featureflags.Registry) bool { return updatecheck.ChangelogEnabled(cfg, r) }},
+		{"update-check", featureflags.UpdateCheckFlagName, func(r *featureflags.Registry) bool { return updatecheck.UpdateCheckFlagEnabled(cfg, r) }},
 		{"sdd-default-pipeline", featureflags.SddDefaultPipelineFlagName, SddDefaultPipelineEnabled},
 		{"github-progress-comments", featureflags.GithubIssueProgressCommentsFlagName, forwardsync.GitHubIssueProgressCommentsEnabled},
 		{"program-cli-probe", flagsvc.ProgramCLIFlagProbeFlagName, flagsvc.ProgramCLIFlagProbeEnabled},
@@ -56,7 +62,7 @@ func TestFilesFlags_ShouldUseInjectedRegistryDefault(t *testing.T) {
 	names := []string{flagsvc.FilesEditingFlagName, flagsvc.FilesViewerV2FlagName, flagsvc.FilesMergePhoneFlagName,
 		flagsvc.FilesRangeReadFlagName, flagsvc.FilesDeltaWriteFlagName, flagsvc.FilesEditLargeFlagName}
 	reg := flippedDefaults(names...)
-	global, injected := testFilesFlags(), globalFilesFlags{reader: flagsvc.FlagReader{Reg: reg}}
+	global, injected := testFilesFlags(), fileops.NewGlobalFilesFlags(reg)
 
 	for i, pair := range [][2]func(context.Context) bool{
 		{global.Editing, injected.Editing}, {global.ViewerV2, injected.ViewerV2}, {global.MergePhone, injected.MergePhone},
@@ -66,25 +72,18 @@ func TestFilesFlags_ShouldUseInjectedRegistryDefault(t *testing.T) {
 	}
 }
 
-func TestFileService_SetFlagRegistry_ShouldRouteOpsAndSearchThroughRegistry(t *testing.T) {
-	svctest.WithIsolatedStateDir(t)
-	ctx := context.Background()
-	svc := NewFileService(&fakeWorkspaceProvider{existingDir: t.TempDir()})
-	beforeEditing, beforeViewer := svc.ops.policy.Flags.Editing(ctx), svc.search.ViewerV2Enabled(ctx)
-
-	svc.SetFlagRegistry(flippedDefaults(flagsvc.FilesEditingFlagName, flagsvc.FilesViewerV2FlagName))
-
-	assert.Equal(t, !beforeEditing, svc.ops.policy.Flags.Editing(ctx))
-	assert.Equal(t, !beforeViewer, svc.search.ViewerV2Enabled(ctx))
-}
-
 func TestNewGatedSessionService_ShouldInjectRegistryIntoFileService(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	ctx := context.Background()
 	injected := newGatedSessionService(svctest.CreateTestStorage(t), flippedDefaults(flagsvc.FilesEditingFlagName))
 	global := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 
-	assert.NotEqual(t, global.fileSvc.ops.policy.Flags.Editing(ctx), injected.fileSvc.ops.policy.Flags.Editing(ctx))
+	servesWrite := func(svc *SessionService) bool {
+		resp, err := svc.GetFileTransportCapabilities(ctx, connect.NewRequest(&sessionv1.GetFileTransportCapabilitiesRequest{}))
+		require.NoError(t, err)
+		return slices.Contains(resp.Msg.Capabilities.Ops, sessionv1.FileOp_FILE_OP_WRITE_FULL)
+	}
+	assert.NotEqual(t, servesWrite(global), servesWrite(injected))
 }
 
 func TestGlobalOffStatusDetail_ShouldReadInjectedRegistry(t *testing.T) {

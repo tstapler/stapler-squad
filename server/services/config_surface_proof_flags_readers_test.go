@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/updatecheck"
 	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/paneactivity"
@@ -52,11 +53,11 @@ func TestConfigSurfaceProof_ChangelogFlags_ChangeReaders(t *testing.T) {
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(featureflags.ChangelogFlagName, setting.(bool))
-		return ChangelogEnabled(config.LoadConfig(), testFlagRegistry())
+		return updatecheck.ChangelogEnabled(config.LoadConfig(), testFlagRegistry())
 	}, false, true)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(featureflags.UpdateCheckFlagName, setting.(bool))
-		return UpdateCheckFlagEnabled(config.LoadConfig(), testFlagRegistry())
+		return updatecheck.UpdateCheckFlagEnabled(config.LoadConfig(), testFlagRegistry())
 	}, false, true)
 }
 

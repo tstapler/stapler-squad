@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
@@ -107,7 +108,7 @@ type BacklogService struct {
 	// Settings → Jules, mirroring checkEgressConsent's own message for the
 	// same underlying condition; wired via SetJulesDispatcher
 	// (server/dependencies.go, Task 2.4.4a).
-	julesDispatcher services.JulesDispatcher
+	julesDispatcher julesrpc.JulesDispatcher
 	cfg             *config.Config
 	flags           *featureflags.Registry
 	// repoSettings looks up a repo's merge settings for the stuck report; nil

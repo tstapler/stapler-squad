@@ -614,10 +614,7 @@ func (s *SessionService) GetProviderLimits(
 	if s.capacityMonitor != nil {
 		limits, found = s.capacityMonitor.GetSessionLimits(inst.Title)
 		if !found {
-			s.capacityMonitor.mu.RLock()
-			globalLimits := s.capacityMonitor.current[provider]
-			client, ok := s.capacityMonitor.clients[provider]
-			s.capacityMonitor.mu.RUnlock()
+			globalLimits, client, ok := s.capacityMonitor.ProviderLimits(provider)
 
 			limits = globalLimits
 			limits.Provider = provider
@@ -719,7 +716,7 @@ func (s *SessionService) SetResolveConversationUUID(fn func(ctx context.Context,
 // SetTokenStoreReader wires the global parsed token store into the capacity monitor.
 func (s *SessionService) SetTokenStoreReader(store tokens.TokenStoreReader) {
 	if s.capacityMonitor != nil {
-		s.capacityMonitor.tokenStore = store
+		s.capacityMonitor.SetTokenStoreReader(store)
 	}
 }
 
@@ -732,7 +729,7 @@ func (s *SessionService) SetQuotaGate(g *quota.QuotaGate) {
 // QuotaGateForTest lets package server check the composition root called SetQuotaGate.
 func (s *SessionService) QuotaGateForTest() *quota.QuotaGate { return s.quotaGate }
 
-// GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.
+// GetInstances returns all managed (poller-tracked) live instances, satisfying capacity.InstancePoller.
 func (s *SessionService) GetInstances() []*instance.Instance {
 	return s.allInstances()
 }
