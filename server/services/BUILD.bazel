@@ -208,6 +208,7 @@ go_test(
         "approval_handler_composition_test.go",
         "approval_human_only_reconcile_test.go",
         "archived_session_reaper_test.go",
+        "artifact_vcs_golden_test.go",
         "autonomy_wiring_test.go",
         "background_models_service_test.go",
         "backlog_engine_enforcement_test.go",
