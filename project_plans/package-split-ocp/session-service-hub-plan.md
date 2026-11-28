@@ -476,7 +476,9 @@ The hub reaches the handler through `session_service_create_delegates.go`, which
 
 Differences from 5 and section 6: (1) `sessioncreate` alone would have left the hub at 9,897, so `workspacerpc` was added; no 6c work was needed. (2) `superseded_session_sweeper.go` stays in the hub: it is backlog round retirement, not session creation, and would have needed a port for `FindSupersededSessions`. (3) No `sessionkit` package: the two hubs share nothing that `Deps` does not carry.
 
-`session_create_characterization_test.go` and `testdata/session_create.golden` were committed before the move; the only change to them since is the `domain.SessionSpawnOptions` qualifier. The golden records one behaviour that looks like a defect and was not changed: nothing writes the `creation_epoch` column, so after `RetrySessionCreation` the epoch-fenced terminal write is rejected and a retry that fails stays `Creating`. The Stage 7 `T9dServicesLOCMax` gate was not added here.
+`session_create_characterization_test.go` and `testdata/session_create.golden` were committed before the move; the only change to them since is the `domain.SessionSpawnOptions` qualifier. The golden records one behaviour that looks like a defect and was not changed: nothing writes the `creation_epoch` column, so after `RetrySessionCreation` the epoch-fenced terminal write is rejected and a retry that fails stays `Creating`.
+
+Stage 7: `T9dServicesLOCMax` (10,000) in `tools/bzl/scoping/t9.go` now caps `server/services` in T9d; `session` keeps `LargestPkgLOCMax`. No CI workflow or make target runs `scoping t9`, so it is a measurement, not an enforcement. The `server/services` row in `budget.txt` is checked by `make ready-scoping-budget`, which CI reaches only through the Fallback canary workflow (weekly, manual, or a PR touching its listed paths).
 
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
