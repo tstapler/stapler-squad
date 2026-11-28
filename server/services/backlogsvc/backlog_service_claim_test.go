@@ -17,6 +17,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -476,7 +477,7 @@ func TestRecordClaimOverride_should_ReturnInvalidArgument_When_URLEmptyOrReasonT
 func TestStuckReasonBlockedByClaim_should_RoundTripProtoEnum_When_Marshaled(t *testing.T) {
 	assert.True(t, domain.StuckReasonBlockedByClaim.IsValid())
 	assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM, toProtoStuckReason(domain.StuckReasonBlockedByClaim))
-	assert.Equal(t, domain.StuckReasonBlockedByClaim, services.FromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM))
+	assert.Equal(t, domain.StuckReasonBlockedByClaim, adapters.FromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM))
 }
 
 func checkClaimRPC(t *testing.T, svc *BacklogService, localOnly bool) *sessionv1.CheckCrossHostClaimResponse {

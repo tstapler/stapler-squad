@@ -39,7 +39,7 @@ type CheckpointService struct {
 
 // NewCheckpointService creates a CheckpointService with the given storage and event bus.
 // Call SetPoller, SetExternalDiscovery, SetScrollbackMgr, and SetLoadInstancesFn after
-// construction to complete wiring (matching the pattern of project_service.go).
+// construction to complete wiring (matching the pattern of projectrpc).
 func NewCheckpointService(storage session.InstanceStore, eventBus *events.EventBus) *CheckpointService {
 	return &CheckpointService{
 		storage:  storage,

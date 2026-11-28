@@ -1,0 +1,67 @@
+logs/all total=4 more=false
+  03:04:08 INFO "no level" source=""
+  03:04:07 WARN "legacy warning" source="file.go:12"
+  03:04:06 ERROR "boom n=1000000 source=plain-string" source=""
+  03:04:05 INFO "started pid=7 token=<redacted>" source=""
+logs/search total=1 more=false
+  03:04:06 ERROR "boom n=1000000 source=plain-string" source=""
+logs/level total=2 more=false
+  03:04:07 WARN "legacy warning" source="file.go:12"
+  03:04:06 ERROR "boom n=1000000 source=plain-string" source=""
+logs/page total=4 more=true
+  03:04:07 WARN "legacy warning" source="file.go:12"
+logs/session-uuid total=1 more=false
+  03:04:05 INFO "started pid=7 token=<redacted>" source=""
+logs/past-end total=4 more=false
+logs/no-file {"entries":[],"hasMore":false,"totalCount":0}
+snapshot summary="Captured 0 sessions, 0 pending approvals, 2 log lines" dir=<state>/logs size>0=true
+snapshot file version=1 note="golden note" serverKeys=5 uptime>=0=true logs={"line_count":2,"lines":["two","three"],"log_file_path":"<state>/logs/staplersquad.log"}
+focus/empty err code=invalid_argument invalid_argument: bundle_id or app_name is required
+focus/linux {"message":"window activation not supported on platform: linux","platform":"linux","success":false}
+focus/blocked-bundle {"message":"Focus Window is not supported for \"com.apple.Music\" (not a developer app)","platform":"darwin","success":false}
+focus/blocked-name {"message":"Focus Window is not supported for \"Photos\" (not a developer app)","platform":"darwin","success":false}
+focus/real-ip err code=permission_denied permission_denied: FocusWindow can only be called from localhost
+focus/real-ip-local {"message":"window activation not supported on platform: linux","platform":"linux","success":false}
+focus/forwarded err code=permission_denied permission_denied: FocusWindow can only be called from localhost
+project/create/ err code=invalid_argument invalid_argument: name is required
+project/create/alpha {"project":{"completeCount":0,"createdAt":"<time>","description":"d","id":"alpha","name":"alpha","reviewReadyCount":0,"runningCount":0,"sessionCount":0,"updatedAt":"<time>"}}
+project/update {"project":{"completeCount":0,"createdAt":"<time>","description":"d2","id":"alpha","name":"alpha","reviewReadyCount":0,"runningCount":0,"sessionCount":0,"updatedAt":"<time>"}}
+project/assign err code=invalid_argument invalid_argument: project_id is required
+project/assign err code=internal internal: failed to assign sessions to project: failed to find session 'x': ent: session not found
+project/list {"projects":[{"completeCount":0,"createdAt":"<time>","description":"d2","id":"alpha","name":"alpha","reviewReadyCount":0,"runningCount":0,"sessionCount":0,"updatedAt":"<time>"}]}
+project/delete/ err code=invalid_argument invalid_argument: id is required
+project/delete/alpha {"success":false}
+project/delete/missing err code=internal internal: failed to delete project: failed to find project 'missing': ent: project not found
+slash/ {"commands":[{"description":"from home","name":"code:fix","source":"user","title":"User Fix"},{"description":"","name":"help","source":"user","title":"help"}]}
+slash/<project> {"commands":[{"description":"","name":"code:fix","source":"project","title":"Project Fix"},{"description":"","name":"help","source":"user","title":"help"}]}
+slash/~/ {"commands":[{"description":"from home","name":"code:fix","source":"user","title":"User Fix"},{"description":"","name":"help","source":"user","title":"help"}]}
+slash/relative/dir {"commands":[{"description":"from home","name":"code:fix","source":"user","title":"User Fix"},{"description":"","name":"help","source":"user","title":"help"}]}
+errors/unwired n=0
+errors/recorded rpc_error "read /var/lib/a/b: code 12" /p.A count=2 ack=false fp=cf04a1c792a377df40c309a20a7171d6faad408777daab443f26315371e941ab stack=true
+errors/recorded n=1
+errors/ack {}
+errors/unacked n=0
+errors/all rpc_error "read /var/lib/a/b: code 12" /p.A count=2 ack=true fp=cf04a1c792a377df40c309a20a7171d6faad408777daab443f26315371e941ab stack=true
+errors/all n=1
+diagnose/assemble err code=invalid_argument invalid_argument: item_id is required
+diagnose/assemble err code=not_found not_found: backlog item not found: not found: backlog item <uuid>
+diagnose/assemble {"compacted":false,"estimatedTokens":108,"itemId":"<uuid>","prompt":"\u003citem\u003e\nTitle: Golden item\nStatus: review\n\nDescription:\nWhy it is stuck.\n\nAcceptance Criteria:\n(no acceptance criteria)\n\nHistory:\n(no activity history)\n\u003c/item\u003e\n\n\u003creview_verdicts\u003e\n(no prior review verdicts)\n\u003c/review_verdicts\u003e\n\n\u003clinked_sessions\u003e\n(no linked sessions — no nudge target exists for this item)\n\u003c/linked_sessions\u003e\n\n\u003crecent_logs\u003e\n(no linked sessions)\n\u003c/recent_logs\u003e\n\n\u003cgit_diff\u003e(none)\u003c/git_diff\u003e\n\n\u003cgit_log\u003e(none)\u003c/git_log\u003e\n\n"}
+diagnose/dispatch {"diagnosticSessionUuid":"diag-uuid","nudgeAllowed":false,"nudgeDisallowedReason":"no stuck reason specified — nudge cap cannot be evaluated"}
+diagnose/prompt "You are a diagnostic agent investigating a backlog item. You have been given a context bundle below.\n\nFor stuck reasons, remediation attempts and live CI state beyond this bundle, call get_backlog_stuck_report with the item id before concluding.\n\nBased on the evidence, decide ONE of:\n1. File a backlog item via create_backlog_item with concrete evidence (log lines, timestamps, session UUIDs) if you find a genuine product/infra defect.\n2. Post a diagnostic note via post_backlog_update if the situation is inconclusive or informational only.\n3. Nudging is NOT available for this dispatch (no stuck reason specified — nudge cap cannot be evaluated) — do not attempt resume_session/steer_session/write_to_session/diagnose_nudge_session on it. File a bug or post a note instead.\n4. If there is NO live session to nudge and the open \"\" row has exhausted its automated retries on a mechanical problem (e.g. a PR merge conflict that only needs a rebase), call diagnose_reset_remediation with stuck_reason=\"\" so the next reconcile tick spawns a fresh fix session. Do not use it for a genuine defect.\n5. Independently of the above, call suggest_workflow_action to recommend an operator action on the item (e.g. move it back to ready); nothing is applied automatically.\n6. If the root cause is a gap in the stapler-squad harness itself (not the item's own code), call report_harness_gap to file a linked harness:bug item.\n\nWhen you conclude your investigation, call submit_diagnosis_result exactly once with your outcome and evidence (pass filed_item_id when you filed a bug).\n\n<item>\nTitle: Golden item\nStatus: review\n\nDescription:\nWhy it is stuck.\n\nAcceptance Criteria:\n(no acceptance criteria)\n\nHistory:\n(no activity history)\n</item>\n\n<review_verdicts>\n(no prior review verdicts)\n</review_verdicts>\n\n<linked_sessions>\n(no linked sessions — no nudge target exists for this item)\n</linked_sessions>\n\n<recent_logs>\n(no linked sessions)\n</recent_logs>\n\n<git_diff>(none)</git_diff>\n\n<git_log>(none)</git_log>\n\n"
+diagnose/dispatch {"diagnosticSessionUuid":"diag-uuid","nudgeAllowed":false,"nudgeDisallowedReason":"nudge target session not found or not live"}
+diagnose/prompt "You are a diagnostic agent investigating a backlog item. You have been given a context bundle below.\n\nFor stuck reasons, remediation attempts and live CI state beyond this bundle, call get_backlog_stuck_report with the item id before concluding.\n\nBased on the evidence, decide ONE of:\n1. File a backlog item via create_backlog_item with concrete evidence (log lines, timestamps, session UUIDs) if you find a genuine product/infra defect.\n2. Post a diagnostic note via post_backlog_update if the situation is inconclusive or informational only.\n3. Nudging is NOT available for this dispatch (nudge target session not found or not live) — do not attempt resume_session/steer_session/write_to_session/diagnose_nudge_session on it. File a bug or post a note instead.\n4. If there is NO live session to nudge and the open \"pr_needs_fix\" row has exhausted its automated retries on a mechanical problem (e.g. a PR merge conflict that only needs a rebase), call diagnose_reset_remediation with stuck_reason=\"pr_needs_fix\" so the next reconcile tick spawns a fresh fix session. Do not use it for a genuine defect.\n5. Independently of the above, call suggest_workflow_action to recommend an operator action on the item (e.g. move it back to ready); nothing is applied automatically.\n6. If the root cause is a gap in the stapler-squad harness itself (not the item's own code), call report_harness_gap to file a linked harness:bug item.\n\nWhen you conclude your investigation, call submit_diagnosis_result exactly once with your outcome and evidence (pass filed_item_id when you filed a bug).\n\n<item>\nTitle: Golden item\nStatus: review\n\nDescription:\nWhy it is stuck.\n\nAcceptance Criteria:\n(no acceptance criteria)\n\nHistory:\n(no activity history)\n</item>\n\n<review_verdicts>\n(no prior review verdicts)\n</review_verdicts>\n\n<linked_sessions>\n- session=diag-uuid role=diagnose status=(not live) program= branch= last_activity=<time>\n\n</linked_sessions>\n\n<recent_logs>(none)</recent_logs>\n\n<git_diff>(none)</git_diff>\n\n<git_log>(none)</git_log>\n\n"
+diagnose/no-spawner err code=failed_precondition failed_precondition: diagnostic dispatch is not configured
+tap/set-no-peer err code=permission_denied permission_denied: the capture tap can only be controlled from loopback (127.0.0.1 or ::1) without proxy headers: peer address is not loopback
+tap/get-no-peer err code=permission_denied permission_denied: the capture tap can only be controlled from loopback (127.0.0.1 or ::1) without proxy headers: peer address is not loopback
+tcc/unset {"enabled":false,"roots":[]}
+tcc/unset-continue err code=failed_precondition failed_precondition: enrichment consent gate is not enabled
+tcc/status {"enabled":true,"roots":[{"appConsented":false,"id":"a670cec7e447f9a778307ac6fec4d2b3f309820e897f68a74cb1c96e265b1b7c","outcome":"pending","paths":["/protected/repo"],"root":"/protected","sessionTitles":[],"settingsUrl":""}]}
+tcc/unknown err code=invalid_argument invalid_argument: unknown protected root ID
+tcc/not-local err code=permission_denied permission_denied: this request is only accepted from a verified local address: no_request_record
+tmux/version {"mismatches":[]}
+tmux/restart-down {"sessionsAffected":0}
+hooks/fresh rules=false notif=false rulesAvail=false agy=false gemini=false
+hooks/no-binary ["ssq-hooks binary not found — run `make install` first, then `ssq-hooks install claude`." "ssq-hooks binary not found — run `make install` first, then `ssq-hooks install agy`." "ssq-hooks binary not found — run `make install` first, then `ssq-hooks install gemini`."]
+hooks/installed ["Claude Code rule enforcement hook installed." "Antigravity CLI rule enforcement hook and permission definitions installed." "Gemini CLI rule enforcement hook installed."]
+hooks/after rules=true notif=false rulesAvail=true agy=false gemini=false
+hooks/failing err code=internal internal: install agy hook: exit status 3 (nope)

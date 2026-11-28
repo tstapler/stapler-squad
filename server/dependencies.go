@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
+	"github.com/tstapler/stapler-squad/server/services/errorregistry"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/githubrpc"
@@ -92,7 +93,7 @@ type ServerDependencies struct {
 	ExternalDiscovery       *external.ExternalSessionDiscovery
 	ExternalApprovalMonitor *external.ExternalApprovalMonitor
 	HistoryLinker           *importer.HistoryLinker
-	ErrorRegistry           *services.ErrorRegistry
+	ErrorRegistry           *errorregistry.ErrorRegistry
 
 	// ClaudeSettingsWatcher watches ~/.claude/settings.json (and project-level
 	// equivalents) for edits and hot-reloads their derived auto-approval rules. Started
@@ -427,7 +428,7 @@ type CoreDeps struct {
 	EventBus       *events.EventBus
 	ReviewQueue    *queuepkg.ReviewQueue
 	ApprovalStore  *approvalkit.ApprovalStore
-	ErrorRegistry  *services.ErrorRegistry
+	ErrorRegistry  *errorregistry.ErrorRegistry
 
 	// FlagRegistry is the one registry shared by the flag service and every other flag reader.
 	FlagRegistry *featureflags.Registry
@@ -489,7 +490,7 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 	// Wire the ErrorRegistry using the existing ent client from Storage.
 	// GetEntClient returns nil when storage is not ent-backed (e.g. in tests),
 	// in which case ErrorRegistry gracefully disables itself.
-	errorRegistry := services.NewErrorRegistry(storage.GetEntClient(), true)
+	errorRegistry := errorregistry.NewErrorRegistry(storage.GetEntClient(), true)
 
 	w := warren.NewWire("CoreDeps")
 	warren.Set(w, "ErrorRegistry", sessionService.SetErrorRegistry, errorRegistry)
@@ -612,7 +613,7 @@ type RuntimeDeps struct {
 	ExternalApprovalMonitor *external.ExternalApprovalMonitor
 	PRStatusPoller          *prpoller.PRStatusPoller
 	HistoryLinker           *importer.HistoryLinker
-	ErrorRegistry           *services.ErrorRegistry
+	ErrorRegistry           *errorregistry.ErrorRegistry
 
 	// ClaudeSettingsWatcher (see the identically-named field on ServerDependencies for
 	// its full doc comment).

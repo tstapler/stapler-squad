@@ -19,7 +19,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
@@ -258,7 +258,7 @@ func (s *BacklogService) SnoozeStuckItem(
 	if req.Msg.ItemId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id is required"))
 	}
-	reason := services.FromProtoStuckReason(req.Msg.Reason)
+	reason := adapters.FromProtoStuckReason(req.Msg.Reason)
 	if !reason.IsValid() {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or unspecified reason"))
 	}
@@ -291,7 +291,7 @@ func (s *BacklogService) ResetStuckRemediation(
 	if req.Msg.ItemId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id is required"))
 	}
-	reason := services.FromProtoStuckReason(req.Msg.Reason)
+	reason := adapters.FromProtoStuckReason(req.Msg.Reason)
 	if !reason.IsValid() {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or unspecified reason"))
 	}
@@ -320,7 +320,7 @@ func (s *BacklogService) BulkResetStuckRemediation(
 
 	var reasonFilter *domain.StuckReason
 	if req.Msg.Reason != sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED {
-		reason := services.FromProtoStuckReason(req.Msg.Reason)
+		reason := adapters.FromProtoStuckReason(req.Msg.Reason)
 		if !reason.IsValid() {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid reason"))
 		}
@@ -447,7 +447,7 @@ func (s *BacklogService) TriggerRemediationNow(
 	if req.Msg.ItemId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id is required"))
 	}
-	reason := services.FromProtoStuckReason(req.Msg.Reason)
+	reason := adapters.FromProtoStuckReason(req.Msg.Reason)
 	if !reason.IsValid() {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or unspecified reason"))
 	}

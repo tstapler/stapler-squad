@@ -13,7 +13,7 @@ import (
 )
 
 // ErrorRecorder is the minimal interface the interceptor needs to persist errors.
-// Implemented by *services.ErrorRegistry; using an interface avoids a circular import.
+// Implemented by *errorregistry.ErrorRegistry; using an interface avoids a circular import.
 type ErrorRecorder interface {
 	Record(ctx context.Context, err error, procedure string)
 }

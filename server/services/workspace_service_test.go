@@ -353,7 +353,7 @@ func TestWorkspaceService_FindInstanceFast_LiveFinderMiss_FallsBackToStorage(t *
 // proto mapping added by Story 2.2.1)
 //
 // These tests check both the internal vc.VCSStatus cached in
-// WorkspaceService's vcsStatusCache and the RPC response's VcsStatus proto —
+// WorkspaceService's vcsstatus.Cache and the RPC response's VcsStatus proto —
 // the proto assertions are the real acceptance criterion ("all populate on
 // every GetVCSStatus response"); the cache assertions remain to pin down the
 // internal state the proto mapping is derived from.
@@ -376,16 +376,15 @@ func TestWorkspaceService_GetVCSStatus_DirectoryMode_PopulatesCommitsAndDiffStat
 	require.NoError(t, err)
 	require.Empty(t, resp.Msg.Error)
 
-	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	status, _, ok := fix.svc.vcs.PeekForTest(dir)
 	require.True(t, ok, "GetVCSStatus should have cached the computed status")
-	entry := cached.(vcsStatusCacheEntry)
 
-	assert.Len(t, entry.status.Commits, 1, "one commit shipped past the recorded base")
-	assert.False(t, entry.status.CommitsTruncated)
-	assert.False(t, entry.status.CommitsUnavailable)
-	require.NotNil(t, entry.status.AggregateDiffStat)
-	assert.Equal(t, 1, entry.status.AggregateDiffStat.FilesChanged)
-	assert.False(t, entry.status.StatusAsOf.IsZero(), "StatusAsOf should be set on fresh compute")
+	assert.Len(t, status.Commits, 1, "one commit shipped past the recorded base")
+	assert.False(t, status.CommitsTruncated)
+	assert.False(t, status.CommitsUnavailable)
+	require.NotNil(t, status.AggregateDiffStat)
+	assert.Equal(t, 1, status.AggregateDiffStat.FilesChanged)
+	assert.False(t, status.StatusAsOf.IsZero(), "StatusAsOf should be set on fresh compute")
 
 	vcsStatus := resp.Msg.VcsStatus
 	require.NotNil(t, vcsStatus)
@@ -432,15 +431,14 @@ func TestWorkspaceService_GetVCSStatus_WorktreeMode_PopulatesCommitsAndDiffStat(
 	// /var -> /private/var).
 	resolvedDir, err := filepath.EvalSymlinks(dir)
 	require.NoError(t, err)
-	cached, ok := fix.svc.vcsStatusCache.Load(resolvedDir)
+	status, _, ok := fix.svc.vcs.PeekForTest(resolvedDir)
 	require.True(t, ok, "GetVCSStatus should have cached the computed status")
-	entry := cached.(vcsStatusCacheEntry)
 
-	assert.Len(t, entry.status.Commits, 1, "one commit shipped past the recorded base")
-	assert.False(t, entry.status.CommitsUnavailable)
-	require.NotNil(t, entry.status.AggregateDiffStat)
-	assert.Equal(t, 1, entry.status.AggregateDiffStat.FilesChanged)
-	assert.False(t, entry.status.StatusAsOf.IsZero(), "StatusAsOf should be set on fresh compute")
+	assert.Len(t, status.Commits, 1, "one commit shipped past the recorded base")
+	assert.False(t, status.CommitsUnavailable)
+	require.NotNil(t, status.AggregateDiffStat)
+	assert.Equal(t, 1, status.AggregateDiffStat.FilesChanged)
+	assert.False(t, status.StatusAsOf.IsZero(), "StatusAsOf should be set on fresh compute")
 
 	vcsStatus := resp.Msg.VcsStatus
 	require.NotNil(t, vcsStatus)
@@ -472,13 +470,12 @@ func TestWorkspaceService_GetVCSStatus_NoBaseSHA_LeavesCommitsAndDiffStatUnset(t
 	require.NoError(t, err)
 	require.Empty(t, resp.Msg.Error)
 
-	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	status, _, ok := fix.svc.vcs.PeekForTest(dir)
 	require.True(t, ok)
-	entry := cached.(vcsStatusCacheEntry)
 
-	assert.Nil(t, entry.status.Commits)
-	assert.Nil(t, entry.status.AggregateDiffStat)
-	assert.False(t, entry.status.CommitsUnavailable, "no recorded base SHA is not a fetch failure")
+	assert.Nil(t, status.Commits)
+	assert.Nil(t, status.AggregateDiffStat)
+	assert.False(t, status.CommitsUnavailable, "no recorded base SHA is not a fetch failure")
 
 	vcsStatus := resp.Msg.VcsStatus
 	require.NotNil(t, vcsStatus)
@@ -515,12 +512,11 @@ func TestWorkspaceService_GetVCSStatus_HeadResolutionFailure_SetsCommitsUnavaila
 	require.NoError(t, err)
 	require.Empty(t, resp.Msg.Error, "GetStatus itself should still succeed on a commit-less repo")
 
-	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	status, _, ok := fix.svc.vcs.PeekForTest(dir)
 	require.True(t, ok)
-	entry := cached.(vcsStatusCacheEntry)
 
-	assert.True(t, entry.status.CommitsUnavailable)
-	assert.Nil(t, entry.status.Commits)
+	assert.True(t, status.CommitsUnavailable)
+	assert.Nil(t, status.Commits)
 
 	vcsStatus := resp.Msg.VcsStatus
 	require.NotNil(t, vcsStatus)
@@ -554,12 +550,11 @@ func TestWorkspaceService_GetVCSStatus_ListShippedCommitsFailure_SetsCommitsUnav
 	require.NoError(t, err)
 	require.Empty(t, resp.Msg.Error)
 
-	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	status, _, ok := fix.svc.vcs.PeekForTest(dir)
 	require.True(t, ok)
-	entry := cached.(vcsStatusCacheEntry)
 
-	assert.True(t, entry.status.CommitsUnavailable)
-	assert.Nil(t, entry.status.Commits)
+	assert.True(t, status.CommitsUnavailable)
+	assert.Nil(t, status.Commits)
 
 	vcsStatus := resp.Msg.VcsStatus
 	require.NotNil(t, vcsStatus)
@@ -582,25 +577,23 @@ func TestWorkspaceService_GetVCSStatus_CacheHit_ReturnsSameStatusAsOf(t *testing
 
 	resp1, err := fix.svc.GetVCSStatus(context.Background(), req)
 	require.NoError(t, err)
-	cached1, ok := fix.svc.vcsStatusCache.Load(dir)
+	_, cachedAt1, ok := fix.svc.vcs.PeekForTest(dir)
 	require.True(t, ok)
-	entry1 := cached1.(vcsStatusCacheEntry)
-	require.False(t, entry1.cachedAt.IsZero())
+	require.False(t, cachedAt1.IsZero())
 
 	// A short sleep so a wrongly-recomputed second call would produce a
 	// detectably different time.Now() value, not one that happens to match
 	// by coincidence.
-	svctest.WaitClockPast(t, entry1.cachedAt, 5*time.Millisecond)
+	svctest.WaitClockPast(t, cachedAt1, 5*time.Millisecond)
 
 	resp2, err := fix.svc.GetVCSStatus(context.Background(), req)
 	require.NoError(t, err)
-	cached2, ok := fix.svc.vcsStatusCache.Load(dir)
+	status2, cachedAt2, ok := fix.svc.vcs.PeekForTest(dir)
 	require.True(t, ok)
-	entry2 := cached2.(vcsStatusCacheEntry)
 
-	assert.True(t, entry1.cachedAt.Equal(entry2.cachedAt),
+	assert.True(t, cachedAt1.Equal(cachedAt2),
 		"second call within the 15s cache window must not recompute (cachedAt must not change)")
-	assert.True(t, entry2.status.StatusAsOf.Equal(entry1.cachedAt),
+	assert.True(t, status2.StatusAsOf.Equal(cachedAt1),
 		"cache-hit branch must set StatusAsOf from the cache entry's stored timestamp")
 
 	require.NotNil(t, resp1.Msg.VcsStatus.StatusAsOf)

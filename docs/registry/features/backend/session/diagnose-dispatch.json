@@ -5,7 +5,7 @@
   "method": "DispatchDiagnose",
   "protoFile": "proto/session/v1/diagnose.proto",
   "markerFound": true,
-  "handlerFile": "server/services/diagnostic_service.go",
+  "handlerFile": "server/services/diagnosesvc/diagnostic_service.go",
   "tested": true,
   "testIds": [
     "TestDispatchDiagnose_should_LinkItemSession_When_DispatchSucceeds",
@@ -14,5 +14,5 @@
     "TestEvaluateNudgeEligibility_should_DisallowNudge_When_NoStuckReasonSpecified",
     "TestEvaluateNudgeEligibility_should_DisallowNudge_When_TargetNotLive"
   ],
-  "lastModified": "2026-09-27T22:47:32.790291049-07:00"
+  "lastModified": "2026-11-27T22:56:56.418824131-08:00"
 }

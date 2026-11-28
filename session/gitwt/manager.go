@@ -46,7 +46,7 @@ type Manager struct {
 
 // diffStatsCacheTTL bounds how often GetSessionDiff's RPC-triggered refresh
 // (Instance.RefreshDiffStatsIfStale) recomputes the diff — matching
-// server/services/workspace_service.go's vcsStatusCacheTTL, the same pattern
+// server/services/vcsstatus's vcsStatusCacheTTL, the same pattern
 // already proven there for GetVCSStatus. Lifecycle-triggered callers
 // (daemon.go's AutoYes loop, instance.go's exit/destroy paths) call
 // UpdateDiffStats directly and are unaffected — they need a guaranteed-fresh

@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
+	"github.com/tstapler/stapler-squad/server/services/errorregistry"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
@@ -144,7 +145,7 @@ func (s *SessionService) waitForPendingCleanup() {
 
 // SetErrorRegistry wires the ErrorRegistry so the service can expose ListErrors and
 // AcknowledgeError RPCs.  Must be called before the first RPC request.
-func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {
+func (s *SessionService) SetErrorRegistry(r *errorregistry.ErrorRegistry) {
 	s.errorRegistry = r
 }
 
@@ -440,7 +441,7 @@ func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller)
 	s.reviewQueueSvc.SetReviewQueuePoller(poller)
 	s.notificationSvc.SetReviewQueuePoller(poller)
 	s.notificationSvc.SetStorage(s.storage)
-	s.utilitySvc.SetReviewQueuePoller(poller)
+	s.debugLogs.SetReviewQueuePoller(poller)
 	s.checkpointSvc.SetPoller(poller)
 	s.terminalSvc.SetPoller(poller)
 	if s.workflowSvc != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/artifactrpc"
 	"github.com/tstapler/stapler-squad/server/services/checkpointrpc"
 	"github.com/tstapler/stapler-squad/server/services/fileops"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -179,7 +180,7 @@ func (s *SessionService) FocusWindow(
 	ctx context.Context,
 	req *connect.Request[sessionv1.FocusWindowRequest],
 ) (*connect.Response[sessionv1.FocusWindowResponse], error) {
-	return s.utilitySvc.FocusWindow(ctx, req)
+	return s.windowFocus.FocusWindow(ctx, req)
 }
 
 // RenameSession changes the title of an existing session.
@@ -294,7 +295,7 @@ func (s *SessionService) CreateDebugSnapshot(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateDebugSnapshotRequest],
 ) (*connect.Response[sessionv1.CreateDebugSnapshotResponse], error) {
-	return s.utilitySvc.CreateDebugSnapshot(ctx, req)
+	return s.debugLogs.CreateDebugSnapshot(ctx, req)
 }
 
 // GetNotificationHistory returns persisted notification history with optional filtering.
@@ -651,7 +652,7 @@ func (s *SessionService) SetArtifactIndex(x *search.ArtifactIndex) {
 }
 
 // SetArtifactRescanner wires the artifact extractor behind RescanSessionArtifacts.
-func (s *SessionService) SetArtifactRescanner(r ArtifactRescanner) {
+func (s *SessionService) SetArtifactRescanner(r artifactrpc.ArtifactRescanner) {
 	s.artifactSvc.SetRescanner(r)
 }
 

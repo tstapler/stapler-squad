@@ -1,0 +1,45 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "projectrpc",
+    srcs = ["project_service.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/projectrpc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/domain",
+        "@com_connectrpc_connect//:connect",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":projectrpc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "projectrpc_test",
+    srcs = [
+        "project_service_test.go",
+        "testmain_test.go",
+    ],
+    embed = [":projectrpc"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/internal/svctest",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

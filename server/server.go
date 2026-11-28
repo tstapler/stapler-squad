@@ -32,8 +32,10 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/adminmisc"
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
+	"github.com/tstapler/stapler-squad/server/services/capturetap"
 	"github.com/tstapler/stapler-squad/server/services/completionreview"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
+	"github.com/tstapler/stapler-squad/server/services/diagnosesvc"
 	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/escapecode"
 	"github.com/tstapler/stapler-squad/server/services/federation"
@@ -631,7 +633,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Build the capture tap registry now so an env-enabled tap logs its ACTIVE warning at startup.
 	_ = streamhub.DefaultTapRegistry()
 	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, sessionOpts...)
-	handler = services.WithRequestHost(handler)
+	handler = capturetap.WithRequestHost(handler)
 	handler = withFileBodyLimits(handler)
 	apiPath := "/api" + path
 
@@ -772,15 +774,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Register DiagnosticService handler ("Diagnose & Nudge", backlog item
 	// 68964304): AssembleDiagnosticBundle/DispatchDiagnose. deps.SessionService
-	// satisfies services.DiagnosticSpawner (SpawnDiagnosticSession); a nil
+	// satisfies diagnosesvc.DiagnosticSpawner (SpawnDiagnosticSession); a nil
 	// *SessionService (same nil-interface-boxing hazard the GuidanceRequestService
 	// block above documents) is guarded by only assigning it when non-nil.
 	if deps.Storage != nil {
-		var diagnosticSpawner services.DiagnosticSpawner
+		var diagnosticSpawner diagnosesvc.DiagnosticSpawner
 		if deps.SessionService != nil {
 			diagnosticSpawner = deps.SessionService
 		}
-		diagnosticSvc := services.NewDiagnosticService(deps.Storage, diagnosticSpawner)
+		diagnosticSvc := diagnosesvc.NewDiagnosticService(deps.Storage, diagnosticSpawner)
 		diagnosticSvc.SetPoller(deps.ReviewQueuePoller)
 		diagnosticSvc.SetExternalDiscovery(deps.ExternalDiscovery)
 		diagnosticPath, diagnosticHandler := sessionv1connect.NewDiagnosticServiceHandler(diagnosticSvc, ConnectOptions(deps.ErrorRegistry)...)

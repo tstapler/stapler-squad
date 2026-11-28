@@ -201,6 +201,7 @@ go_test(
         "//pkg/events",
         "//proto/session/v1:sessionv1_go",
         "//proto/session/v1:sessionv1connect_go",
+        "//server/adapters",
         "//server/events",
         "//server/interceptors",
         "//server/middleware",

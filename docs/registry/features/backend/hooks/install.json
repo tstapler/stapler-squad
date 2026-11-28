@@ -5,10 +5,10 @@
   "method": "InstallHooks",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/hook_status_service.go",
+  "handlerFile": "server/services/hookinstall/service.go",
   "tested": true,
   "testIds": [
     "TestInstallHooks_MissingBinary_ReportsManualFallback"
   ],
-  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
+  "lastModified": "2026-11-27T22:56:56.422157466-08:00"
 }

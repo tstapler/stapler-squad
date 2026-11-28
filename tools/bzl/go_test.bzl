@@ -15,8 +15,11 @@ _SIZES = {
 _HOST_COUPLED = {
     "server/services": ["exec-host-binary"],
     "server/services/approvals": ["exec-host-binary"],
+    "server/services/debuglogs": ["exec-host-binary"],  # debug snapshot tests run tmux
     "server/services/pathcomplete": ["exec-host-binary"],  # ListWorktrees tests run git, recorded under server/services
     "server/services/prs": ["exec-host-binary"],  # census rows: create_pull_request_test, recorded under server/services (gh, git)
+    "server/services/tmuxadmin": ["exec-host-binary"],  # restart tests run tmux
+    "server/services/vcsstatus": ["exec-host-binary"],  # coalescing tests run git on temp repos, recorded under server/services
     "session": ["exec-host-binary", "home"],
     "session/vc": ["home"],
 }
