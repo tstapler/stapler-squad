@@ -154,3 +154,7 @@ server/services/wakerpc !server/web
 server/services/checkpointrpc !server/web
 server/services/reviewqueuerpc !server/web
 server/services/workflowrpc !server/web
+server/services/backgroundmodels !server/web
+server/services/claimcheck !server/web
+server/services/itemsessions !server/web
+server/services/sessionports !server/web

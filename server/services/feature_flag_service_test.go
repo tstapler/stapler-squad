@@ -846,11 +846,11 @@ func TestFlagDefaults_ConfigConstantsEqualRegistryAndReaders(t *testing.T) {
 			require.Equal(t, r.constant, r.reader(cfg), "reader of %s differs from its config constant", r.flag)
 		}
 	}
-	require.False(t, SddDefaultPipelineEnabled(testFlagRegistry()), "sdd-default-pipeline stays off when unset")
+	require.False(t, flagsvc.SddDefaultPipelineEnabled(testFlagRegistry()), "sdd-default-pipeline stays off when unset")
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.SddDefaultPipelineFlagName, true))
-	require.True(t, SddDefaultPipelineEnabled(testFlagRegistry()))
+	require.True(t, flagsvc.SddDefaultPipelineEnabled(testFlagRegistry()))
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.SddDefaultPipelineFlagName, false))
-	require.False(t, SddDefaultPipelineEnabled(testFlagRegistry()), "an explicit false still opts out")
+	require.False(t, flagsvc.SddDefaultPipelineEnabled(testFlagRegistry()), "an explicit false still opts out")
 }
 
 func TestFlagDefaults_NoSecondDeclarationOrDisagreeingRead(t *testing.T) {

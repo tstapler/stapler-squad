@@ -49,6 +49,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/server/services/claimcheck"
 	"github.com/zalando/go-keyring"
 )
 
@@ -1570,10 +1571,10 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 
 	// The checks below are all gated by the cross_host_claim_dedup feature flag
 	// (off by default), so wiring them here changes nothing until it is enabled.
-	storage.SetForeignClaimLookup(services.NewFlagGatedForeignClaimLookup(recorder))
+	storage.SetForeignClaimLookup(claimcheck.NewFlagGatedForeignClaimLookup(recorder))
 	storage.SetPRProvenanceSource(backlogsvc.NewFlagGatedPRProvenance(recorder))
 	if backlogSvc != nil {
-		checker := services.NewLocalClaimChecker(claimIndex, hostIdentity.ID, hostRegistry).SignLookupsWith(hostIdentity)
+		checker := claimcheck.NewLocalClaimChecker(claimIndex, hostIdentity.ID, hostRegistry).SignLookupsWith(hostIdentity)
 		backlogSvc.SetClaimChecker(checker, checker)
 	}
 }

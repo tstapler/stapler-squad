@@ -456,6 +456,10 @@ Done in the Stage 5 `workflows` PR: the `workflows` rows moved into four leaves 
 
 The `backlogsync` rows did not move in this PR and are now unblocked: the second `providers` PR (6.8) moved `SteerOutcome` to `access`, so `SessionSteerer` in `backlog_ports.go` no longer depends on a hub receiver file. Still to do there: split `backlog_ports.go` and `backlog_shared.go` by concern (6.8), place `item_session_uuids.go` with them, and give `background_models_service.go` (two `*SessionService` RPC methods) a handler type.
 
+### 6.10 Stage 5 leftovers (`claim_checker`, `backlogsync`)
+
+Done in the Stage 5 leftovers PR. `claim_checker` and the flag gate from `backlog_shared` are `server/services/claimcheck`. The `backlogsync` set was split by concern instead of becoming one package: the three session-control interfaces are `server/services/sessionports`; `ResolveTransitionCaller` and `TransitionActorFromContext` are in `session/domain/transition_actor.go` beside the context keys they read; the round pickers and `NonEmptySessionUUIDs` are `server/services/itemsessions`; `SddDefaultPipelineEnabled` is in `flagsvc`; the two background-model RPCs are `server/services/backgroundmodels`, with delegators in `session_service_background_models.go`. Left in the hub: `event_converter.go` (the watch stream, stage 6a) and `files_delegates.go` (`SessionService` RPC delegators, which only leave with the stage 6c facade). `completionreview`, `forwardsync` and `backlogmisc` stay their own leaves (this settles their "decide fold-in then" notes). Criteria: as lower packages, SC3 is 0 new importers of the hub; `server/services` goes from 52 files / 14,239 to 48 / 13,701 top-level non-test lines, with a net three more internal imports (100 to 103). A golden recorded before the move (`server/services/testdata/background_models.golden`) is unchanged after it. Per-package log levels now see these log lines under the new packages.
+
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
 Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes while the guard no longer guards.

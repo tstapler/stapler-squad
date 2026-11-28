@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/itemsessions"
+	"github.com/tstapler/stapler-squad/server/services/sessionports"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -36,11 +38,11 @@ type supersededSessionStore interface {
 // retry, and this sweeper is the self-heal; (2) it converges on rows already
 // persisted as stale, not just ones created after this sweeper exists.
 //
-// "Which round is current" is decided by findSupersededSessions, which
-// reuses findMostRecentSessions' latest-CreatedAt-wins tie-break -- the same
+// "Which round is current" is decided by itemsessions.FindSupersededSessions, which
+// reuses itemsessions.FindMostRecentSessions' latest-CreatedAt-wins tie-break -- the same
 // helper TriggerReReview itself already calls to find the prior review round
 // to archive -- rather than this sweeper re-deriving its own, third
-// definition of "current" (see findSupersededSessions' doc comment for why
+// definition of "current" (see itemsessions.FindSupersededSessions' doc comment for why
 // that's a distinct question from spawnSessionAfterGates' EndedAt/IsSessionLive-based
 // "is a work session already open" guards, and why archiveIfNotLive's own
 // liveness check, not tie-break agreement, is what protects a genuinely-live
@@ -52,14 +54,14 @@ type supersededSessionStore interface {
 // every tick, so a session that goes idle later is picked up on a later pass.
 type SupersededSessionSweeper struct {
 	storage supersededSessionStore
-	stopper SessionStopper
+	stopper sessionports.SessionStopper
 }
 
 // NewSupersededSessionSweeper constructs a sweeper. Both parameters are
 // consulted every tick and may be nil during startup wiring -- sweep() is a
 // no-op if either is unset, mirroring SessionStopper's own nil-safety
 // convention used throughout BacklogService.
-func NewSupersededSessionSweeper(storage supersededSessionStore, stopper SessionStopper) *SupersededSessionSweeper {
+func NewSupersededSessionSweeper(storage supersededSessionStore, stopper sessionports.SessionStopper) *SupersededSessionSweeper {
 	return &SupersededSessionSweeper{storage: storage, stopper: stopper}
 }
 
@@ -87,7 +89,7 @@ func (s *SupersededSessionSweeper) Start(ctx context.Context) {
 }
 
 // sweep scans every in_progress/review backlog item's session history and
-// archives any tmux-backed session findSupersededSessions identifies as not
+// archives any tmux-backed session itemsessions.FindSupersededSessions identifies as not
 // the current round for its role, skipping any that are still confirmed-live.
 func (s *SupersededSessionSweeper) sweep(ctx context.Context) {
 	if s.storage == nil || s.stopper == nil {
@@ -109,7 +111,7 @@ func (s *SupersededSessionSweeper) sweep(ctx context.Context) {
 			log.Warn("superseded session sweeper: ListItemSessions failed", "item", item.ID, "err", err)
 			continue
 		}
-		superseded = append(superseded, FindSupersededSessions(sessions)...)
+		superseded = append(superseded, itemsessions.FindSupersededSessions(sessions)...)
 	}
 	// Already-archived sessions stay superseded forever; one batched lookup
 	// replaces an IsSessionLive plus an archive-by-id query per session per tick.

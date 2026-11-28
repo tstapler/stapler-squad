@@ -16,7 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
@@ -170,7 +170,7 @@ func (s *BacklogService) defaultPipelineModeForNewItem(requested *string) string
 	if requested != nil {
 		return *requested
 	}
-	if !services.SddDefaultPipelineEnabled(s.flags) {
+	if !flagsvc.SddDefaultPipelineEnabled(s.flags) {
 		return ""
 	}
 	return pipelinemode.DefaultSDDPipelineModeSlug
@@ -1015,7 +1015,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TransitionBacklogItemStatusRequest],
 ) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error) {
-	triggeredBy := services.TransitionActorFromContext(ctx)
+	triggeredBy := domain.TransitionActorFromContext(ctx)
 	if s.storage == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
@@ -1056,7 +1056,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// decision and before the write so changes are durable before the status
 	// changes and the worktree is removed.
 	gateReq := backlogdto.TransitionRequest{
-		Caller:         services.ResolveTransitionCaller(ctx),
+		Caller:         domain.ResolveTransitionCaller(ctx),
 		ItemID:         req.Msg.ItemId,
 		Observed:       item,
 		To:             to,
@@ -1078,7 +1078,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, transitionConnectError(err, req.Msg.ItemId, "transition backlog item")
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
-	if services.TransitionActorFromContext(ctx) == instance.TriggeredByUser { // an operator move obsoletes any spawn backoff; agent moves don't
+	if domain.TransitionActorFromContext(ctx) == instance.TriggeredByUser { // an operator move obsoletes any spawn backoff; agent moves don't
 		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId)
 		s.storage.RecordManualNudgeForItem(ctx, req.Msg.ItemId, markerstore.ManualNudgeStatusTransition)
 	}

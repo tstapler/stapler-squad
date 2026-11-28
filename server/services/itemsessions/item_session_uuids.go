@@ -1,8 +1,8 @@
-package services
+package itemsessions
 
 import "github.com/tstapler/stapler-squad/session/domain/backlogdto"
 
-// nonEmptySessionUUIDs lists the session UUIDs an item owns, skipping rows
+// NonEmptySessionUUIDs lists the session UUIDs an item owns, skipping rows
 // that never got one.
 func NonEmptySessionUUIDs(sessions []backlogdto.ItemSessionSummary) []string {
 	uuids := make([]string, 0, len(sessions))

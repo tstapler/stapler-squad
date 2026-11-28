@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/claimcheck"
 	"github.com/tstapler/stapler-squad/server/services/completionreview"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
@@ -80,7 +81,7 @@ func TestConfigSurfaceProof_SDDDefaultPipeline_ChangesNewItemDefault(t *testing.
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(featureflags.SddDefaultPipelineFlagName, setting.(bool))
-		return SddDefaultPipelineEnabled(testFlagRegistry())
+		return flagsvc.SddDefaultPipelineEnabled(testFlagRegistry())
 	}, false, true)
 }
 
@@ -102,7 +103,7 @@ func (bkfForeignClaims) ForeignClaim(string) (hostclaim.ClaimRecord, bool) {
 
 func TestConfigSurfaceProof_CrossHostClaimDedup_ChangesClaimLookup(t *testing.T) {
 	set := bkfFlagWriter(t)
-	lookup := NewFlagGatedForeignClaimLookup(bkfForeignClaims{})
+	lookup := claimcheck.NewFlagGatedForeignClaimLookup(bkfForeignClaims{})
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(featureflags.CrossHostClaimDedupFlagName, setting.(bool))
 		_, found := lookup.ForeignClaim("https://example.test/issues/1")
