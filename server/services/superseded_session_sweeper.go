@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/itemsessions"
+	"github.com/tstapler/stapler-squad/server/services/sessionports"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -52,14 +54,14 @@ type supersededSessionStore interface {
 // every tick, so a session that goes idle later is picked up on a later pass.
 type SupersededSessionSweeper struct {
 	storage supersededSessionStore
-	stopper SessionStopper
+	stopper sessionports.SessionStopper
 }
 
 // NewSupersededSessionSweeper constructs a sweeper. Both parameters are
 // consulted every tick and may be nil during startup wiring -- sweep() is a
 // no-op if either is unset, mirroring SessionStopper's own nil-safety
 // convention used throughout BacklogService.
-func NewSupersededSessionSweeper(storage supersededSessionStore, stopper SessionStopper) *SupersededSessionSweeper {
+func NewSupersededSessionSweeper(storage supersededSessionStore, stopper sessionports.SessionStopper) *SupersededSessionSweeper {
 	return &SupersededSessionSweeper{storage: storage, stopper: stopper}
 }
 
@@ -109,7 +111,7 @@ func (s *SupersededSessionSweeper) sweep(ctx context.Context) {
 			log.Warn("superseded session sweeper: ListItemSessions failed", "item", item.ID, "err", err)
 			continue
 		}
-		superseded = append(superseded, FindSupersededSessions(sessions)...)
+		superseded = append(superseded, itemsessions.FindSupersededSessions(sessions)...)
 	}
 	// Already-archived sessions stay superseded forever; one batched lookup
 	// replaces an IsSessionLive plus an archive-by-id query per session per tick.

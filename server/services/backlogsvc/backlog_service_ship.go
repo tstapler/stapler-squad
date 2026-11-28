@@ -21,7 +21,7 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/itemsessions"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -97,7 +97,7 @@ func (s *BacklogService) TriggerShipPR(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list item sessions: %w", err))
 	}
-	_, workSession := services.FindMostRecentSessions(sessions)
+	_, workSession := itemsessions.FindMostRecentSessions(sessions)
 	if workSession == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("no work session found for item %q — nothing to ship", req.Msg.ItemId))

@@ -1,4 +1,4 @@
-package services
+package claimcheck
 
 import (
 	"context"

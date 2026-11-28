@@ -34,7 +34,7 @@ func TestPerFeatureReaders_ShouldUseInjectedRegistryDefault(t *testing.T) {
 	}{
 		{"changelog", featureflags.ChangelogFlagName, func(r *featureflags.Registry) bool { return updatecheck.ChangelogEnabled(cfg, r) }},
 		{"update-check", featureflags.UpdateCheckFlagName, func(r *featureflags.Registry) bool { return updatecheck.UpdateCheckFlagEnabled(cfg, r) }},
-		{"sdd-default-pipeline", featureflags.SddDefaultPipelineFlagName, SddDefaultPipelineEnabled},
+		{"sdd-default-pipeline", featureflags.SddDefaultPipelineFlagName, flagsvc.SddDefaultPipelineEnabled},
 		{"github-progress-comments", featureflags.GithubIssueProgressCommentsFlagName, forwardsync.GitHubIssueProgressCommentsEnabled},
 		{"program-cli-probe", flagsvc.ProgramCLIFlagProbeFlagName, flagsvc.ProgramCLIFlagProbeEnabled},
 	}

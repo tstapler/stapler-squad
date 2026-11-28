@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/itemsessions"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -6440,7 +6441,7 @@ func TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRounds
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := services.FindSupersededSessions(tc.sessions)
+			got := itemsessions.FindSupersededSessions(tc.sessions)
 			gotUUIDs := make([]string, len(got))
 			for i, is := range got {
 				gotUUIDs[i] = is.SessionUUID
@@ -6448,7 +6449,7 @@ func TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRounds
 			assert.ElementsMatch(t, tc.wantSuperseded, gotUUIDs)
 
 			// Cross-check against the existing tie-break truth source directly.
-			currentReview, currentWork := services.FindMostRecentSessions(tc.sessions)
+			currentReview, currentWork := itemsessions.FindMostRecentSessions(tc.sessions)
 			for _, is := range got {
 				if is.Role == instance.SessionRoleWork {
 					require.NotNil(t, currentWork)

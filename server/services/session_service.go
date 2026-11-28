@@ -66,6 +66,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/rules"
+	"github.com/tstapler/stapler-squad/server/services/sessionports"
 	"github.com/tstapler/stapler-squad/server/services/taggingrules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -96,7 +97,7 @@ var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 
 // Compile-time interface check: SessionService satisfies BacklogService's
 // consumer-defined SessionSteerer interface.
-var _ SessionSteerer = (*SessionService)(nil)
+var _ sessionports.SessionSteerer = (*SessionService)(nil)
 
 // resumeIDRe validates the client-supplied resume_id field: must be a standard UUID.
 // createSessionTimeout bounds the synchronous portion of CreateSession (fast-fail
