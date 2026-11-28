@@ -50,6 +50,7 @@ go_test(
         "github_user_service_test.go",
         "testmain_test.go",
     ],
+    data = glob(["testdata/**"]),
     embed = [":githubrpc"],
     deps = [
         "//github",
