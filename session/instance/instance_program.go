@@ -97,7 +97,7 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 		}
 	}
 
-	if i.Status == domain.Active {
+	if i.liveStatus() == domain.Active {
 		if restartErr := i.Restart(true, ""); restartErr != nil {
 			return true, resolvedProgram, restartErr
 		}
