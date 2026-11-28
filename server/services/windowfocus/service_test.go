@@ -58,3 +58,10 @@ func TestFocusWindow_NonDarwinPlatform(t *testing.T) {
 	}
 	require.NotNil(t, resp)
 }
+
+func TestNewService_ActivatesThroughLaunchServices(t *testing.T) {
+	t.Parallel()
+	a, ok := NewService().activator.(*launchServicesActivator)
+	require.True(t, ok)
+	assert.NotNil(t, a.run)
+}

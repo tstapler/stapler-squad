@@ -112,3 +112,12 @@ func TestCreateDebugSnapshot_should_ReportUptimeFromServerStart(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &snap))
 	assert.LessOrEqual(t, snap.Server.Uptime, int64(time.Since(ServerStartTime).Seconds())+1)
 }
+
+// These two keep working as nil pointers on every path a test can run on this
+// host, so their construction is asserted directly.
+func TestNewSessionService_should_BuildStatelessAdminLeaves(t *testing.T) {
+	t.Parallel()
+	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
+	assert.NotNil(t, svc.windowFocus)
+	assert.NotNil(t, svc.slashCommandSvc)
+}
