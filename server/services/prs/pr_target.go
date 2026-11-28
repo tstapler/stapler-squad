@@ -22,6 +22,16 @@ func PRRefFromProto(p *sessionv1.PullRequestRef) (domain.PRRef, error) {
 	return ref, nil
 }
 
+// ListPRFilter turns an RPC's optional pr selector into a ref. Unset is "no filter"; set
+// but invalid is InvalidArgument, never an unfiltered result.
+func ListPRFilter(p *sessionv1.PullRequestRef) (ref domain.PRRef, set bool, err error) {
+	if p == nil {
+		return domain.PRRef{}, false, nil
+	}
+	ref, err = PRRefFromProto(p)
+	return ref, err == nil, err
+}
+
 // ResolveTargetPR is the one place a PR action's selector becomes a PR. An unset
 // selector means the session's active PR; a set one must belong to the session.
 // The returned ref is never the zero ref: a session with no PR gets

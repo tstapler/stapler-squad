@@ -1,4 +1,4 @@
-package services
+package artifactrpc
 
 import (
 	"cmp"
@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/adapters"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -120,7 +121,7 @@ func (a *ArtifactService) ListSessionArtifacts(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	vis := a.visibleSessions(req.Msg.GetExcludeAutomationSessions(), req.Msg.GetIncludeArchived())
-	if prFilter, ok, err := listPRFilter(req.Msg.GetPr()); err != nil {
+	if prFilter, ok, err := prs.ListPRFilter(req.Msg.GetPr()); err != nil {
 		return nil, err
 	} else if ok {
 		if a.index == nil {

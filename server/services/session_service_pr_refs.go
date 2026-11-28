@@ -241,16 +241,6 @@ func refreshablePR(v domain.PRView) bool {
 	return !v.State.Terminal()
 }
 
-// listPRFilter turns the optional ListSessions pr selector into a ref. Unset is
-// no filter; a set selector that does not name a PR is an error, never PR 0.
-func listPRFilter(p *sessionv1.PullRequestRef) (ref domain.PRRef, set bool, err error) {
-	if p == nil {
-		return domain.PRRef{}, false, nil
-	}
-	ref, err = prs.PRRefFromProto(p)
-	return ref, err == nil, err
-}
-
 // instanceHasPR reports whether the session holds a link to ref.
 func instanceHasPR(inst *instance.Instance, ref domain.PRRef) bool {
 	for _, v := range inst.Snapshot().GitHub.PRs {

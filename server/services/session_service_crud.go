@@ -171,7 +171,7 @@ func (s *SessionService) listLocalSessions(
 		}
 	}
 
-	prFilter, hasPRFilter, err := listPRFilter(req.Msg.GetPr())
+	prFilter, hasPRFilter, err := prs.ListPRFilter(req.Msg.GetPr())
 	if err != nil {
 		return nil, err
 	}

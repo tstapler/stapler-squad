@@ -1,4 +1,4 @@
-package services
+package artifactrpc
 
 import (
 	"context"
@@ -24,6 +24,12 @@ type ArtifactService struct {
 	// index and allInstances back the cross-session search RPCs.
 	index        *search.ArtifactIndex
 	allInstances func() []*instance.Instance
+}
+
+// NewArtifactService builds the service over the hub's lookups, which are called on
+// every request.
+func NewArtifactService(findInstance func(id string) *instance.Instance, allInstances func() []*instance.Instance) *ArtifactService {
+	return &ArtifactService{findInstance: findInstance, allInstances: allInstances}
 }
 
 // SetIndex wires the artifact index; late because the extractor that fills it is

@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/artifactrpc"
 	"github.com/tstapler/stapler-squad/server/services/checkpointrpc"
 	"github.com/tstapler/stapler-squad/server/services/fileops"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -651,7 +652,7 @@ func (s *SessionService) SetArtifactIndex(x *search.ArtifactIndex) {
 }
 
 // SetArtifactRescanner wires the artifact extractor behind RescanSessionArtifacts.
-func (s *SessionService) SetArtifactRescanner(r ArtifactRescanner) {
+func (s *SessionService) SetArtifactRescanner(r artifactrpc.ArtifactRescanner) {
 	s.artifactSvc.SetRescanner(r)
 }
 
