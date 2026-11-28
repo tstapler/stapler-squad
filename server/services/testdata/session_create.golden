@@ -1,0 +1,64 @@
+create no-title: invalid_argument: title is required
+create no-path: invalid_argument: path is required
+create duplicate-title: already_exists: session with title 'taken' already exists
+create bad-resume-id: invalid_argument: resume_id must be a valid UUID
+create missing-fork-source: not_found: fork source conversation not found: conversation file not found for session ID: <uuid>
+create unknown-alias: not_found: alias "nope" not found: alias not found
+create unknown-remote: invalid_argument: no remote configured named "nope"
+create missing-restart-source: not_found: restart source session "nope" not found
+create missing-dir: not_found: path does not exist: <dir>/missing
+create missing-dir-resume: not_found: cannot resume: project directory no longer exists: <dir>/missing
+create auto-approve: invalid_argument: auto_approve is not supported for program "ssh"
+create bad-session-type: invalid_argument: unrecognized session_type 99
+create remote-tilde: invalid_argument: path "~/x": ~ is not supported for remote sessions -- use an absolute path on the remote host
+create remote-type: failed_precondition: remote session support is not configured on this server
+create remote-unconfigured: failed_precondition: remote session support is not configured on this server
+create remote-configured code=unavailable dialed=true
+fanout count-low: invalid_argument: count must be between 2 and 5, got 1
+fanout count-high: invalid_argument: count must be between 2 and 5, got 6
+fanout no-base: invalid_argument: base.title is required
+fanout too-many-overrides: invalid_argument: program_overrides has 3 entries for 2 variants
+fanout bad-branch: invalid_argument: invalid branch name "-x"
+pick empty: invalid_argument: group_id and winner_session_id are required
+pick unknown-group: not_found: fan-out group not found: g
+preview bogus: invalid_argument: unknown mode: "bogus"
+preview github_url: {"unresolvedReason":"not a recognized GitHub URL"}
+preview new_worktree: {"unresolvedReason":"repo_path and session_name are required"}
+retry : invalid_argument: session id is required
+cancel : invalid_argument: session id is required
+retry nope: not_found: session not found: nope
+cancel nope: not_found: session not found: nope
+retry taken: failed_precondition: session taken is not in Failed status (current status=Paused)
+cancel taken: failed_precondition: session taken is not in Creating status (current status=Paused)
+batch: {"failed":5,"results":[{"error":"title is required"},{"error":"path is required","title":"nopath"},{"error":"session 'taken' already exists","title":"taken"},{"error":"not_found: path does not exist: <dir>/missing","title":"dup"},{"error":"duplicate title 'dup' in batch request","title":"dup"}]}
+full response title="full" status=SESSION_STATUS_CREATING program="<dir>/agent" category="cat"
+full phases=["Resolving defaults..." "Setting up worktree..." "Starting session..."]
+full events=["session.created" "session.updated creation_progress" "session.updated creation_progress" "session.updated creation_progress" "session.updated status,creation_progress"]
+full title="full" program="<dir>/agent" type=directory status=Active hidden=false oneshot=false autoyes=true autoapprove=false category="cat" tags=[a b]
+full path="<dir>" branch="" prompt="p" initial="hello" env=[K=v] cliflags="--x" extra=[--y] tools="Read" permission="plan" project="proj" workflow="wf" mcp="http://mcp.test/mcp" isolatedSocket=true
+full poller=true tagPoller=true stored=Active
+full prompt-history "hello"
+ghfail response status=SESSION_STATUS_CREATING
+ghfail phases=["Resolving GitHub URL..." "Cloning repository..." "Failed to resolve GitHub URL: clone refused"]
+ghfail events=["session.created" "session.updated creation_progress" "session.updated creation_progress" "session.updated creation_progress" "session.updated status,creation_progress"]
+ghfail poller=true tagPoller=true stored=Failed
+ghfail status=Failed reason="GitHubResolutionError" progress="Failed to resolve GitHub URL: clone refused"
+ghfail retry: {"message":"session creation 'ghfail' retrying","success":true}
+ghfail after-retry status=Creating reason="GitHubResolutionError" phases=4 first="Resolving defaults..."
+cancelme: {"message":"session creation 'cancelme' cancelled","success":true}
+cancelme poller=false tagPoller=false stored=
+spawn-dir title="spawn-dir" program="<dir>/agent" type=directory status=Active hidden=true oneshot=true autoyes=false autoapprove=false category="" tags=[t]
+spawn-dir path="<dir>" branch="" prompt="dp" initial="" env=[] cliflags="" extra=[] tools="Grep" permission="auto" project="" workflow="" mcp="http://mcp.test/mcp" isolatedSocket=true
+spawn-dir poller=true tagPoller=true stored=Active
+spawn-dir events=["session.created"]
+spawn-wt title="spawn-wt" program="<dir>/agent" type=existing_worktree status=Active hidden=false oneshot=false autoyes=false autoapprove=false category="" tags=[]
+spawn-wt path="<dir>/repo" branch="<default>" prompt="wp" initial="" env=[] cliflags="" extra=[] tools="" permission="auto" project="" workflow="" mcp="http://mcp.test/mcp" isolatedSocket=true
+spawn-wt poller=true tagPoller=true stored=Active
+spawn-wt events=["session.created"]
+spawn duplicate rejected=true
+review title="review:01234567:<n>" program="<dir>/agent" type=directory status=Active hidden=true oneshot=true autoyes=false autoapprove=false category="Backlog" tags=[backlog:review]
+review path="<dir>/cfgrepo" branch="" prompt="review it" initial="" env=[] cliflags="" extra=[] tools="" permission="auto" project="" workflow="" mcp="http://mcp.test/mcp" isolatedSocket=true
+review poller=true tagPoller=true stored=Active
+diagnose title="diagnose:01234567:<n>" program="<dir>/agent" type=directory status=Active hidden=true oneshot=true autoyes=false autoapprove=false category="Backlog" tags=[backlog:diagnose]
+diagnose path="<dir>/cfgrepo" branch="" prompt="diagnose it" initial="" env=[] cliflags="" extra=[] tools="Read,Grep,Glob,Bash,mcp__stapler-squad__create_backlog_item,mcp__stapler-squad__post_backlog_update,mcp__stapler-squad__get_backlog_item,mcp__stapler-squad__get_backlog_stuck_report,mcp__stapler-squad__submit_diagnosis_result,mcp__stapler-squad__diagnose_nudge_session,mcp__stapler-squad__diagnose_reset_remediation,mcp__stapler-squad__suggest_workflow_action,mcp__stapler-squad__report_harness_gap" permission="auto" project="" workflow="" mcp="http://mcp.test/mcp" isolatedSocket=true
+diagnose category="Backlog"

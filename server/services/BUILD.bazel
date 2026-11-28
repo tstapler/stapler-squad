@@ -284,6 +284,7 @@ go_test(
         "rules_wiring_test.go",
         "sendkeys_guard_test.go",
         "session_archive_stop_test.go",
+        "session_create_characterization_test.go",
         "session_creation_await_test.go",
         "session_creation_metrics_test.go",
         "session_creation_pipeline_test.go",
