@@ -198,6 +198,7 @@ go_test(
         "//server/services/backlogflow",
         "//server/services/backlogsvc",
         "//server/services/guidance",
+        "//server/services/workflowrpc",
         "//server/wakes",
         "//session",
         "//session/backlogstore",

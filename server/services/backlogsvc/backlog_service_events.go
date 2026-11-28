@@ -30,7 +30,6 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -298,7 +297,7 @@ func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storag
 		// fan-out path and the after_seq replay path.
 		Seq: evt.Seq,
 		// Constant per process; lets clients distinguish a redeploy from a seq anomaly.
-		DeployId: services.DeployID(),
+		DeployId: events.DeployID(),
 	}
 
 	payload := evt.BacklogItemPayload

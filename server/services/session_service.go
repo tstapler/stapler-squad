@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/capacity"
+	"github.com/tstapler/stapler-squad/server/services/checkpointrpc"
 	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
 	"github.com/tstapler/stapler-squad/server/services/fileops"
 	"github.com/tstapler/stapler-squad/server/services/githubrpc"
@@ -25,10 +26,12 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/pathcomplete"
 	"github.com/tstapler/stapler-squad/server/services/prs"
+	"github.com/tstapler/stapler-squad/server/services/reviewqueuerpc"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/sessiondefaults"
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
+	"github.com/tstapler/stapler-squad/server/services/workflowrpc"
 	"github.com/tstapler/stapler-squad/server/services/workspacedb"
 
 	"github.com/google/uuid"
@@ -59,7 +62,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/taggingrules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
-	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/external"
@@ -109,14 +111,6 @@ var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 // unique tmux -L socket suffix (combined with os.Getpid() for cross-process uniqueness), so
 // concurrent tests never contend on the same isolated socket. See SessionService.testTmuxServerSocket.
 var testTmuxServerSocketCounter uint64
-
-// ReactiveQueueManager is an interface to avoid circular dependencies.
-// The actual implementation is in server/review_queue_manager.go
-type ReactiveQueueManager interface {
-	AddStreamClient(ctx context.Context, filters interface{}) (<-chan *sessionv1.ReviewQueueEvent, string)
-	RemoveStreamClient(clientID string)
-	OnControllerStatusChange(inst *instance.Instance, newStatus detection.DetectedStatus)
-}
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
 type SessionService struct {
@@ -206,7 +200,7 @@ type SessionService struct {
 	inFlightConversationClaims sync.Map
 
 	// Extracted domain services.
-	reviewQueueSvc  *ReviewQueueService
+	reviewQueueSvc  *reviewqueuerpc.ReviewQueueService
 	searchSvc       *searchrpc.SearchService
 	githubSvc       *githubrpc.GitHubService
 	workspaceSvc    *WorkspaceService
@@ -305,7 +299,7 @@ type SessionService struct {
 	projectSvc *ProjectService
 
 	// checkpointSvc handles CreateCheckpoint/ListCheckpoints/ClearConversationState RPCs.
-	checkpointSvc *CheckpointService
+	checkpointSvc *checkpointrpc.CheckpointService
 
 	// artifactSvc handles RescanSessionArtifacts.
 	artifactSvc *ArtifactService
@@ -324,7 +318,7 @@ type SessionService struct {
 
 	// scrollbackMgr provides access to per-session scrollback sequence numbers
 	// for checkpoint creation. May be nil if not wired (seq defaults to 0).
-	scrollbackMgr ScrollbackSequencer
+	scrollbackMgr checkpointrpc.ScrollbackSequencer
 
 	// mcpServerURLFn lazily resolves the URL of the stapler-squad HTTP MCP
 	// endpoint. It is invoked (not read as a stored string) at the point of
@@ -380,7 +374,7 @@ type SessionService struct {
 
 	// workflowSvc handles workflow CRUD and RunWorkflow RPC delegation.
 	// Injected after construction via SetWorkflowService to avoid bootstrapping cycle.
-	workflowSvc *WorkflowService
+	workflowSvc *workflowrpc.WorkflowService
 
 	// workflowRepo is used to populate the workflow meta cache.
 	// Injected via SetWorkflowRepository to avoid bootstrapping cycle.
@@ -613,12 +607,6 @@ type workflowMeta struct {
 	archiveAfterHours int
 }
 
-// ScrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
-// Exported so server/dependencies.go can use warren.Set to validate this wiring at startup.
-type ScrollbackSequencer interface {
-	CurrentSequence(sessionID string) uint64
-}
-
 // Dependency-injection audit (ADR-001, Story 1.3):
 //
 // All Set* wiring methods on SessionService inject Phase 2 or Phase 3 dependencies —
@@ -842,7 +830,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		log.Warn("failed to get config dir for approval persistence", "err", configErr)
 	}
 	approvalStore := approvalkit.NewApprovalStore(approvalFilePath)
-	reviewQueueSvc := NewReviewQueueService(reviewQueue, concStorage, eventBus)
+	reviewQueueSvc := reviewqueuerpc.NewReviewQueueService(reviewQueue, concStorage, eventBus)
 	reviewQueueSvc.SetApprovalStore(approvalStore)
 
 	notificationSvc := notify.NewNotificationService(notify.NewNotificationRateLimiter(10, 20), eventBus)
@@ -1029,7 +1017,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		streamHubRolloutSvc:         streamhubrollout.NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          sessiondefaults.NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
-		checkpointSvc:               NewCheckpointService(storage, eventBus),
+		checkpointSvc:               checkpointrpc.NewCheckpointService(storage, eventBus),
 		artifactSvc:                 &ArtifactService{},
 		featureFlagSvc:              flagsvc.NewFeatureFlagService(),
 		terminalSvc:                 NewTerminalService(),

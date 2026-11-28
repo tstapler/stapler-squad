@@ -1,0 +1,61 @@
+archive no-storage -> unavailable: bulk archive requires ent-backed storage
+attach absent -> [] invalid_argument: attachment "<dir>/att/nope.png": file not found
+attach directory -> [] invalid_argument: attachment "<dir>/att/sub.png": not a regular file
+attach missing-dir -> [] invalid_argument: attachment directory unavailable: lstat <dir>/missing: no such file or directory
+attach none -> [] ok
+attach not-image -> [] invalid_argument: attachment "<dir>/att/a.txt": not an image file
+attach ok -> [<dir>/att/a.PNG] ok
+attach outside -> [] invalid_argument: attachment "<dir>/outside.png": path is outside the attachment directory
+attach relative -> [] invalid_argument: attachment "a.png": path must be absolute
+attach symlink-out -> [] invalid_argument: attachment "<dir>/att/link.png": path is outside the attachment directory
+attach too-many -> [] invalid_argument: too many attachments: 11 (max 10)
+attach unset -> [] invalid_argument: workflow attachments are not available
+consistency "" "" "" -> <nil>
+consistency "" "" "o/r" -> github_repo requires trigger_type="github_push", got trigger_type=""
+consistency "" "x" "" -> webhook_slug requires trigger_type="webhook", got trigger_type=""
+consistency "" "x" "o/r" -> webhook_slug requires trigger_type="webhook", got trigger_type=""
+consistency "cron" "" "" -> <nil>
+consistency "cron" "" "o/r" -> github_repo requires trigger_type="github_push", got trigger_type="cron"
+consistency "cron" "x" "" -> webhook_slug requires trigger_type="webhook", got trigger_type="cron"
+consistency "cron" "x" "o/r" -> webhook_slug requires trigger_type="webhook", got trigger_type="cron"
+consistency "github_push" "" "" -> <nil>
+consistency "github_push" "" "o/r" -> <nil>
+consistency "github_push" "x" "" -> webhook_slug requires trigger_type="webhook", got trigger_type="github_push"
+consistency "github_push" "x" "o/r" -> webhook_slug requires trigger_type="webhook", got trigger_type="github_push"
+consistency "manual" "" "" -> <nil>
+consistency "manual" "" "o/r" -> github_repo requires trigger_type="github_push", got trigger_type="manual"
+consistency "manual" "x" "" -> webhook_slug requires trigger_type="webhook", got trigger_type="manual"
+consistency "manual" "x" "o/r" -> webhook_slug requires trigger_type="webhook", got trigger_type="manual"
+consistency "webhook" "" "" -> <nil>
+consistency "webhook" "" "o/r" -> github_repo requires trigger_type="github_push", got trigger_type="webhook"
+consistency "webhook" "x" "" -> <nil>
+consistency "webhook" "x" "o/r" -> github_repo requires trigger_type="github_push", got trigger_type="webhook"
+create cmd -> invalid_argument: command is required
+create cron -> invalid_argument: invalid cron expression: expected exactly 5 fields, found 1: [nope]
+create name -> invalid_argument: name is required
+create no-repo -> unavailable: workflow storage not available
+create slug -> invalid_argument: slug must be lowercase alphanumeric with hyphens (no leading/trailing/consecutive hyphens)
+create target -> invalid_argument: target_directory is required
+empty {"createdAt":"2026-03-04T05:06:07Z","id":"00000000-0000-0000-0000-000000000000","updatedAt":"2026-03-04T05:06:07Z"}
+event {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z","workflowCreated":{"workflow":{"agentType":"claude","archiveAfterHours":4,"command":"c","createdAt":"2026-03-04T05:06:07Z","cronEnabled":true,"cronExpression":"* * * * *","description":"d","enabled":true,"eventFilter":"e","githubBranch":"b","githubRepo":"o/r","id":"11111111-2222-3333-4444-555555555555","inputTemplate":"{{input}}","keepSessions":3,"labelFilter":"l","lastFiredAt":"2026-03-04T05:06:07Z","model":"m","name":"n","promptTemplate":"p","sessionType":"directory","slug":"s","targetDirectory":"/t","triggerType":"webhook","updatedAt":"2026-03-04T06:06:07Z","webhookSlug":"w"}}}
+event {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z","workflowDeleted":{"id":"gone"}}
+event {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z","workflowRun":{"sessionId":"sess","workflowId":"wf"}}
+event {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z","workflowUpdated":{"workflow":{"agentType":"claude","archiveAfterHours":4,"command":"c","createdAt":"2026-03-04T05:06:07Z","cronEnabled":true,"cronExpression":"* * * * *","description":"d","enabled":true,"eventFilter":"e","githubBranch":"b","githubRepo":"o/r","id":"11111111-2222-3333-4444-555555555555","inputTemplate":"{{input}}","keepSessions":3,"labelFilter":"l","lastFiredAt":"2026-03-04T05:06:07Z","model":"m","name":"n","promptTemplate":"p","sessionType":"directory","slug":"s","targetDirectory":"/t","triggerType":"webhook","updatedAt":"2026-03-04T06:06:07Z","webhookSlug":"w"}}}
+event {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z"}
+fire-events no-repo -> {}
+full {"agentType":"claude","archiveAfterHours":4,"command":"c","createdAt":"2026-03-04T05:06:07Z","cronEnabled":true,"cronExpression":"* * * * *","description":"d","enabled":true,"eventFilter":"e","githubBranch":"b","githubRepo":"o/r","id":"11111111-2222-3333-4444-555555555555","inputTemplate":"{{input}}","keepSessions":3,"labelFilter":"l","lastFiredAt":"2026-03-04T05:06:07Z","model":"m","name":"n","promptTemplate":"p","sessionType":"directory","slug":"s","targetDirectory":"/t","triggerType":"webhook","updatedAt":"2026-03-04T06:06:07Z","webhookSlug":"w"}
+resolve "" false -> "manual"
+resolve "" true -> "cron"
+resolve "cron" false -> "cron"
+resolve "cron" true -> "cron"
+resolve "github_push" false -> "github_push"
+resolve "github_push" true -> "github_push"
+resolve "manual" false -> "manual"
+resolve "manual" true -> "manual"
+resolve "webhook" false -> "webhook"
+resolve "webhook" true -> "webhook"
+snapshot {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z","workflowCreated":{"isSnapshot":true,"workflow":{"agentType":"claude","archiveAfterHours":4,"command":"c","createdAt":"2026-03-04T05:06:07Z","cronEnabled":true,"cronExpression":"* * * * *","description":"d","enabled":true,"eventFilter":"e","githubBranch":"b","githubRepo":"o/r","id":"11111111-2222-3333-4444-555555555555","inputTemplate":"{{input}}","keepSessions":3,"labelFilter":"l","lastFiredAt":"2026-03-04T05:06:07Z","model":"m","name":"n","promptTemplate":"p","sessionType":"directory","slug":"s","targetDirectory":"/t","triggerType":"webhook","updatedAt":"2026-03-04T06:06:07Z","webhookSlug":"w"}}}
+snapshot {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z","workflowDeleted":{"id":"gone"}}
+snapshot {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z","workflowRun":{"sessionId":"sess","workflowId":"wf"}}
+snapshot {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z","workflowUpdated":{"isSnapshot":true,"workflow":{"agentType":"claude","archiveAfterHours":4,"command":"c","createdAt":"2026-03-04T05:06:07Z","cronEnabled":true,"cronExpression":"* * * * *","description":"d","enabled":true,"eventFilter":"e","githubBranch":"b","githubRepo":"o/r","id":"11111111-2222-3333-4444-555555555555","inputTemplate":"{{input}}","keepSessions":3,"labelFilter":"l","lastFiredAt":"2026-03-04T05:06:07Z","model":"m","name":"n","promptTemplate":"p","sessionType":"directory","slug":"s","targetDirectory":"/t","triggerType":"webhook","updatedAt":"2026-03-04T06:06:07Z","webhookSlug":"w"}}}
+snapshot {"deployId":"\u003cdeploy\u003e","seq":"9","timestamp":"2026-03-04T05:06:07Z"}

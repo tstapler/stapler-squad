@@ -1,4 +1,4 @@
-package services
+package workflowrpc
 
 import (
 	"os"
@@ -9,6 +9,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// pngMagic returns a minimal byte slice that looks like a PNG.
+func pngMagic() []byte {
+	return append([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, make([]byte, 504)...)
+}
 
 func writeAttachmentFile(t *testing.T, path string) string {
 	t.Helper()

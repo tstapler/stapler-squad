@@ -138,3 +138,7 @@ server/services/updatecheck !server/web
 server/services/fileops !server/web
 server/services/pathcomplete !server/web
 server/services/githubrpc !server/web
+server/services/wakerpc !server/web
+server/services/checkpointrpc !server/web
+server/services/reviewqueuerpc !server/web
+server/services/workflowrpc !server/web

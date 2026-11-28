@@ -1,0 +1,24 @@
+ack "" ->  invalid_argument: session id is required remaining=2
+ack "errored" -> {"message":"Session 'errored' removed from review queue","success":true} ok remaining=1
+ack "unknown" -> {"message":"Session 'unknown' removed from review queue","success":true} ok remaining=1
+filters [High] [Error State] [a] true true
+priority PRIORITY_HIGH -> [High]
+priority PRIORITY_LOW -> [Low]
+priority PRIORITY_MEDIUM -> [Medium]
+priority PRIORITY_UNSPECIFIED -> []
+priority PRIORITY_URGENT -> [Urgent]
+queue all -> [errored/PRIORITY_URGENT/ATTENTION_REASON_ERROR_STATE/ needs-approval/PRIORITY_HIGH/ATTENTION_REASON_APPROVAL_PENDING/approval-1] total=2
+queue priority -> [needs-approval/PRIORITY_HIGH/ATTENTION_REASON_APPROVAL_PENDING/approval-1] total=1
+queue reason -> [errored/PRIORITY_URGENT/ATTENTION_REASON_ERROR_STATE/] total=1
+reason ATTENTION_REASON_APPROVAL_PENDING -> [Approval Pending]
+reason ATTENTION_REASON_ERROR_STATE -> [Error State]
+reason ATTENTION_REASON_IDLE -> []
+reason ATTENTION_REASON_IDLE_TIMEOUT -> [Idle Timeout]
+reason ATTENTION_REASON_INPUT_REQUIRED -> [Input Required]
+reason ATTENTION_REASON_STALE -> []
+reason ATTENTION_REASON_TASK_COMPLETE -> [Task Complete]
+reason ATTENTION_REASON_TESTS_FAILING -> []
+reason ATTENTION_REASON_UNCOMMITTED_CHANGES -> []
+reason ATTENTION_REASON_UNSPECIFIED -> []
+reason ATTENTION_REASON_WAITING_FOR_USER -> []
+watch unwired -> internal: reactive queue manager not initialized manager=<nil>

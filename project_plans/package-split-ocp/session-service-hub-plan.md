@@ -451,6 +451,12 @@ Done in the second Stage 5 `providers` PR, which closes the cluster: `github_ser
 
 Not done here: `backlogsync` (`backlog_ports.go`, `backlog_shared.go`, 259 lines). It is no longer blocked (`SessionSteerer` is over `access.SteerOutcome`, and a dry run shows no back edge), but the two files mix `backlogsvc`'s ports with transition-caller resolution, stuck-reason mapping, supersession helpers and a flag gate, so it needs its own split by concern.
 
+### 6.9 Stage 5 `workflows`
+
+Done in the Stage 5 `workflows` PR: the `workflows` rows moved into four leaves named for their concern, not one `workflows` package (`server/workflows` and `server/wakes` already exist): `workflowrpc` (`workflow_service`, `workflow_service_events`, and `workflow_attachments`, a `filesvc` row that is `WorkflowService` methods), `reviewqueuerpc` (`review_queue_service` and the `ReactiveQueueManager` port from `session_service.go`), `checkpointrpc` (`checkpoint_service` and the `ScrollbackSequencer` port) and `wakerpc` (`wake_trigger_service`, `wake_trigger_peer_help`). `deploy_id` went to `server/events`, not `fsops` as 3.3.2 listed: it identifies the process on events and is not file I/O. No receivers were converted and no exported name changed. `checkpoint_test.go` stays in the hub (it drives `SessionService`); the three delegation tests moved to `workflow_delegation_test.go`. `server/services` goes from 75 files / 20,604 (after both `providers` PRs) to 67 / 18,477 top-level non-test lines. Differential goldens recorded before the move are in each leaf's `testdata/`.
+
+The `backlogsync` rows did not move in this PR and are now unblocked: the second `providers` PR (6.8) moved `SteerOutcome` to `access`, so `SessionSteerer` in `backlog_ports.go` no longer depends on a hub receiver file. Still to do there: split `backlog_ports.go` and `backlog_shared.go` by concern (6.8), place `item_session_uuids.go` with them, and give `background_models_service.go` (two `*SessionService` RPC methods) a handler type.
+
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
 Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes while the guard no longer guards.

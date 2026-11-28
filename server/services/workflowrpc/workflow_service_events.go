@@ -1,4 +1,4 @@
-package services
+package workflowrpc
 
 // workflow_service_events.go — WatchWorkflows streaming RPC for WorkflowService.
 // Mirrors backlog_service_events.go's WatchBacklogItems shape (subscribe before
@@ -179,7 +179,7 @@ func convertEventToWorkflowEvent(evt *events.Event) *sessionv1.WorkflowEvent {
 	out := &sessionv1.WorkflowEvent{
 		Timestamp: timestamppb.New(evt.Timestamp),
 		Seq:       evt.Seq,
-		DeployId:  deployID,
+		DeployId:  events.DeployID(),
 	}
 
 	payload := evt.WorkflowPayload

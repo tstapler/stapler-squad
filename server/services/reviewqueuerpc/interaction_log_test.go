@@ -1,4 +1,4 @@
-package services
+package reviewqueuerpc
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -65,27 +66,4 @@ func TestLogInteraction_NoSessionID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.True(t, resp.Msg.Success)
-}
-
-// TestGetLogs_EmptySessionID verifies that GetLogs with an empty session_id
-// pointer (nil) returns a valid (possibly empty) response for the global log.
-// This exercises the "no session ID" code path in UtilityService.GetLogs.
-func TestGetLogs_EmptySessionID(t *testing.T) {
-	t.Parallel()
-	svc := setupUtilityService()
-
-	// Passing a nil session_id — exercises the global log path.
-	resp, err := svc.GetLogs(
-		context.Background(),
-		connect.NewRequest(&sessionv1.GetLogsRequest{}),
-	)
-
-	// Either succeeds (empty log) or errors; must not panic.
-	if err != nil {
-		var connectErr *connect.Error
-		require.ErrorAs(t, err, &connectErr)
-		assert.NotEqual(t, connect.CodeNotFound, connectErr.Code())
-	} else {
-		require.NotNil(t, resp)
-	}
 }

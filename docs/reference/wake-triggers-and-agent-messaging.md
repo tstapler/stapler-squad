@@ -119,7 +119,7 @@ other PR is `unavailable`. Supported `(type, kind)` pairs are the table in
 ## Operator surface
 
 `WakeTriggerService` (`proto/session/v1/wake_trigger.proto`,
-`server/services/wake_trigger_service.go`) is what the Background tab's
+`server/services/wakerpc/wake_trigger_service.go`) is what the Background tab's
 "Scheduled prompts" section and peer-help rows read and write. Agents never
 call it.
 

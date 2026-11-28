@@ -1,4 +1,4 @@
-package services
+package workflowrpc
 
 // workflow_service_events_test.go — WatchWorkflows handler test suite,
 // mirroring backlog_service_events_test.go's shape: drive
@@ -227,4 +227,10 @@ func TestWatchWorkflows_should_returnUnavailable_When_EventBusNotWired(t *testin
 	err := svc.watchWorkflows(context.Background(), &sessionv1.WatchWorkflowsRequest{}, &fakeWorkflowEventSender{})
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+}
+
+func TestDeployID_StampedOnWorkflowEvents(t *testing.T) {
+	t.Parallel()
+	got := convertEventToWorkflowEvent(&events.Event{Timestamp: time.Now()})
+	assert.Equal(t, events.DeployID(), got.GetDeployId())
 }

@@ -8,18 +8,20 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/quota"
+	"github.com/tstapler/stapler-squad/server/services/workflowrpc"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tokens"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // wireAutoArchiveCallback registers a lifecycle listener that auto-archives a
@@ -402,7 +404,7 @@ func (s *SessionService) UpdateFeatureFlag(
 
 // SetWorkflowService injects the workflow sub-service using deferred setter injection.
 // Must be called after both SessionService and WorkflowService are constructed.
-func (s *SessionService) SetWorkflowService(svc *WorkflowService) {
+func (s *SessionService) SetWorkflowService(svc *workflowrpc.WorkflowService) {
 	s.workflowSvc = svc
 }
 

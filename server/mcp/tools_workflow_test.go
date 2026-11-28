@@ -11,13 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/workflowrpc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // newTestWorkflowHandlers wires a real *services.SessionService with a
-// *services.WorkflowService attached, mirroring
-// server/services/workflow_service_test.go's createTestWorkflowService
+// *workflowrpc.WorkflowService attached, mirroring
+// server/services/workflowrpc/workflow_service_test.go's createTestWorkflowService
 // helper (unexported there, so it can't be imported directly).
 func newTestWorkflowHandlers(t *testing.T) *workflowHandlers {
 	t.Helper()
@@ -27,7 +28,7 @@ func newTestWorkflowHandlers(t *testing.T) *workflowHandlers {
 	repo := session.NewTestEntRepository(t)
 
 	workflowRepo := stagecfg.NewEntWorkflowRepository(repo.GetEntClient())
-	workflowSvc := services.NewWorkflowService(workflowRepo, nil, storage)
+	workflowSvc := workflowrpc.NewWorkflowService(workflowRepo, nil, storage)
 
 	sessSvc := services.NewSessionService(storage, events.NewEventBus(100))
 	sessSvc.SetWorkflowService(workflowSvc)
