@@ -12,23 +12,22 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/tstapler/stapler-squad/internal/proflabel"
-	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/steertext"
-
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/prwatch/inbox"
 	"github.com/tstapler/stapler-squad/server/wakes"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/steertext"
 )
 
 const prwatchLeaderLockName = "prwatch.leader.lock"
 
-// prwatchWiring carries the ports the poller needs; startPRWatch builds them
-// from the server dependencies and tests pass fakes.
+// prwatchWiring carries the ports the poller needs; Start builds them from
+// Deps and tests pass fakes.
 type prwatchWiring struct {
 	Settings    prwatch.Settings
 	Corrections []prwatch.SettingCorrection
