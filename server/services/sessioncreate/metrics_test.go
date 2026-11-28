@@ -13,7 +13,7 @@ import (
 )
 
 // attributeKeyOutcome is the attribute key both instruments in
-// session_creation_metrics.go tag their data points with.
+// sessioncreate/metrics.go tag their data points with.
 const attributeKeyOutcome = attribute.Key("outcome")
 
 // testMetricReader backs the single real MeterProvider installed for this
@@ -21,7 +21,7 @@ const attributeKeyOutcome = attribute.Key("outcome")
 // installed via otel.SetMeterProvider exactly once per process
 // (internal/global/state.go's delegateMeterOnce) — sessionCreationOutcome
 // and sessionCreationDurationMS are built at package-init time against that
-// delegating global meter (see session_creation_metrics.go's
+// delegating global meter (see sessioncreate/metrics.go's
 // telemetry.GetMeter() call, which falls back to otel.Meter(...) when no
 // telemetry.Provider has been installed), so only the *first*
 // SetMeterProvider call in this test binary actually rewires them; a

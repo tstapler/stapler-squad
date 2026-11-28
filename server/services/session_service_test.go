@@ -140,7 +140,7 @@ func TestCreateSession_should_ReturnAlreadyExists_When_TitleDuplicates(t *testin
 // TestCreateSession_should_ReturnWithinSLO_When_GithubURLResolutionIsSlow is
 // the anchor scenario for Epic 2.1 Story 2.1.1: instance
 // construction+save+publish must happen before the GitHub-URL clone runs, so
-// the RPC returns fast (well within createSessionTimeout's 150s budget --
+// the RPC returns fast (well within CreateSessionTimeout's 150s budget --
 // this asserts a much tighter practical bound) with status=CREATING and a
 // non-empty creation_progress, even though the injected githubResolver won't
 // return for several seconds. It also confirms the deferred clone actually
@@ -4940,7 +4940,7 @@ func assertReachesActiveViaPipeline(t *testing.T, svc *SessionService, created *
 // TestCreateSession_should_ReachActiveViaPipeline above, which is the
 // plan's own named highest-risk mode) rather than hand-setting the field on
 // a fixture, so it actually exercises setPhase's storage.UpdateInstance
-// call in session_creation_pipeline.go.
+// call in sessioncreate/pipeline.go.
 func TestCreateSession_should_PersistCreationProgressUpdatedAt_When_PhaseTransitionsBeforeStarted(t *testing.T) {
 	const awaitTimeout = 30 * time.Second
 	const awaitPollInterval = 20 * time.Millisecond
@@ -4961,7 +4961,7 @@ func TestCreateSession_should_PersistCreationProgressUpdatedAt_When_PhaseTransit
 	// worktree...") both run, and are both persisted via setPhase's
 	// storage.UpdateInstance call, before Start() -- which flips
 	// Started()==true -- is ever invoked (see
-	// session_creation_pipeline.go's phase ordering). Capturing phase count
+	// sessioncreate/pipeline.go's phase ordering). Capturing phase count
 	// here (mirroring ModeIsRestart's own technique) proves at least one such
 	// pre-Started transition actually happened in this run, not just that
 	// the schema supports it.

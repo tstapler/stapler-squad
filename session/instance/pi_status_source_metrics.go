@@ -4,7 +4,7 @@ package instance
 // pi_status_source_events_total counter, following the existing
 // telemetry.GetMeter() registration idiom already used by
 // executor/safeexec/safeexec_metrics.go and
-// server/services/session_creation_metrics.go.
+// server/services/sessioncreate/metrics.go.
 
 import (
 	"context"

@@ -136,7 +136,7 @@ const (
 
 	// Async-session-creation Epic 2.3, Story 2.3.4: distinct outcomes for
 	// create_session/create_session_for_pr's wait on the Background
-	// Resolution Pipeline (server/services/session_creation_await.go).
+	// Resolution Pipeline (server/services/sessioncreate/await.go).
 	// ErrSessionCreationFailed: the pipeline reached a terminal Failed status
 	// before the session ever became Active — distinct from ErrInternalError
 	// so the caller can tell "resolution failed" from "the tool itself

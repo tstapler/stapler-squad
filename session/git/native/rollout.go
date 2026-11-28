@@ -28,7 +28,7 @@ const (
 
 // MustInt64Counter and MustFloat64Histogram register an OTel instrument or panic,
 // matching this repo's existing telemetry.GetMeter() idiom (e.g.
-// executor/safeexec/safeexec_metrics.go, server/services/session_creation_metrics.go): the
+// executor/safeexec/safeexec_metrics.go, server/services/sessioncreate/metrics.go): the
 // only error either registration call can return is a malformed name/config, a
 // build-time-constant programmer error that should fail loudly in tests rather than
 // silently drop the metric forever.

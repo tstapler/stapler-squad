@@ -20,7 +20,7 @@ const scrollForwardBlockedReasonLabelNA = "n/a"
 // instruments named in plan.md's Observability Plan for Epic 1.5, registered
 // once package-level via telemetry.GetMeter() -- the same idiom
 // session/procbackend/backend_observability.go's backendOperationDurationMS and
-// server/services/session_creation_metrics.go's sessionCreationOutcome
+// server/services/sessioncreate/metrics.go's sessionCreationOutcome
 // already use (safe to call before telemetry.Initialize: a no-op-safe
 // delegating meter until a real MeterProvider is installed).
 var (

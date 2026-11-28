@@ -200,7 +200,7 @@ func (h *Handler) CreateDirectorySession(ctx context.Context, path string, opts 
 	// Wire callbacks (including the tagging engine/fire recorder, session-classifier-pipeline
 	// Task 2.3.3d) before Start() so a first-time-setup session's ReclassifyTagsAfterCreate
 	// call has a real engine to evaluate, matching the primary CreateSession pipeline's
-	// wire-before-start ordering (session_creation_pipeline.go).
+	// wire-before-start ordering (sessioncreate/pipeline.go).
 	h.d.WireCallbacks(instance)
 	if err := instance.Start(true); err != nil {
 		return nil, fmt.Errorf("CreateDirectorySession start: %w", err)

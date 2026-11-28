@@ -473,7 +473,7 @@ drain:
 
 // TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHookConfig
 // is worktree-envvars-hijack Epic 4.2's regression test for Epic 2's
-// stale-instanceRootDir fix (session_creation_pipeline.go:284): a plain
+// stale-instanceRootDir fix (sessioncreate/pipeline.go:284): a plain
 // SessionTypeNewWorktree session's instanceRootDir must be re-derived AFTER
 // Start() completes worktree creation, or InjectHookConfig below writes
 // .claude/settings.local.json into the stale, pre-Start() root (the bare
@@ -599,7 +599,7 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 
 	require.Equal(t, domain.Failed, domain.Status(instanceB.GetStatus()),
 		"session B must fail, not silently spawn into session A's already-occupied directory")
-	// "DirectoryCollision" is session_creation_pipeline.go's classification for
+	// "DirectoryCollision" is sessioncreate/pipeline.go's classification for
 	// errors.Is(startErr, session.ErrDirectoryCollision) (its only source) --
 	// asserting on it here is the integration-level proof that Start()'s
 	// error actually wrapped that sentinel and was correctly classified by

@@ -23,7 +23,7 @@ const diagnoseRestrictedRemediation = declineToDiagnoseRemediation
 
 // denyIfDiagnoseCaller is the real, server-side enforcement behind AllowedTools'
 // best-effort client-side restriction on a dispatched Diagnose & Nudge
-// session (see server/services/session_service.go's diagnosticSessionAllowedTools
+// session (see server/services/sessioncreate/spawn.go's DiagnosticSessionAllowedTools
 // doc comment for why AllowedTools alone isn't sufficient). It rejects
 // toolName for any caller positively identified as a diagnose-role session —
 // diagnose_nudge_session is that role's one legitimate write path and is

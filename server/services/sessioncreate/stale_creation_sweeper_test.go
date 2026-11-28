@@ -130,7 +130,7 @@ func TestStaleCreationSweeper_should_LeaveInstanceUntouched_When_BelowThreshold(
 // TestStaleCreationSweeper_should_FlipReloadedInstance_When_OrphanedAcrossRestart
 // is Task 4.1.2d's server-restart orphan case: it drives the REAL pipeline
 // persistence path (Instance.SetCreationProgress + storage.UpdateInstance, the
-// same call session_creation_pipeline.go's setPhase closure makes for every phase
+// same call sessioncreate/pipeline.go's setPhase closure makes for every phase
 // before the worktree/tmux phase) rather than hand-setting
 // CreationProgressUpdatedAt on a fixture -- see the anti-pattern warning on this
 // task and on backdateCreationProgress's doc comment for why only the clock is
@@ -143,7 +143,7 @@ func TestStaleCreationSweeper_should_FlipReloadedInstance_When_OrphanedAcrossRes
 	inst := addCreatingSession(t, storage, "sweeper-restart-orphan", "uuid-sweeper-restart-orphan")
 
 	// Real phase-transition persistence call (mirrors setPhase in
-	// session_creation_pipeline.go for a phase before worktree/tmux setup).
+	// sessioncreate/pipeline.go for a phase before worktree/tmux setup).
 	inst.SetCreationProgress("Cloning repository...")
 	require.NoError(t, storage.UpdateInstance(inst))
 	require.False(t, inst.CreationProgressUpdatedAt().IsZero(),

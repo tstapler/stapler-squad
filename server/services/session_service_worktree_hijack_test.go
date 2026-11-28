@@ -69,7 +69,7 @@ func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	// Capture creation-progress phase text (same seam
 	// TestCreateSession_should_ReachActiveViaPipeline's ModeIsRestart subtest
 	// uses): the pipeline's FailureReason is always the fixed label
-	// "StartupError" (session_creation_pipeline.go), never the underlying
+	// "StartupError" (sessioncreate/pipeline.go), never the underlying
 	// error text, so the phase hook is the only way to observe whether a
 	// Failed outcome actually names the worktree/branch conflict versus some
 	// unrelated startup failure.

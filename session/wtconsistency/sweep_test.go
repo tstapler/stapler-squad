@@ -216,7 +216,7 @@ func TestListConsistencyCandidates_should_ExcludeSession_When_SessionTypeDirecto
 // What it does exercise instead is the real concurrent I/O path a production race would
 // actually take: an actor goroutine mutating a live *Instance via SetGitHubResolution and
 // then persisting it (storage.UpdateInstance) — mirroring
-// server/services/session_creation_pipeline.go's setPhase, the only production call site of
+// server/services/sessioncreate/pipeline.go's setPhase, the only production call site of
 // SetGitHubResolution, which does exactly this sequence — running concurrently with
 // listConsistencyCandidates listing that same session's row via the same *Storage. inst is
 // registered via storage.AddInstance so both goroutines operate on one shared row, not two
@@ -228,7 +228,7 @@ func TestListConsistencyCandidates_should_ExcludeSession_When_SessionTypeDirecto
 // that listConsistencyCandidates itself would read the actor-mutated fields back out through
 // that live registry — was investigated and isn't reasonably available here: the only
 // component that keeps a live *Instance registry synced to storage is
-// server/services (session_creation_pipeline.go's setPhase, SessionManager), and that
+// server/services (sessioncreate/pipeline.go's setPhase, SessionManager), and that
 // package imports session — a test inside package session cannot import it back without an
 // import cycle. Storage.AddInstance/UpdateInstance only ever take a one-shot
 // ToInstanceData() snapshot; they hold no live *Instance reference for a later read to
@@ -1174,7 +1174,7 @@ func setupLinkedWorktreeWithBranch(t *testing.T, repoPath, sessionName, branch s
 // is a regression test for PR #625 (Story 1.4.1): a Session row persisted with
 // SessionType == SessionTypeNewWorktree, Branch == "work/b8ccca59", Status == Active, and
 // no corresponding Worktree ent row — reproducing the exact non-atomic window at
-// session_creation_pipeline.go:277-281 (the storage.UpdateInstance call that would
+// sessioncreate/pipeline.go:277-281 (the storage.UpdateInstance call that would
 // normally create the Worktree row is deliberately never made here) — while a real git
 // worktree for that branch is still present on disk.
 //
