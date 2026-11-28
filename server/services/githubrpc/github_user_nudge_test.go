@@ -1,4 +1,4 @@
-package services
+package githubrpc
 
 import (
 	"context"
@@ -16,7 +16,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/access"
-	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -449,41 +448,6 @@ func TestNudgeSessionForPR_should_MapBusyPausedUntrackedAndNoControllerToDistinc
 	}
 }
 
-// Real SessionService as PRNudger: the handler reports exactly what the shared
-// readiness gate (the one auto-steer uses) decides.
-func TestNudgeSessionForPR_should_ReturnDistinctNoControllerBusyDetailAndNotGenericBusyCopy_When_NoStatusSource(t *testing.T) {
-	fix := setupForkTestFixture(t)
-	inst := &instance.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
-	svctest.AddInstanceToPoller(fix.poller, inst)
-	writes := 0
-	fix.svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { writes++; return nil }
-	fix.svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error { return nil }
-	fix.svc.guardedSteer.guard.SetClock(newFakeNudgeClock().Now)
-
-	f := newNudgeFixture(t)
-	f.svc.SetPRNudger(fix.svc)
-
-	gates := []struct {
-		ready  notReadyReason
-		detail string
-	}{
-		{notReadyNoStatusSource, prs.NudgeNoControllerDetail},
-		{notReadyBusy, prs.NudgeBusyDetail},
-	}
-	details := make([]string, 0, len(gates))
-	for _, g := range gates {
-		g := g
-		fix.svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return g.ready }
-		resp, err := f.call("fix-ci")
-		require.NoError(t, err)
-		assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, resp.Outcome)
-		assert.Equal(t, g.detail, resp.Detail)
-		details = append(details, resp.Detail)
-	}
-	assert.NotEqual(t, details[0], details[1], "the no-controller copy must differ from generic busy")
-	assert.Zero(t, writes)
-}
-
 func TestNudgeSessionForPR_should_ReturnNothingToFixWithZeroSteers_When_FreshDetailGreenOrMergedClosedDraft(t *testing.T) {
 	green := failingLintDetail(t, "github.com", "acme", "api", 42)
 	green.FailingChecks = nil
@@ -563,33 +527,6 @@ func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSess
 
 	assert.Equal(t, 1, f.nudger.steerCount())
 	assert.Equal(t, "github.com/acme/api#42|FAILING_CHECKS", f.nudger.steers[0].sig)
-}
-
-func TestNudgeSessionForPR_should_ReturnFailedPreconditionWithZeroWrites_When_PaneOwnershipMismatch(t *testing.T) {
-	fix := setupForkTestFixture(t)
-	inst := &instance.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
-	svctest.AddInstanceToPoller(fix.poller, inst)
-	writes := 0
-	verifyErr := errors.New("pane ownership mismatch")
-	fix.svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return notReadyNone }
-	fix.svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error { return verifyErr }
-	fix.svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { writes++; return nil }
-	clk := newFakeNudgeClock()
-	fix.svc.guardedSteer.guard.SetClock(clk.Now)
-	f := newNudgeFixture(t)
-	f.svc.SetPRNudger(fix.svc)
-
-	_, err := f.call("fix-ci")
-	requireCode(t, err, connect.CodeFailedPrecondition)
-	assert.Zero(t, writes)
-
-	// Identity fixed; the failure cooldown is 10s, so a retry after it delivers once.
-	verifyErr = nil
-	clk.Advance(11 * time.Second)
-	resp, err := f.call("fix-ci")
-	require.NoError(t, err)
-	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_DELIVERED, resp.Outcome)
-	assert.Equal(t, 1, writes)
 }
 
 func TestNudgeSessionForPR_should_ReturnFailedPrecondition_When_ProgramUnsupported(t *testing.T) {

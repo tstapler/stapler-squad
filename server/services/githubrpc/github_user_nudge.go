@@ -1,4 +1,4 @@
-package services
+package githubrpc
 
 import (
 	"context"
@@ -28,8 +28,6 @@ type PRNudger interface {
 	// InstanceReadyForSteer is the idle gate SteerInstanceGuarded applies.
 	InstanceReadyForSteer(inst *instance.Instance) bool
 }
-
-var _ PRNudger = (*SessionService)(nil)
 
 // PRSnapshotSource lists the polled open PRs. Implemented by UserPRCache.
 type PRSnapshotSource interface {
@@ -79,6 +77,9 @@ func (s *GitHubUserService) SetNudgeRecorder(n access.NudgeRecorder) { s.nudge.n
 
 // SetPRDetailFetcher sets the fresh-PR-state reader.
 func (s *GitHubUserService) SetPRDetailFetcher(f githubpkg.PRDetailFetcher) { s.nudge.fetcher = f }
+
+// SetPRSnapshotSource overrides the polled-PR reader; the default is the PR cache.
+func (s *GitHubUserService) SetPRSnapshotSource(p PRSnapshotSource) { s.nudge.snapshot = p }
 
 // SetPRTokenResolver overrides token lookup; the default is the PR cache.
 func (s *GitHubUserService) SetPRTokenResolver(r prs.PRTokenResolver) { s.nudge.tokens = r }

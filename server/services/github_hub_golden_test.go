@@ -5,11 +5,17 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/server/services/githubrpc"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
@@ -21,6 +27,38 @@ import (
 )
 
 var updateGitHubHubGolden = flag.Bool("update-github-hub-golden", false, "rewrite testdata/github_hub.golden")
+
+type goldenOut struct {
+	t *testing.T
+	b strings.Builder
+}
+
+func (o *goldenOut) line(format string, args ...any) { fmt.Fprintf(&o.b, format+"\n", args...) }
+
+// record takes the message only when err is nil; pass the response's Msg through msgOf.
+func (o *goldenOut) record(step string, msg proto.Message, err error) {
+	if err != nil {
+		o.line("%s err code=%v %v", step, connect.CodeOf(err), err)
+		return
+	}
+	raw, merr := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(msg)
+	require.NoError(o.t, merr)
+	var v any
+	require.NoError(o.t, json.Unmarshal(raw, &v))
+	norm, merr := json.Marshal(v)
+	require.NoError(o.t, merr)
+	o.line("%s %s", step, norm)
+}
+
+func msgOf[T any, P interface {
+	*T
+	proto.Message
+}](r *connect.Response[T]) proto.Message {
+	if r == nil {
+		return nil
+	}
+	return P(r.Msg)
+}
 
 func TestGitHubHubGolden(t *testing.T) {
 	o := &goldenOut{t: t}
@@ -56,16 +94,17 @@ func TestGitHubHubGolden(t *testing.T) {
 
 	// Up Next's nudge through the real guard shares the duplicate window with ask-to-fix.
 	f := newAskFixFixture(t, domain.Active)
-	n := newNudgeFixture(t)
-	n.svc.SetPRNudger(f.svc)
 	key, err := github.NewPRKey("", "acme", "app", 12)
 	require.NoError(t, err)
-	n.prs.prs = []github.UserPR{linkedPR("github.com", "acme", "app", 12, "alice", github.LinkedSession{SessionID: "ask-fix"})}
-	n.prs.tokens = map[string][2]string{key.String(): {"tok", "alice"}}
-	n.fetcher.detail = f.fetcher.detail
+	userSvc := githubrpc.NewGitHubUserService(nil, nil)
+	userSvc.SetPRNudger(f.svc)
+	userSvc.SetPRDetailFetcher(&fakeFetcher{detail: f.fetcher.detail})
+	userSvc.SetPRTokenResolver(staticPRTokens{key.String(): "tok"})
+	userSvc.SetPRSnapshotSource(fixedUserPRs{{Host: "github.com", Owner: "acme", Repo: "app", Number: 12,
+		LinkedSessions: []github.LinkedSession{{SessionID: "ask-fix"}}}})
 	first, err := f.ask(protoRef(12))
 	o.record("shared/ask", first, err)
-	resp, err := n.svc.NudgeSessionForPR(context.Background(), connect.NewRequest(&sessionv1.NudgeSessionForPRRequest{
+	resp, err := userSvc.NudgeSessionForPR(context.Background(), connect.NewRequest(&sessionv1.NudgeSessionForPRRequest{
 		Pr: &sessionv1.PRKey{Owner: "acme", Repo: "app", Number: 12}, SessionId: "ask-fix"}))
 	o.record("shared/nudge", msgOf(resp), err)
 	o.line("  writes=%d", f.rec.writes)

@@ -18,6 +18,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	gh "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/githubrpc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -83,7 +84,7 @@ func TestPreviewDestinationPath_GitHubURL_EnterpriseHostViaCachedAccount_Returns
 	// added via AddGitHubAccountWithToken/AddGitHubAccountFromCLI with no OAuth App
 	// registered in config.json. AddGitHubAccountWithToken refreshes the cache itself,
 	// so cache.GetCachedAccounts() reflects this account once it returns.
-	userSvc := NewGitHubUserService(cache, nil)
+	userSvc := githubrpc.NewGitHubUserService(cache, nil)
 	_, err := userSvc.AddGitHubAccountWithToken(context.Background(),
 		connect.NewRequest(&sessionv1.AddGitHubAccountWithTokenRequest{
 			Host:  enterpriseHost,

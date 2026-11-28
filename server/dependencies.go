@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/githubrpc"
 	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/quota"
@@ -126,7 +127,7 @@ type ServerDependencies struct {
 
 	// GitHub user PR cache and service. Nil when no GitHub token is available.
 	UserPRCache       *githubpkg.UserPRCache
-	GitHubUserService *services.GitHubUserService
+	GitHubUserService *githubrpc.GitHubUserService
 
 	// Token usage analytics.
 	InsightsService *insights.InsightsService
@@ -637,7 +638,7 @@ type RuntimeDeps struct {
 
 	// GitHub user PR cache and service.
 	UserPRCache       *githubpkg.UserPRCache
-	GitHubUserService *services.GitHubUserService
+	GitHubUserService *githubrpc.GitHubUserService
 
 	// Token usage analytics.
 	InsightsService *insights.InsightsService

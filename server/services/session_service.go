@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/capacity"
 	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
 	"github.com/tstapler/stapler-squad/server/services/fileops"
+	"github.com/tstapler/stapler-squad/server/services/githubrpc"
 	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
@@ -207,7 +208,7 @@ type SessionService struct {
 	// Extracted domain services.
 	reviewQueueSvc  *ReviewQueueService
 	searchSvc       *searchrpc.SearchService
-	githubSvc       *GitHubService
+	githubSvc       *githubrpc.GitHubService
 	workspaceSvc    *WorkspaceService
 	configSvc       *claudeconfig.ConfigService
 	notificationSvc *notify.NotificationService
@@ -252,7 +253,7 @@ type SessionService struct {
 
 	// userPRCache supplies enterprise hosts from dynamically-added GitHub
 	// accounts (gh CLI import, device auth) for CreateSession's GitHub URL
-	// detection — mirrors ListGitHubAccounts' host union in github_user_service.go.
+	// detection — mirrors ListGitHubAccounts' host union in githubrpc/github_user_service.go.
 	userPRCache *githubpkg.UserPRCache
 
 	// fileSvc handles file tree browsing RPCs (ListFiles, GetFileContent).
@@ -1007,7 +1008,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		eventBus:                    eventBus,
 		reviewQueueSvc:              reviewQueueSvc,
 		searchSvc:                   searchrpc.NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
-		githubSvc:                   NewGitHubService(concStorage),
+		githubSvc:                   githubrpc.NewGitHubService(concStorage),
 		workspaceSvc:                workspaceSvc,
 		configSvc:                   claudeconfig.NewConfigService(),
 		notificationSvc:             notificationSvc,

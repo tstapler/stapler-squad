@@ -29,7 +29,7 @@ var pinnedCallers = map[string]callerRow{
 	"server/services:BacklogSteerWriter.Steer":                              {kind: kindChain, reason: "the O7 typed writer; only obtainable with a BacklogReviewLink"},
 	"server/services/autonomysvc:defaultStallNudger.NudgeStalledSession":    {kind: kindChain, reason: "adapter over session.NudgeStalledAutonomousSession; reached only from the work-stall plan, behind diagnose_nudge_enabled AND autonomous_stall_nudge_enabled"},
 	"server/services:SessionService.askFixDeliver":                          {kind: kindChain, reason: "AskSessionToFixPullRequest delivery through SteerInstanceGuarded; refuses a hidden target in askFixTarget"},
-	"server/services:GitHubUserService.deliver":                             {kind: kindChain, reason: "NudgeSessionForPR delivery through SteerInstanceGuarded; refuses a hidden target in resolveSession"},
+	"server/services/githubrpc:GitHubUserService.deliver":                   {kind: kindChain, reason: "NudgeSessionForPR delivery through SteerInstanceGuarded; refuses a hidden target in resolveSession"},
 	"server/services/capacity:NewCapacityMonitor.func1":                     {kind: kindAcquirer, reason: "default compactor: takes the lease once for the /compact write"},
 	"server/services:SessionService.SteerActiveSession":                     {kind: kindChain, reason: "internal steer of a live session by UUID; callers are the pinned backlog steers"},
 	"server/services:SessionService.SteerInstanceGuarded":                   {kind: kindChain, reason: "guarded steer behind the nudge guard; writes through steerInternal"},

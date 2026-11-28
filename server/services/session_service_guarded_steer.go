@@ -6,8 +6,11 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/githubrpc"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
+
+var _ githubrpc.PRNudger = (*SessionService)(nil)
 
 // notReadyReason says why an instance cannot take an unattended PTY write.
 type notReadyReason int
@@ -54,7 +57,7 @@ func (s *SessionService) instanceReadyForSteer(inst *instance.Instance) notReady
 	return notReadyNone
 }
 
-// InstanceReadyForSteer implements PRNudger: true only when the shared idle
+// InstanceReadyForSteer implements githubrpc.PRNudger: true only when the shared idle
 // gate confirms inst is safe to write to.
 func (s *SessionService) InstanceReadyForSteer(inst *instance.Instance) bool {
 	return s.instanceReadyForSteer(inst) == notReadyNone

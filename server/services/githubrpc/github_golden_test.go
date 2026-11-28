@@ -1,4 +1,4 @@
-package services
+package githubrpc
 
 // Differential golden for the GitHub PR RPCs, the user-PR panel and the Up Next
 // nudge, recorded from origin/main before the move.
