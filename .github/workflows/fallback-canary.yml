@@ -1,8 +1,9 @@
 name: Fallback canary
 
 # PROVISIONAL (Bazel conversion Story 8.5). Exercises the `make` path with no Bazel on the runner so the
-# escape hatch cannot rot. `make-only` never installs Bazel and asserts it is absent; the post-flip
-# `pass-set-equality` job is the only one with Bazel. Action pins are SHAs (version in the trailing comment).
+# escape hatch cannot rot. `make-only` (`make ready`) and `make-e2e` (`make build` plus an e2e shard) never install
+# Bazel and assert it is absent; the post-flip `pass-set-equality` job is the only one with Bazel. They are separate,
+# parallel jobs because run back to back they outgrew 120 min. Action pins are SHAs (version in the trailing comment).
 on:
   schedule:
     - cron: '17 5 * * 1'  # weekly, Monday 05:17 UTC
@@ -65,7 +66,7 @@ jobs:
           curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" -o /usr/local/bin/buf
           chmod +x /usr/local/bin/buf
 
-      # make build compiles the embedded tmux itself (scripts/build-tmux.sh); same deps as .github/actions/build-tmux.
+      # make ci builds bin/tmux from the submodule (scripts/build-tmux.sh); same deps as .github/actions/build-tmux.
       - name: Install tmux build dependencies
         run: |
           sudo apt-get update
@@ -115,6 +116,51 @@ jobs:
             ${{ runner.temp }}/make-ready.log
           if-no-files-found: ignore
 
+  # A fresh checkout, so `make build` is proven from clean rather than on top of `make ready`'s outputs.
+  make-e2e:
+    runs-on: ubuntu-24.04  # same Playwright pin as make-only
+    # Measured steps: make build ~4 min, shard 25-31 min (capped at 40m below), checkout and setup ~5 min.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      # The make path must not silently depend on Bazel.
+      - name: Assert no Bazel on PATH
+        run: |
+          # The ubuntu-latest image ships bazelisk; remove it so the job proves make works without it.
+          for b in bazel bazelisk; do
+            while p=$(command -v "$b" 2>/dev/null); do sudo rm -f "$p" || break; hash -r; done
+          done
+          if command -v bazel >/dev/null 2>&1 || command -v bazelisk >/dev/null 2>&1; then
+            echo "::error::bazel or bazelisk is installed on this runner; the make-e2e job must run without it"
+            exit 1
+          fi
+
+      # No cache: this job would share make-only's cache key and, finishing first, save a build-only cache over
+      # the one with the test builds.
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install buf
+        run: |
+          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" -o /usr/local/bin/buf
+          chmod +x /usr/local/bin/buf
+
+      # The e2e server and some specs commit in scratch repos.
+      - name: Configure git identity
+        run: |
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.invalid"
+
       - name: make build
         run: |
           make build
@@ -147,10 +193,10 @@ jobs:
           test -s shard-report.json
 
   # Pre-mortem #3: after the Story 8.6 flip the make path's pass set must equal Bazel's. A separate runner so
-  # `make-only` stays Bazel-free. Enabled by the repository variable BAZEL_FLIPPED=true, which the flip PR
+  # the make jobs stay Bazel-free. Enabled by the repository variable BAZEL_FLIPPED=true, which the flip PR
   # sets (owner-attestations.yaml records the sign-off).
   pass-set-equality:
-    needs: make-only
+    needs: [make-only, make-e2e]
     if: ${{ vars.BAZEL_FLIPPED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -176,10 +222,11 @@ jobs:
           BAZEL_REAL="$RUNNER_TEMP/bin/bazelisk" bash tools/bzl/parity/test-set-diff.sh default | tee test-set-diff.txt
           grep -c 'missing_in_bazel: 0' test-set-diff.txt
 
-  # A scheduled failure opens (once) an issue labelled build-fallback.
+  # A scheduled failure opens (once) an issue labelled build-fallback. A job that hits timeout-minutes ends
+  # `cancelled`, not `failure`, so both count.
   report:
-    needs: [make-only, pass-set-equality]
-    if: ${{ always() && github.event_name == 'schedule' && (needs.make-only.result == 'failure' || needs.pass-set-equality.result == 'failure') }}
+    needs: [make-only, make-e2e, pass-set-equality]
+    if: ${{ always() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
