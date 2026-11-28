@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/itemsessions"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
@@ -219,7 +220,7 @@ func (s *BacklogService) TriggerReReview(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list item sessions: %w", err))
 	}
 
-	mostRecentReviewSession, mostRecentWorkSession := services.FindMostRecentSessions(sessions)
+	mostRecentReviewSession, mostRecentWorkSession := itemsessions.FindMostRecentSessions(sessions)
 
 	// 5. Note: We don't need to delete the old verdict; a new one will overwrite it when the re-review
 	// session submits its findings via the MCP tool.
@@ -634,7 +635,7 @@ Do not modify the code. Only write the review verdict.
 	// (ce71ad1a) -- a stale pane under this exact title belonging to an unrelated
 	// item is refused, not silently killed.
 	if s.sessionStopper != nil {
-		if err := s.sessionStopper.KillTmuxSessionByTitle(ctx, title, services.NonEmptySessionUUIDs(sessions)...); errors.Is(err, services.ErrTmuxKillRefused) {
+		if err := s.sessionStopper.KillTmuxSessionByTitle(ctx, title, itemsessions.NonEmptySessionUUIDs(sessions)...); errors.Is(err, services.ErrTmuxKillRefused) {
 			log.Warn("re-review: stale tmux session not owned by this item, leaving it", "title", title, "err", err)
 		}
 	}

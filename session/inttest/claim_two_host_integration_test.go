@@ -16,8 +16,8 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/claimcheck"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -52,7 +52,7 @@ func newTwoHostNode(t *testing.T, name string, withGossip bool) *twoHostNode {
 	storage.SetClaimRecorder(recorder)
 
 	backlog := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
-	checker := services.NewLocalClaimChecker(node.index, node.identity.ID, node.registry).SignLookupsWith(node.identity)
+	checker := claimcheck.NewLocalClaimChecker(node.index, node.identity.ID, node.registry).SignLookupsWith(node.identity)
 	backlog.SetClaimChecker(checker, checker)
 	return &twoHostNode{claimNode: node, storage: storage, backlog: backlog}
 }

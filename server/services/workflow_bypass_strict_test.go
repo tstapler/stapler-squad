@@ -211,7 +211,7 @@ func clsRegistryConstants(t *testing.T, root string) map[string]string {
 // clsDynamicCallers are the functions whose Caller is computed. Each is bounded
 // by a test below that proves every value it can return is registered.
 var clsDynamicCallers = map[string]string{
-	"server/services/backlogsvc/backlog_service_lifecycle.go BacklogService.TransitionBacklogItemStatus": "resolveTransitionCaller(ctx), bounded by TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers",
+	"server/services/backlogsvc/backlog_service_lifecycle.go BacklogService.TransitionBacklogItemStatus": "domain.ResolveTransitionCaller(ctx), bounded by TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers",
 	"server/services/backlogsvc/backlog_service_triage.go BacklogService.TransitionWithGuard":            "guardedTransitionCaller(to, actor), bounded by TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers",
 	"session/backlog_remediation.go Storage.redriveOne":                                                  "the recorded denial's caller, re-checked by LookupTransitionCaller in transitionStillDenied and limited to redriveByWrite",
 	"session/workflowengine/workflow_engine_replay.go replayAnswer":                                      "a decision only (no write): spec.Name comes from iterating the registry",
@@ -276,10 +276,10 @@ func Dynamic(c string)  { _ = TransitionRequest{Caller: pick(c)} }
 func TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers(t *testing.T) {
 	for _, actor := range []string{instance.TriggeredByUser, instance.TriggeredByAgent, instance.TriggeredBySystem, "robot", ""} {
 		ctx := domain.WithTransitionActor(t.Context(), actor)
-		_, ok := domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
+		_, ok := domain.LookupTransitionCaller(domain.ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q", actor)
 		ctx = domain.WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
-		_, ok = domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
+		_, ok = domain.LookupTransitionCaller(domain.ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q with the notification caller", actor)
 	}
 }
@@ -319,7 +319,7 @@ func clsCallerRefs(t *testing.T, root string, consts map[string]string) map[stri
 // request, so a constant they mention is reachable (bounded by the tests above).
 var clsDynamicProducerKeys = []string{
 	"server/services/backlogsvc/backlog_service_triage.go guardedTransitionCaller",
-	"server/services/backlog_ports.go ResolveTransitionCaller",
+	"session/domain/transition_actor.go ResolveTransitionCaller",
 }
 
 // clsUnusedCallers returns the non-forwarding registry entries with no call path:

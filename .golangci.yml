@@ -779,6 +779,52 @@ linters:
             - github.com/tstapler/stapler-squad/session/instance$
             - github.com/tstapler/stapler-squad/session/stagecfg
             - github.com/tstapler/stapler-squad/session/workflowengine
+        # backgroundmodels serves the background model RPCs; it never imports the services hub.
+        isolate_backgroundmodels:
+          list-mode: strict
+          files:
+            - "**/services/backgroundmodels/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+        # claimcheck is the cross-host claim checker and its flag gate; it never imports the services hub.
+        isolate_claimcheck:
+          list-mode: strict
+          files:
+            - "**/services/claimcheck/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/featureflags
+            - github.com/tstapler/stapler-squad/server/services/federation$
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/hostclaim
+        # itemsessions picks among a backlog item's sessions; it never imports the services hub.
+        isolate_itemsessions:
+          list-mode: strict
+          files:
+            - "**/services/itemsessions/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain/backlogdto
+            - github.com/tstapler/stapler-squad/session/instance$
+        # sessionports holds the session-control ports; it never imports the services hub.
+        isolate_sessionports:
+          list-mode: strict
+          files:
+            - "**/services/sessionports/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/server/services/access$
+            - github.com/tstapler/stapler-squad/session/instance$
         isolate_reviewqueuerpc:
           list-mode: strict
           files:

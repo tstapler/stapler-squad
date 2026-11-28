@@ -30,3 +30,25 @@ func TransitionCallerFrom(ctx context.Context) TransitionCaller {
 	c, _ := ctx.Value(transitionCallerKey{}).(TransitionCaller)
 	return c
 }
+
+// ResolveTransitionCaller maps the request's actor to its registered caller:
+// the user actor is an operator; the agent actor, and any unknown value, is the
+// MCP delegate (class agent), so an unknown actor never gains the operator
+// override. Both context keys are unexported, so only in-process code sets them.
+func ResolveTransitionCaller(ctx context.Context) TransitionCaller {
+	if TransitionActorFromContext(ctx) != TriggeredByUser {
+		return CallerMCPTransitionDelegate
+	}
+	if c := TransitionCallerFrom(ctx); c == CallerOperatorNotificationAction {
+		return c
+	}
+	return CallerOperatorTransitionRPC
+}
+
+// TransitionActorFromContext is TransitionActorFrom with the user actor as the default.
+func TransitionActorFromContext(ctx context.Context) string {
+	if a := TransitionActorFrom(ctx); a != "" {
+		return a
+	}
+	return TriggeredByUser
+}

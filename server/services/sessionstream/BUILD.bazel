@@ -51,16 +51,21 @@ go_test(
     srcs = [
         "context_lines_test.go",
         "deploy_id_test.go",
+        "diff_test.go",
         "event_converter_test.go",
         "stream_terminal_test.go",
         "terminal_service_test.go",
         "testmain_test.go",
+        "watch_test.go",
     ],
     embed = [":sessionstream"],
     deps = [
+        "//executor/safeexec",
         "//pkg/events",
         "//proto/session/v1:sessionv1_go",
+        "//proto/session/v1:sessionv1connect_go",
         "//server/events",
+        "//server/services/federation",
         "//server/services/internal/svctest",
         "//session/domain",
         "//session/instance",
@@ -69,6 +74,9 @@ go_test(
         "@com_connectrpc_connect//:connect",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
     ],
 )
 

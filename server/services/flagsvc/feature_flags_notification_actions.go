@@ -97,6 +97,12 @@ func (r FlagReader) Enabled(cfg *config.Config, name string) bool {
 	return r.registry().Enabled(cfg, name)
 }
 
+// SddDefaultPipelineEnabled reads the flag with its registered default, so an
+// unset flag resolves the same way the Features page reports it.
+func SddDefaultPipelineEnabled(reg *featureflags.Registry) bool {
+	return FlagReader{Reg: reg}.Enabled(config.LoadConfig(), featureflags.SddDefaultPipelineFlagName)
+}
+
 // liveFlag is a flag's live global value. The zero value is OFF (fail closed).
 type liveFlag struct{ on atomic.Bool }
 

@@ -29,12 +29,12 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/sessionports"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -84,13 +84,13 @@ type BacklogService struct {
 	cleanup        *cleanupWiring
 	sourceBackend  itemSourceBackend
 	sessionCreator SessionCreator
-	sessionStopper services.SessionStopper
-	sessionSteerer services.SessionSteerer
+	sessionStopper sessionports.SessionStopper
+	sessionSteerer sessionports.SessionSteerer
 	// verdictSteer* override the verdict-delivery readiness poll (zero = defaults); tests only.
 	verdictSteerPollInterval, verdictSteerReadyTimeout time.Duration
 	// verdictSteerLatest maps itemID -> latest verdict key (see dispatchVerdictSteer).
 	verdictSteerLatest sync.Map
-	autonomousStarter  services.AutonomousDriverStarter
+	autonomousStarter  sessionports.AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
 	// SetRepoWatchRemover.
@@ -700,14 +700,14 @@ func (s *BacklogService) SetStaleWorkInspector(i autonomysvc.StaleWorkInspector)
 }
 
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
-func (s *BacklogService) SetSessionStopper(stopper services.SessionStopper) {
+func (s *BacklogService) SetSessionStopper(stopper sessionports.SessionStopper) {
 	s.sessionStopper = stopper
 }
 
 // SetSessionSteerer wires the optional session steerer used to inject a
 // PR-fix problem description into an already-active session instead of
 // skipping the respawn outright.
-func (s *BacklogService) SetSessionSteerer(steerer services.SessionSteerer) {
+func (s *BacklogService) SetSessionSteerer(steerer sessionports.SessionSteerer) {
 	s.sessionSteerer = steerer
 }
 
@@ -717,7 +717,7 @@ func (s *BacklogService) SetSessionSteerer(steerer services.SessionSteerer) {
 // field directly — mirrors SessionService.GetBacklogLifecycleListener's
 // wiring-test-support role (pre-mortem.md P2 #5: this is the first such
 // getter for this pattern on BacklogService).
-func (s *BacklogService) GetSessionSteerer() services.SessionSteerer {
+func (s *BacklogService) GetSessionSteerer() sessionports.SessionSteerer {
 	return s.sessionSteerer
 }
 
@@ -725,7 +725,7 @@ func (s *BacklogService) GetSessionSteerer() services.SessionSteerer {
 // alongside GetSessionSteerer since SetSessionStopper had the identical
 // untested-wiring gap (pre-mortem.md P2 #5) — fixing both costs one extra
 // assertion in the same test, not a second test file.
-func (s *BacklogService) GetSessionStopper() services.SessionStopper {
+func (s *BacklogService) GetSessionStopper() sessionports.SessionStopper {
 	return s.sessionStopper
 }
 
@@ -743,7 +743,7 @@ func (s *BacklogService) SetRepoWatchRemover(remover RepoWatchRemover) {
 
 // SetAutonomousDriverStarter wires the optional autonomous driver starter.
 // When set, SpawnSessionFromItem with autonomous=true will start an AutonomousDriver on the spawned instance.
-func (s *BacklogService) SetAutonomousDriverStarter(starter services.AutonomousDriverStarter) {
+func (s *BacklogService) SetAutonomousDriverStarter(starter sessionports.AutonomousDriverStarter) {
 	s.autonomousStarter = starter
 }
 

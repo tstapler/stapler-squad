@@ -1,4 +1,5 @@
-package services
+// Package backgroundmodels serves the background model and effort override RPCs.
+package backgroundmodels
 
 import (
 	"context"
@@ -13,13 +14,15 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
+// Service is stateless: both RPCs read and write the on-disk config on every call.
+type Service struct{}
+
 func backgroundModelsToProto(c config.BackgroundModelsConfig) *sessionv1.BackgroundModelsProto {
 	return &sessionv1.BackgroundModelsProto{Features: c.Features, Stages: c.Stages, Effort: c.Effort}
 }
 
 // GetBackgroundModels returns the model/effort overrides plus the built-in defaults.
-// +api: background-models:get
-func (s *SessionService) GetBackgroundModels(
+func (Service) GetBackgroundModels(
 	_ context.Context,
 	_ *connect.Request[sessionv1.GetBackgroundModelsRequest],
 ) (*connect.Response[sessionv1.GetBackgroundModelsResponse], error) {
@@ -76,8 +79,7 @@ func cleanModelOverrides(kind string, in map[string]string, allowed []string) (m
 
 // UpdateBackgroundModels validates and persists the overrides; reads are live, so the
 // next headless call or work spawn uses them without a restart.
-// +api: background-models:update
-func (s *SessionService) UpdateBackgroundModels(
+func (Service) UpdateBackgroundModels(
 	_ context.Context,
 	req *connect.Request[sessionv1.UpdateBackgroundModelsRequest],
 ) (*connect.Response[sessionv1.UpdateBackgroundModelsResponse], error) {
