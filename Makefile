@@ -1326,7 +1326,7 @@ pre-commit: format vet test test-race lint vet-architecture ## Pre-commit valida
 # Hard-coded on purpose; the recipe fails when a listed file is missing (a move out of server/services must update this list).
 ACTOR_FIELD_GUARD_FILES := \
 	server/services/session_service.go \
-	server/services/workflow_service.go \
+	server/services/workflowrpc/workflow_service.go \
 	session/prpoller/pr_status_poller.go \
 	session/review_queue_poller.go \
 	session/autonomous/autonomous_driver.go \

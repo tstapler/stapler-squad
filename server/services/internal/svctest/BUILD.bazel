@@ -21,6 +21,7 @@ go_library(
         "create_pull_request.go",
         "driver_leak.go",
         "git_fixture.go",
+        "golden.go",
         "hermetic_lookup.go",
         "home_env_test_helper.go",
         "insights_service.go",
@@ -77,6 +78,8 @@ go_library(
         "@com_github_go_git_go_git_v5//plumbing/object",
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
     ] + select({
         "@rules_go//go/platform:aix": [
             "//testutil/tmuxreap",

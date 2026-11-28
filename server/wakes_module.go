@@ -10,9 +10,9 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/wakerpc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -154,7 +154,7 @@ func wakeDispatcherEnabled(cfg *config.Config) bool {
 
 // startWakes wires the wake dispatcher's lifecycle to the flag matrix and
 // starts it when the flag is on. A non-leader process leaves it stopped.
-func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService, triggers *services.WakeTriggerService) {
+func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService, triggers *wakerpc.WakeTriggerService) {
 	if deps.Storage == nil || deps.SessionService == nil {
 		return
 	}
@@ -176,7 +176,7 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guid
 
 // buildAndStartWakes builds a dispatcher over the server dependencies and
 // starts it, returning how to stop and reconcile it.
-func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService, triggers *services.WakeTriggerService) (func(), func(context.Context), error) {
+func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService, triggers *wakerpc.WakeTriggerService) (func(), func(context.Context), error) {
 	cfg := config.LoadConfig()
 	var leader wakes.LeaderGuard = wakes.NoLeader{}
 	if dir, err := config.GetConfigDir(); err == nil {

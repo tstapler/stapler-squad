@@ -1,4 +1,4 @@
-package services
+package reviewqueuerpc
 
 import (
 	"context"

@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/triggerlimit"
+	"github.com/tstapler/stapler-squad/server/services/workflowrpc"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -163,7 +164,7 @@ func buildWorkflows(svc *ServiceDeps, cfg *config.Config, backlogSvc *backlogsvc
 		} else {
 			log.Warn("failed to resolve config dir, skipping model family override, using defaults", "err", cfgErr)
 		}
-		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
+		workflowSvc := workflowrpc.NewWorkflowService(workflowRepo, workflowScheduler, storage)
 		workflowSvc.SetEventBus(eventBus)
 		if attDir, attErr := cfg.WorkflowAttachmentDirOrDefault(); attErr != nil {
 			log.Warn("cannot resolve workflow attachment dir; workflow run attachments disabled", "err", attErr)

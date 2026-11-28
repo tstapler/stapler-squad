@@ -1,0 +1,13 @@
+nil <nil>
+full {"claudeConvUuid":"u","gitCommitSha":"sha","id":"id","label":"l","parentId":"p","scrollbackPath":"sp","scrollbackSeq":"7","sessionId":"s","timestamp":"2026-03-04T05:06:07Z"}
+list empty-id ->  invalid_argument: session_id is required
+list unwired ->  not_found: session not found: golden-cp
+clear empty-id ->  invalid_argument: id is required
+clear unwired ->  not_found: session not found: golden-cp
+clear loader-error ->  internal: failed to load instances: boom
+clear loader -> {"message":"Conversation state cleared for session 'golden-cp'","success":true} ok
+list poller -> {"checkpoints":[{"id":"cp-1","label":"baseline","timestamp":"2026-03-04T05:06:07Z"}]} ok
+clear poller -> {"message":"Conversation state cleared for session 'golden-cp'","success":true} ok
+create "" "" -> invalid_argument: session_id is required
+create "golden-cp" "" -> invalid_argument: label is required
+create "nope" "l" -> not_found: session not found: nope

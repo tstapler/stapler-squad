@@ -140,3 +140,7 @@ server/services/pathcomplete !server/web
 server/services/githubrpc !server/web
 server/services/artifactrpc !server/web
 server/services/vcsstatus !server/web
+server/services/wakerpc !server/web
+server/services/checkpointrpc !server/web
+server/services/reviewqueuerpc !server/web
+server/services/workflowrpc !server/web

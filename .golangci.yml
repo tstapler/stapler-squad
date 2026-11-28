@@ -754,6 +754,82 @@ linters:
             - github.com/tstapler/stapler-squad/session/headless
             - github.com/tstapler/stapler-squad/session/instance$
             - github.com/tstapler/stapler-squad/session/nudgeoutcomes
+        # server/services/workflowrpc, reviewqueuerpc, checkpointrpc and wakerpc are RPC handlers the hub
+        # or server builds; none imports the services hub or each other.
+        isolate_workflowrpc:
+          list-mode: strict
+          files:
+            - "**/services/workflowrpc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/server/services/fsops$
+            - github.com/tstapler/stapler-squad/server/services/internal/streammetrics
+            - github.com/tstapler/stapler-squad/server/workflows
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/stagecfg
+            - github.com/tstapler/stapler-squad/session/workflowengine
+        isolate_reviewqueuerpc:
+          list-mode: strict
+          files:
+            - "**/services/reviewqueuerpc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/adapters
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/server/services/approvalkit
+            - github.com/tstapler/stapler-squad/server/services/internal/streammetrics
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/detection
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/queue
+        isolate_checkpointrpc:
+          list-mode: strict
+          files:
+            - "**/services/checkpointrpc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/events
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/external
+            - github.com/tstapler/stapler-squad/session/instance$
+        isolate_wakerpc:
+          list-mode: strict
+          files:
+            - "**/services/wakerpc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/guidance$
+            - github.com/tstapler/stapler-squad/server/services/questionkit
+            - github.com/tstapler/stapler-squad/server/wakes
+            - github.com/tstapler/stapler-squad/session/domain
         # server/services/sessiondefaults, claudeconfig and workspacedb serve the configuration RPCs;
         # none imports the services hub (the hub builds them).
         isolate_sessiondefaults:
@@ -1112,8 +1188,9 @@ linters:
             - "!**/server/services/error_registry_test.go"
             - "!**/server/services/escapecode/analytics_escape_service.go"
             - "!**/server/services/escapecode/analytics_escape_service_test.go"
-            - "!**/server/services/workflow_service_test.go"
-            - "!**/server/services/workflow_service.go"
+            - "!**/server/services/workflowrpc/workflow_golden_test.go"
+            - "!**/server/services/workflowrpc/workflow_service_test.go"
+            - "!**/server/services/workflowrpc/workflow_service.go"
             - "!**/server/services/backlogsvc/backlog_service_query.go"
             - "!**/server/services/backlogsvc/backlog_service_lifecycle.go"
             - "!**/server/services/backlogsvc/backlog_service_triage.go"

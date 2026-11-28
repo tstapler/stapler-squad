@@ -5,11 +5,11 @@
   "method": "ListPeerHelpRequests",
   "protoFile": "proto/session/v1/wake_trigger.proto",
   "markerFound": true,
-  "handlerFile": "server/services/wake_trigger_peer_help.go",
+  "handlerFile": "server/services/wakerpc/wake_trigger_peer_help.go",
   "tested": true,
   "testIds": [
     "TestWakeTriggerService_ListPeerHelpRequests_should_DeriveWaitingAnsweredAndOnBehalfOf",
     "TestWakeTriggerService_ListPeerHelpRequests_should_ShowNotSentPlainReason_And_StalledForAStoppedPeer"
   ],
-  "lastModified": "2026-10-19T04:10:44.741910841-07:00"
+  "lastModified": "2026-11-27T10:34:02.108482757-08:00"
 }

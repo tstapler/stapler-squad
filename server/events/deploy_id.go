@@ -1,4 +1,4 @@
-package services
+package events
 
 import "github.com/google/uuid"
 

@@ -10,7 +10,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/checkpointrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/reviewqueuerpc"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -444,11 +446,11 @@ func wireSessionServiceRuntime(sessionService *services.SessionService, reactive
 
 	w3 := warren.NewWire("RuntimeDeps.SessionService")
 	// ReactiveQueueManager is an exported interface; cast to infer correct type param.
-	warren.Set(w3, "ReactiveQueueManager", sessionService.SetReactiveQueueManager, services.ReactiveQueueManager(reactiveQueueMgr))
+	warren.Set(w3, "ReactiveQueueManager", sessionService.SetReactiveQueueManager, reviewqueuerpc.ReactiveQueueManager(reactiveQueueMgr))
 	warren.Set(w3, "HistoryLinker", sessionService.SetHistoryLinker, historyLinker)
 	// SetInstances accepts a slice (non-comparable) so use SetAlways.
 	warren.SetAlways(w3, "HistoryLinker.Instances", historyLinker.SetInstances, instances)
-	warren.Set(w3, "ScrollbackManager", sessionService.SetScrollbackManager, services.ScrollbackSequencer(scrollbackManager))
+	warren.Set(w3, "ScrollbackManager", sessionService.SetScrollbackManager, checkpointrpc.ScrollbackSequencer(scrollbackManager))
 	warren.Set(w3, "ExternalDiscovery", sessionService.SetExternalDiscovery, externalDiscovery)
 	// UnfinishedWorkService is optional — nil when config directory is unavailable.
 	// Do not add to Warren Wire; nil is a valid production value documented on RuntimeDeps.

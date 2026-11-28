@@ -34,7 +34,7 @@ func sanitizeRenderedTriggerPrompt(s string) string {
 }
 
 // ValidatePromptTemplate parses tmplStr without executing it — used at Workflow
-// save-time (server/services/workflow_service.go's CreateWorkflow/UpdateWorkflow) to
+// save-time (server/services/workflowrpc/workflow_service.go's CreateWorkflow/UpdateWorkflow) to
 // catch an operator's template typo before it can ever reach a fire attempt, rather
 // than surfacing only as a runtime fired_failed TriggerFireEvent. Uses the same
 // zero-value FuncMap RenderTriggerPrompt does, so a template referencing a disallowed
