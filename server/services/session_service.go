@@ -214,6 +214,7 @@ type SessionService struct {
 	notificationSvc *notify.NotificationService
 	approvalSvc     *approvals.ApprovalService
 	utilitySvc      *UtilityService
+	windowFocusSvc  *WindowFocusService
 	rulesSvc        *rules.RulesService
 	// taggingRulesSvc is exposed over ListTaggingRules/UpsertTaggingRule/DeleteTaggingRule
 	// (Phase 5 of the session-classifier-pipeline project). nil-safe: those RPC handlers
@@ -849,7 +850,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	approvalSvc := approvals.NewApprovalService(approvalStore)
 	approvalSvc.SetEventBus(eventBus)
 	approvalSvc.SetReviewQueueRemover(reviewQueue)
-	utilitySvc := NewUtilityService(approvalStore)
+	utilitySvc := NewUtilityService(approvalStore, ServerStartTime)
 
 	// Build rules store, analytics store, and classifier for approval rules service.
 	rulesStore, rulesErr := rules.NewRulesStore(concStorage)
@@ -1014,6 +1015,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		notificationSvc:             notificationSvc,
 		approvalSvc:                 approvalSvc,
 		utilitySvc:                  utilitySvc,
+		windowFocusSvc:              NewWindowFocusService(),
 		rulesSvc:                    rulesSvc,
 		taggingRulesSvc:             taggingRulesSvc,
 		taggingEngine:               taggingEngine,

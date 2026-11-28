@@ -11,7 +11,6 @@ import (
 	"math"
 	"os"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,7 +20,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
-	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 
@@ -229,8 +227,8 @@ func parseLogLine(line string) (parsedLogLine, bool) {
 	return parseLegacyLogLine(line)
 }
 
-// UtilityService handles miscellaneous utility RPCs: GetLogs, FocusWindow,
-// and CreateDebugSnapshot.
+// UtilityService handles the log and debug-snapshot RPCs: GetLogs and
+// CreateDebugSnapshot.
 //
 // Dependencies:
 //   - approvalStore:      needed by CreateDebugSnapshot to capture pending approvals
@@ -238,12 +236,13 @@ func parseLogLine(line string) (parsedLogLine, bool) {
 type UtilityService struct {
 	approvalStore     *approvalkit.ApprovalStore
 	reviewQueuePoller *session.ReviewQueuePoller
-	activator         WindowActivator
+	startedAt         time.Time
 }
 
 // NewUtilityService creates a UtilityService with the given dependencies.
-func NewUtilityService(approvalStore *approvalkit.ApprovalStore) *UtilityService {
-	return &UtilityService{approvalStore: approvalStore, activator: newLaunchServicesActivator()}
+// startedAt is the process start time a debug snapshot reports uptime from.
+func NewUtilityService(approvalStore *approvalkit.ApprovalStore, startedAt time.Time) *UtilityService {
+	return &UtilityService{approvalStore: approvalStore, startedAt: startedAt}
 }
 
 // SetReviewQueuePoller sets the review queue poller (late-wired).
@@ -312,83 +311,6 @@ func (us *UtilityService) GetLogs(
 	}), nil
 }
 
-// FocusWindow activates a window for the specified application.
-// Uses Launch Services (lsappinfo + open) on macOS, which raises no per-app
-// Automation (Apple Events) consent dialog.
-func (us *UtilityService) FocusWindow(
-	ctx context.Context,
-	req *connect.Request[sessionv1.FocusWindowRequest],
-) (*connect.Response[sessionv1.FocusWindowResponse], error) {
-	// Validate localhost-only origin
-	if err := validateLocalhostOriginForFocus(ctx, req); err != nil {
-		return nil, err
-	}
-
-	platform := detectPlatform()
-
-	// Need at least bundle_id or app_name
-	bundleID := ""
-	if req.Msg.BundleId != nil {
-		bundleID = *req.Msg.BundleId
-	}
-	appName := ""
-	if req.Msg.AppName != nil {
-		appName = *req.Msg.AppName
-	}
-
-	if bundleID == "" && appName == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("bundle_id or app_name is required"))
-	}
-
-	// Only macOS is supported currently
-	if platform != "darwin" {
-		return connect.NewResponse(&sessionv1.FocusWindowResponse{
-			Success:  false,
-			Message:  fmt.Sprintf("window activation not supported on platform: %s", platform),
-			Platform: platform,
-		}), nil
-	}
-
-	if isBlockedTarget(bundleID, appName) {
-		blockedTarget := bundleID
-		if blockedTarget == "" {
-			blockedTarget = appName
-		}
-		log.Info("FocusWindow skipped for non-developer app", "bundle", bundleID, "app", appName)
-		return connect.NewResponse(&sessionv1.FocusWindowResponse{
-			Success:  false,
-			Message:  fmt.Sprintf("Focus Window is not supported for %q (not a developer app)", blockedTarget),
-			Platform: platform,
-		}), nil
-	}
-
-	if err := us.activator.Activate(ctx, bundleID, appName); err != nil {
-		log.Warn("failed to activate window", "bundle", bundleID, "app", appName, "err", err)
-
-		message := fmt.Sprintf("failed to activate window: %v", err)
-		if errors.Is(err, ErrAppNotRunning) {
-			targetApp := bundleID
-			if targetApp == "" {
-				targetApp = appName
-			}
-			message = fmt.Sprintf("Application '%s' is not running", targetApp)
-		}
-
-		return connect.NewResponse(&sessionv1.FocusWindowResponse{
-			Success:  false,
-			Message:  message,
-			Platform: platform,
-		}), nil
-	}
-
-	log.Info("window activated successfully", "bundle", bundleID, "app", appName)
-	return connect.NewResponse(&sessionv1.FocusWindowResponse{
-		Success:  true,
-		Message:  "Window activated successfully",
-		Platform: platform,
-	}), nil
-}
-
 // CreateDebugSnapshot captures diagnostic information and writes a JSON file to the log directory.
 func (us *UtilityService) CreateDebugSnapshot(
 	ctx context.Context,
@@ -415,7 +337,7 @@ func (us *UtilityService) CreateDebugSnapshot(
 	}
 
 	// Collect snapshot
-	snap := CollectSnapshot(snapCtx, note, instances, us.approvalStore, int(logLines))
+	snap := CollectSnapshot(snapCtx, note, instances, us.approvalStore, int(logLines), us.startedAt)
 
 	// Get log directory for output
 	logDir, err := log.GetLogDir(log.ConfigToLogConfig(config.LoadConfig()))
@@ -459,45 +381,6 @@ func (us *UtilityService) CreateDebugSnapshot(
 // ---------------------------------------------------------------------------
 // Helper functions (shared utilities for this service)
 // ---------------------------------------------------------------------------
-
-// validateLocalhostOriginForFocus ensures FocusWindow requests come from localhost.
-func validateLocalhostOriginForFocus(ctx context.Context, req *connect.Request[sessionv1.FocusWindowRequest]) error {
-	// Check X-Real-IP header first (if behind a proxy)
-	realIP := req.Header().Get("X-Real-IP")
-	if realIP != "" {
-		if !notify.IsLocalhostIP(realIP) {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("FocusWindow can only be called from localhost"))
-		}
-		return nil
-	}
-
-	// Check X-Forwarded-For header
-	forwardedFor := req.Header().Get("X-Forwarded-For")
-	if forwardedFor != "" {
-		ips := strings.Split(forwardedFor, ",")
-		if len(ips) > 0 {
-			clientIP := strings.TrimSpace(ips[0])
-			if !notify.IsLocalhostIP(clientIP) {
-				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("FocusWindow can only be called from localhost"))
-			}
-			return nil
-		}
-	}
-
-	// Direct connection mode - server binds to localhost
-	return nil
-}
-
-// detectPlatform returns the current operating system.
-func detectPlatform() string {
-	switch osVal := os.Getenv("GOOS"); osVal {
-	case "":
-		// GOOS not set, use runtime detection
-		return runtime.GOOS
-	default:
-		return osVal
-	}
-}
 
 // parseLogsResult contains the result of parsing logs with pagination info
 type parseLogsResult struct {

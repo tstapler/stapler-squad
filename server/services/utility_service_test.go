@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,7 @@ import (
 // --------------------------------------------------------------------------
 
 func setupUtilityService() *UtilityService {
-	return NewUtilityService(approvalkit.NewApprovalStore(""))
+	return NewUtilityService(approvalkit.NewApprovalStore(""), time.Now())
 }
 
 func setupUtilityServiceWithPollerFixture() (*UtilityService, *session.ReviewQueuePoller) {
@@ -413,4 +414,27 @@ func TestParseLogs_should_FilterBySession_When_SessionIdSet(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.Entries, 1)
 	assert.Equal(t, "line for session A", result.Entries[0].Message)
+}
+
+// TestGetLogs_EmptySessionID verifies that GetLogs with an empty session_id
+// pointer (nil) returns a valid (possibly empty) response for the global log.
+// This exercises the "no session ID" code path in UtilityService.GetLogs.
+func TestGetLogs_EmptySessionID(t *testing.T) {
+	t.Parallel()
+	svc := setupUtilityService()
+
+	// Passing a nil session_id — exercises the global log path.
+	resp, err := svc.GetLogs(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetLogsRequest{}),
+	)
+
+	// Either succeeds (empty log) or errors; must not panic.
+	if err != nil {
+		var connectErr *connect.Error
+		require.ErrorAs(t, err, &connectErr)
+		assert.NotEqual(t, connect.CodeNotFound, connectErr.Code())
+	} else {
+		require.NotNil(t, resp)
+	}
 }

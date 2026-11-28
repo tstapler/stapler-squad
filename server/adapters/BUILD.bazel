@@ -8,6 +8,7 @@ go_library(
         "instance_adapter.go",
         "review_queue_adapter.go",
         "session_pull_requests.go",
+        "stuck_reason.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/server/adapters",
     visibility = ["//visibility:public"],
@@ -41,6 +42,7 @@ go_test(
         "main_test.go",
         "review_queue_adapter_test.go",
         "session_pull_requests_test.go",
+        "stuck_reason_test.go",
     ],
     embed = [":adapters"],
     deps = [

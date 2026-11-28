@@ -14,7 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbobs"
@@ -63,7 +63,7 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 			t.Parallel()
 			assert.Equal(t, c.want, toProtoStuckReason(c.reason))
 			// Round-trip: the inverse mapping must recover the same domain reason.
-			assert.Equal(t, c.reason, services.FromProtoStuckReason(c.want))
+			assert.Equal(t, c.reason, adapters.FromProtoStuckReason(c.want))
 		})
 	}
 }

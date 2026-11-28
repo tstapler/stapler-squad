@@ -162,7 +162,7 @@ func TestFocusWindow_BlockedBundleIsNoOpWithMessage(t *testing.T) {
 	if detectPlatform() != "darwin" {
 		t.Skip("darwin-only code path")
 	}
-	svc := setupUtilityService()
+	svc := NewWindowFocusService()
 	stub := &stubActivator{}
 	svc.activator = stub
 
@@ -179,7 +179,7 @@ func TestFocusWindow_NotRunningMessage(t *testing.T) {
 	if detectPlatform() != "darwin" {
 		t.Skip("darwin-only code path")
 	}
-	svc := setupUtilityService()
+	svc := NewWindowFocusService()
 	svc.activator = &stubActivator{err: ErrAppNotRunning}
 
 	resp, err := svc.FocusWindow(context.Background(), focusRequest("com.example.Gone"))
@@ -194,7 +194,7 @@ func TestFocusWindow_ActivatedSuccessfully(t *testing.T) {
 	if detectPlatform() != "darwin" {
 		t.Skip("darwin-only code path")
 	}
-	svc := setupUtilityService()
+	svc := NewWindowFocusService()
 	stub := &stubActivator{}
 	svc.activator = stub
 

@@ -20,9 +20,6 @@ import (
 	"time"
 )
 
-// serverStartTime records when this process started, for uptime calculation.
-var ServerStartTime = time.Now()
-
 // DebugSnapshot is the top-level JSON structure written to disk.
 type DebugSnapshot struct {
 	Version    int                `json:"version"`
@@ -115,7 +112,7 @@ const (
 
 // CollectSnapshot gathers all diagnostic data into a DebugSnapshot.
 // Individual subsystem failures are recorded in Errors and do not abort the collection.
-func CollectSnapshot(ctx context.Context, note string, instances []*instance.Instance, approvalStore *approvalkit.ApprovalStore, logLines int) *DebugSnapshot {
+func CollectSnapshot(ctx context.Context, note string, instances []*instance.Instance, approvalStore *approvalkit.ApprovalStore, logLines int, startedAt time.Time) *DebugSnapshot {
 	if logLines <= 0 {
 		logLines = defaultLogLines
 	}
@@ -126,7 +123,7 @@ func CollectSnapshot(ctx context.Context, note string, instances []*instance.Ins
 		Note:      note,
 	}
 
-	snap.Server = collectServerInfo()
+	snap.Server = collectServerInfo(startedAt)
 	snap.Sessions, snap.Errors = collectSessionSnapshots(ctx, instances)
 	snap.Tmux, snap.Errors = collectTmuxSnapshot(ctx, snap.Errors)
 	snap.Approvals = collectApprovalSnapshot(approvalStore)
@@ -136,10 +133,10 @@ func CollectSnapshot(ctx context.Context, note string, instances []*instance.Ins
 }
 
 // collectServerInfo returns runtime metadata for the current process.
-func collectServerInfo() ServerInfo {
+func collectServerInfo(startedAt time.Time) ServerInfo {
 	return ServerInfo{
 		PID:           os.Getpid(),
-		UptimeSeconds: int64(time.Since(ServerStartTime).Seconds()),
+		UptimeSeconds: int64(time.Since(startedAt).Seconds()),
 		GoVersion:     runtime.Version(),
 		OS:            runtime.GOOS,
 		Arch:          runtime.GOARCH,

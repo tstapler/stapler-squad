@@ -177,7 +177,7 @@ func (s *SessionService) FocusWindow(
 	ctx context.Context,
 	req *connect.Request[sessionv1.FocusWindowRequest],
 ) (*connect.Response[sessionv1.FocusWindowResponse], error) {
-	return s.utilitySvc.FocusWindow(ctx, req)
+	return s.windowFocusSvc.FocusWindow(ctx, req)
 }
 
 // RenameSession changes the title of an existing session.

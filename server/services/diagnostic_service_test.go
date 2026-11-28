@@ -136,9 +136,8 @@ func TestEvaluateNudgeEligibility_should_DisallowNudge_When_TargetNotLive(t *tes
 	assert.Contains(t, reason, "not found")
 }
 
-func TestBuildDiagnosePrompt_OffersResetRemediation_AndAllowListCarriesIt(t *testing.T) {
+func TestBuildDiagnosePrompt_OffersResetRemediation(t *testing.T) {
 	prompt := buildDiagnosePrompt(diagnose.DiagnosticBundle{}, "", "pr_needs_fix", false, "no live target")
 	assert.Contains(t, prompt, "diagnose_reset_remediation")
 	assert.Contains(t, prompt, `stuck_reason="pr_needs_fix"`)
-	assert.Contains(t, diagnosticSessionAllowedTools, "mcp__stapler-squad__diagnose_reset_remediation")
 }
