@@ -1076,7 +1076,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if autonomous {
 		spawnTags = append(spawnTags, instance.TagAutonomous)
 	}
-	spawnOpts := services.SessionSpawnOptions{
+	spawnOpts := domain.SessionSpawnOptions{
 		Title:           title,
 		Prompt:          prompt,
 		Tags:            spawnTags,

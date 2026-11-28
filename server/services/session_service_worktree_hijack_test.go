@@ -92,7 +92,7 @@ func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	id := resp.Msg.Session.Id
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
 
-	outcome, err := fix.svc.awaitCreationTerminal(context.Background(), id, 30*time.Second, 20*time.Millisecond)
+	outcome, err := fix.svc.AwaitCreationTerminal(context.Background(), id, 30*time.Second)
 	require.NoError(t, err, "AwaitCreationTerminal must not error before the pipeline reaches a terminal status")
 
 	mu.Lock()

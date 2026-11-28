@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/sessioncreate"
 
 	connect "connectrpc.com/connect"
 	"github.com/creack/pty"
@@ -552,7 +553,7 @@ func TestCleanupPartialCreation_should_ReturnNil_When_NoWorktreeOrTmuxExists(t *
 
 	inst := &instance.Instance{Title: "cleanup-noop-test"}
 
-	err := cleanupPartialCreation(inst, false)
+	err := sessioncreate.CleanupPartialCreation(inst, false)
 
 	require.NoError(t, err)
 }
@@ -572,7 +573,7 @@ func TestCleanupPartialCreation_should_RemoveWorktree_When_CreatedBeforeTmuxStar
 	inst := &instance.Instance{Title: "cleanup-worktree-test"}
 	inst.SetGitWorktree(wt) // also sets started=true — see SetGitWorktree's doc comment
 
-	err = cleanupPartialCreation(inst, false)
+	err = sessioncreate.CleanupPartialCreation(inst, false)
 
 	require.NoError(t, err)
 	_, statErr := os.Stat(wt.GetWorktreePath())
@@ -595,8 +596,8 @@ func TestCleanupPartialCreation_should_BeIdempotent_When_CalledTwice(t *testing.
 	inst := &instance.Instance{Title: "cleanup-idempotent-test"}
 	inst.SetGitWorktree(wt)
 
-	require.NoError(t, cleanupPartialCreation(inst, false))
-	err = cleanupPartialCreation(inst, false)
+	require.NoError(t, sessioncreate.CleanupPartialCreation(inst, false))
+	err = sessioncreate.CleanupPartialCreation(inst, false)
 
 	require.NoError(t, err, "second call must be a no-op, not an error, once resources are already gone")
 	_, statErr := os.Stat(wt.GetWorktreePath())
@@ -631,7 +632,7 @@ func TestCleanupPartialCreation_should_NotDeleteWorktree_When_ItLooksAliveDespit
 	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live worktree still attached")
 	require.Equal(t, domain.Creating, inst.Status, "RecoverFromStopped resets Stopped to Creating")
 
-	err = cleanupPartialCreation(inst, false)
+	err = sessioncreate.CleanupPartialCreation(inst, false)
 
 	require.NoError(t, err)
 	_, statErr := os.Stat(wt.GetWorktreePath())
@@ -660,7 +661,7 @@ func TestCleanupPartialCreation_should_NotKillTmuxSession_When_ItLooksAliveDespi
 	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live tmux session still attached")
 	require.True(t, inst.TmuxSessionExists(), "test setup must have a genuinely alive tmux session")
 
-	err := cleanupPartialCreation(inst, false)
+	err := sessioncreate.CleanupPartialCreation(inst, false)
 
 	require.NoError(t, err)
 	assert.True(t, inst.TmuxSessionExists(), "tmux session must NOT be killed: it looks alive, so the guard must skip the destructive KillSession call")
@@ -691,7 +692,7 @@ func TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted(t *test
 
 	driver.StartSessionDriverForTest(t, inst, t.TempDir())
 
-	err := cleanupPartialCreation(inst, false)
+	err := sessioncreate.CleanupPartialCreation(inst, false)
 	require.NoError(t, err)
 	assert.True(t, inst.TmuxSessionExists(), "tmux session must survive: this test isolates the driver, not the defense-in-depth kill guard")
 
@@ -3377,7 +3378,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), domain.SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3401,7 +3402,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	worktreePath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{Title: title, OneShot: true})
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, domain.SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3426,7 +3427,7 @@ func TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverri
 	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), domain.SessionSpawnOptions{
 		Title: "program-override-directory-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
 	})
 	require.NoError(t, err)
@@ -3449,7 +3450,7 @@ func TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEm
 	svctest.WithIsolatedStateDirPath(t, testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"default_program": "claude"}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), domain.SessionSpawnOptions{
 		Title: "no-override-directory-session", Prompt: "do the thing", OneShot: true,
 	})
 	require.NoError(t, err)
@@ -3468,7 +3469,7 @@ func TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrid
 	worktreePath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, SessionSpawnOptions{
+	inst, err := svc.CreateWorktreeSession(context.Background(), t.TempDir(), worktreePath, domain.SessionSpawnOptions{
 		Title: "program-override-worktree-session", Prompt: "do the thing", OneShot: true, ProgramOverride: "claude --model claude-sonnet-4-6",
 	})
 	require.NoError(t, err)
@@ -3852,7 +3853,7 @@ func TestSpawnDiagnosticSession_RestrictsAllowedTools(t *testing.T) {
 	t.Cleanup(func() { _ = inst.Destroy() })
 
 	assert.Equal(t, instance.CategoryBacklog, inst.Category)
-	assert.Equal(t, diagnosticSessionAllowedTools, inst.AllowedTools)
+	assert.Equal(t, sessioncreate.DiagnosticSessionAllowedTools, inst.AllowedTools)
 	assert.NotContains(t, inst.AllowedTools, "write_to_session", "diagnostic sessions must not be allowed the general-purpose terminal-control tools")
 }
 
@@ -4923,7 +4924,7 @@ func assertReachesActiveViaPipeline(t *testing.T, svc *SessionService, created *
 	require.NotEmpty(t, created.CreationProgress,
 		"CreateSession's synchronous response must publish an initial creation_progress message")
 
-	outcome, err := svc.awaitCreationTerminal(context.Background(), created.Id, awaitTimeout, pollInterval)
+	outcome, err := svc.AwaitCreationTerminal(context.Background(), created.Id, awaitTimeout)
 	require.NoError(t, err, "AwaitCreationTerminal must not error before the pipeline reaches a terminal status")
 	assert.Equal(t, domain.Active, outcome.Status,
 		"session must reach Active via the Background Resolution Pipeline, not %v (failure_reason=%q)",

@@ -1,4 +1,4 @@
-package services
+package workspacerpc
 
 // Pins the fields GetVCSStatus hands to vcsstatus.Cache; the cache itself is tested there.
 

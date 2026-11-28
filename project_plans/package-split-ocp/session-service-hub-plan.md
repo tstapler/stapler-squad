@@ -464,6 +464,16 @@ Differences from 2.3, 5 and section 6: (1) the CSV rows are a file-name partitio
 
 Characterization tests (`stream_terminal_characterization_test.go`, `watch_sessions_characterization_test.go`) were committed before the move, run through the Connect wire and stay in `server/services`. They pin two behaviours that look unintended and were not changed: a client half-close ends `StreamTerminal` with `CodeInternal`, and a pane EOF does not end it.
 
+### 6.11 Stage 6b `sessioncreate`
+
+Done in the Stage 6b PR, in two leaves that never import `server/services`. `server/services/sessioncreate` (16 files, 3,266 lines, 32 internal imports) holds `CreateSession`, `PreviewDestinationPath`, the background resolution pipeline, `AwaitCreationTerminal`, cancel and retry with `CleanupPartialCreation`, batch and fan-out, the directory, worktree, review and diagnose spawners, and `StaleCreationSweeper`. `server/services/workspacerpc` (1 file, 569 lines, 14 imports) holds `WorkspaceService`. `server/services` goes from 47 files / 12,854 to 39 / 9,341 top-level non-test lines.
+
+The hub reaches the handler through `session_service_create_delegates.go`, which builds it per call over `Deps`; every dependency a setter can install later is a func, so a running pipeline sees it. `SessionSpawnOptions` moved to `session/domain` so `backlogsvc` does not import the leaf.
+
+Differences from 5 and section 6: (1) `sessioncreate` alone would have left the hub at 9,897, so `workspacerpc` was added; no 6c work was needed. (2) `superseded_session_sweeper.go` stays in the hub: it is backlog round retirement, not session creation, and would have needed a port for `FindSupersededSessions`. (3) No `sessionkit` package: the two hubs share nothing that `Deps` does not carry.
+
+`session_create_characterization_test.go` and `testdata/session_create.golden` were committed before the move; the only change to them since is the `domain.SessionSpawnOptions` qualifier. The golden records one behaviour that looks like a defect and was not changed: nothing writes the `creation_epoch` column, so after `RetrySessionCreation` the epoch-fenced terminal write is rejected and a retry that fails stays `Creating`. The Stage 7 `T9dServicesLOCMax` gate was not added here.
+
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
 Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes while the guard no longer guards.

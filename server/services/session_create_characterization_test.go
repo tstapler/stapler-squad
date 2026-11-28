@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
@@ -379,7 +380,7 @@ func (c *createChar) cancel() {
 
 func (c *createChar) spawners() {
 	ctx := context.Background()
-	dirInst, err := c.svc.CreateDirectorySession(ctx, c.dir, SessionSpawnOptions{
+	dirInst, err := c.svc.CreateDirectorySession(ctx, c.dir, domain.SessionSpawnOptions{
 		Title: "spawn-dir", Prompt: "dp", Tags: []string{"t"}, OneShot: true, Hidden: true, ProgramOverride: c.agent, AllowedTools: "Grep",
 	})
 	require.NoError(c.t, err)
@@ -391,14 +392,14 @@ func (c *createChar) spawners() {
 	wt := filepath.Join(c.dir, "repo")
 	require.NoError(c.t, os.MkdirAll(wt, 0o750))
 	svctest.InitGitRepoWithCommit(c.t, wt)
-	wtInst, err := c.svc.CreateWorktreeSession(ctx, wt, wt, SessionSpawnOptions{Title: "spawn-wt", Prompt: "wp", ProgramOverride: c.agent})
+	wtInst, err := c.svc.CreateWorktreeSession(ctx, wt, wt, domain.SessionSpawnOptions{Title: "spawn-wt", Prompt: "wp", ProgramOverride: c.agent})
 	require.NoError(c.t, err)
 	c.destroy(wtInst.GetStableID())
 	c.recordInstance("spawn-wt", wtInst)
 	c.recordRegistration("spawn-wt", "spawn-wt")
 	c.waitCreated("spawn-wt")
 
-	_, err = c.svc.CreateDirectorySession(ctx, c.dir, SessionSpawnOptions{Title: "spawn-dir", ProgramOverride: c.agent})
+	_, err = c.svc.CreateDirectorySession(ctx, c.dir, domain.SessionSpawnOptions{Title: "spawn-dir", ProgramOverride: c.agent})
 	c.line("spawn duplicate rejected=%t", err != nil)
 
 	// Review and diagnose sessions take their program from config defaults.

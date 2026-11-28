@@ -1,4 +1,4 @@
-package services
+package sessioncreate
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 // meaningful I/O overhead beyond the occasional flip's terminal write).
 const staleCreationSweeperCheckInterval = 60 * time.Second
 
-// staleCreationWriteTimeout bounds each individual commitTerminalStatus call this
+// staleCreationWriteTimeout bounds each individual CommitTerminalStatus call this
 // sweeper makes, mirroring the pipeline's own terminal-write timeout
 // (runBackgroundResolutionPipeline's writeCtx) so one slow/unavailable DB doesn't
 // block the sweep loop indefinitely.
@@ -35,7 +35,7 @@ const staleCreationWriteTimeout = 30 * time.Second
 // process's first sweep -- no in-memory bookkeeping about whether a pipeline goroutine
 // for it ever ran here is required (see Task 4.1.2's acceptance criteria).
 //
-// The flip itself always goes through commitTerminalStatus (never
+// The flip itself always goes through CommitTerminalStatus (never
 // instance.TryForceStatusIfEpoch directly), presenting back the instance's
 // CreationEpoch() captured at scan time -- so a late-arriving pipeline success that
 // already won the durable write can never be clobbered by a stale-flip that started
@@ -48,7 +48,7 @@ type StaleCreationSweeper struct {
 
 // NewStaleCreationSweeper constructs a sweeper. poller supplies the live set of
 // instances to scan (via GetInstances()); storage is where the terminal write lands
-// (via commitTerminalStatus); eventBus publishes the resulting SessionUpdatedEvent. A
+// (via CommitTerminalStatus); eventBus publishes the resulting SessionUpdatedEvent. A
 // nil eventBus is tolerated (publish becomes a no-op), matching
 // healthnotify.StaleSessionNotifier's construction-time tolerance.
 func NewStaleCreationSweeper(poller *session.ReviewQueuePoller, storage terminalStatusStore, eventBus *events.EventBus) *StaleCreationSweeper {
@@ -111,7 +111,7 @@ func (s *StaleCreationSweeper) sweep(ctx context.Context) {
 
 // flipStale commits the terminal Failed/Stale write for one instance found stale
 // during sweep. Captures CreationEpoch() immediately before the write so the fence
-// presented to commitTerminalStatus reflects this scan, per the sweeper's own
+// presented to CommitTerminalStatus reflects this scan, per the sweeper's own
 // race-safety guarantee (Task 4.1.2e).
 func (s *StaleCreationSweeper) flipStale(ctx context.Context, inst *instance.Instance) {
 	epoch := inst.CreationEpoch()
@@ -119,7 +119,7 @@ func (s *StaleCreationSweeper) flipStale(ctx context.Context, inst *instance.Ins
 	writeCtx, cancel := context.WithTimeout(ctx, staleCreationWriteTimeout)
 	defer cancel()
 
-	applied := commitTerminalStatus(writeCtx, s.storage, inst, epoch, domain.Failed, "Stale")
+	applied := CommitTerminalStatus(writeCtx, s.storage, inst, epoch, domain.Failed, "Stale")
 	if !applied {
 		log.Info("stale creation sweeper: terminal write skipped, epoch already advanced",
 			"session", inst.GetStableID(), "epoch", epoch)

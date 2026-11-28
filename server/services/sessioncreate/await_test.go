@@ -1,4 +1,4 @@
-package services
+package sessioncreate
 
 import (
 	"context"
@@ -9,9 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // newAwaitTestInstance builds a *session.Instance (no tmux/Start()), wraps it
@@ -21,10 +22,10 @@ import (
 // sendSyncErr-routed methods (TryForceStatusIfEpoch, TryStartRetry,
 // StatusAndFailureReason) are actually serialized through the actor mailbox
 // instead of falling back to the unlocked direct-call path sendSyncErr uses
-// when no live actor is registered, and registers it with svc's live poller
+// when no live actor is registered, and registers it with the live poller
 // under title so FindLiveInstance(title) resolves it. Status starts at
 // session.Creating (the zero value).
-func newAwaitTestInstance(t *testing.T, svc *SessionService, title string) *instance.Instance {
+func newAwaitTestInstance(t *testing.T, poller *session.ReviewQueuePoller, title string) *instance.Instance {
 	t.Helper()
 	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: title,
@@ -33,8 +34,15 @@ func newAwaitTestInstance(t *testing.T, svc *SessionService, title string) *inst
 	require.NoError(t, err)
 	live := instance.NewLiveInstance(inst)
 	t.Cleanup(live.Stop)
-	svc.ReviewQueuePoller.AddInstance(inst)
+	poller.AddInstance(inst)
 	return inst
+}
+
+// newAwaitHandler returns a Handler that reads only the live poller, which is
+// all awaiting a creation needs.
+func newAwaitHandler() (*Handler, *session.ReviewQueuePoller) {
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
+	return New(Deps{FindLive: poller.FindInstance}), poller
 }
 
 // pollEnteredCtx closes entered the first time Done() is called. awaitCreationTerminal
@@ -63,9 +71,8 @@ func (c *pollEnteredCtx) Done() <-chan struct{} {
 // of the transition, not at the full timeout.
 func TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitionsBeforeTimeout(t *testing.T) {
 	t.Parallel()
-	storage := svctest.CreateTestStorage(t)
-	svc := newCreateTestService(t, storage)
-	inst := newAwaitTestInstance(t, svc, "await-active")
+	h, poller := newAwaitHandler()
+	inst := newAwaitTestInstance(t, poller, "await-active")
 	epoch := inst.CreationEpoch()
 
 	ctx := newPollEnteredCtx(context.Background())
@@ -76,7 +83,7 @@ func TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitio
 	}()
 
 	start := time.Now()
-	outcome, err := svc.awaitCreationTerminal(ctx, "await-active", 5*time.Second, 10*time.Millisecond)
+	outcome, err := h.awaitCreationTerminal(ctx, "await-active", 5*time.Second, 10*time.Millisecond)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -90,13 +97,12 @@ func TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitio
 // covers the terminal-Failed branch, and that FailureReason travels with it.
 func TestAwaitCreationTerminal_should_ReturnFailedOutcome_When_InstanceIsAlreadyFailed(t *testing.T) {
 	t.Parallel()
-	storage := svctest.CreateTestStorage(t)
-	svc := newCreateTestService(t, storage)
-	inst := newAwaitTestInstance(t, svc, "await-failed")
+	h, poller := newAwaitHandler()
+	inst := newAwaitTestInstance(t, poller, "await-failed")
 	epoch := inst.CreationEpoch()
 	require.True(t, inst.TryForceStatusIfEpoch(epoch, domain.Failed, "GitHubResolutionError"))
 
-	outcome, err := svc.awaitCreationTerminal(context.Background(), "await-failed", time.Second, 10*time.Millisecond)
+	outcome, err := h.awaitCreationTerminal(context.Background(), "await-failed", time.Second, 10*time.Millisecond)
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.Failed, outcome.Status)
@@ -109,11 +115,10 @@ func TestAwaitCreationTerminal_should_ReturnFailedOutcome_When_InstanceIsAlready
 // window times out rather than hanging indefinitely.
 func TestAwaitCreationTerminal_should_ReturnErrCreationAwaitTimeout_When_InstanceNeverLeavesCreating(t *testing.T) {
 	t.Parallel()
-	storage := svctest.CreateTestStorage(t)
-	svc := newCreateTestService(t, storage)
-	newAwaitTestInstance(t, svc, "await-stuck")
+	h, poller := newAwaitHandler()
+	newAwaitTestInstance(t, poller, "await-stuck")
 
-	outcome, err := svc.awaitCreationTerminal(context.Background(), "await-stuck", 60*time.Millisecond, 10*time.Millisecond)
+	outcome, err := h.awaitCreationTerminal(context.Background(), "await-stuck", 60*time.Millisecond, 10*time.Millisecond)
 
 	require.ErrorIs(t, err, domain.ErrCreationAwaitTimeout)
 	assert.Equal(t, domain.CreationOutcome{}, outcome)
@@ -126,18 +131,17 @@ func TestAwaitCreationTerminal_should_ReturnErrCreationAwaitTimeout_When_Instanc
 // and immediately rather than waiting out the full timeout.
 func TestAwaitCreationTerminal_should_ReturnErrCreationVanished_When_InstanceIsRemovedMidWait(t *testing.T) {
 	t.Parallel()
-	storage := svctest.CreateTestStorage(t)
-	svc := newCreateTestService(t, storage)
-	newAwaitTestInstance(t, svc, "await-vanish")
+	h, poller := newAwaitHandler()
+	newAwaitTestInstance(t, poller, "await-vanish")
 
 	ctx := newPollEnteredCtx(context.Background())
 	go func() {
 		<-ctx.entered
-		svc.ReviewQueuePoller.RemoveInstance("await-vanish")
+		poller.RemoveInstance("await-vanish")
 	}()
 
 	start := time.Now()
-	outcome, err := svc.awaitCreationTerminal(ctx, "await-vanish", 5*time.Second, 10*time.Millisecond)
+	outcome, err := h.awaitCreationTerminal(ctx, "await-vanish", 5*time.Second, 10*time.Millisecond)
 	elapsed := time.Since(start)
 
 	require.ErrorIs(t, err, domain.ErrCreationVanished)
@@ -151,9 +155,8 @@ func TestAwaitCreationTerminal_should_ReturnErrCreationVanished_When_InstanceIsR
 // never wrapped in one of this package's own sentinels.
 func TestAwaitCreationTerminal_should_ReturnCtxErr_When_CallerContextEndsFirst(t *testing.T) {
 	t.Parallel()
-	storage := svctest.CreateTestStorage(t)
-	svc := newCreateTestService(t, storage)
-	newAwaitTestInstance(t, svc, "await-ctx-done")
+	h, poller := newAwaitHandler()
+	newAwaitTestInstance(t, poller, "await-ctx-done")
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -163,7 +166,7 @@ func TestAwaitCreationTerminal_should_ReturnCtxErr_When_CallerContextEndsFirst(t
 		cancel()
 	}()
 
-	outcome, err := svc.awaitCreationTerminal(ctx, "await-ctx-done", 5*time.Second, 10*time.Millisecond)
+	outcome, err := h.awaitCreationTerminal(ctx, "await-ctx-done", 5*time.Second, 10*time.Millisecond)
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.NotErrorIs(t, err, domain.ErrCreationAwaitTimeout)
@@ -182,9 +185,8 @@ func TestAwaitCreationTerminal_should_ReturnCtxErr_When_CallerContextEndsFirst(t
 // of the two legitimate states this scenario can be in.
 func TestAwaitCreationTerminal_should_ReturnConsistentSnapshot_When_StatusAndFailureReasonAreReadTogether(t *testing.T) {
 	t.Parallel()
-	storage := svctest.CreateTestStorage(t)
-	svc := newCreateTestService(t, storage)
-	inst := newAwaitTestInstance(t, svc, "await-consistent")
+	_, poller := newAwaitHandler()
+	inst := newAwaitTestInstance(t, poller, "await-consistent")
 	epoch := inst.CreationEpoch()
 	require.True(t, inst.TryForceStatusIfEpoch(epoch, domain.Failed, "attempt-1"))
 

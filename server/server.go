@@ -52,6 +52,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
+	"github.com/tstapler/stapler-squad/server/services/sessioncreate"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
 	"github.com/tstapler/stapler-squad/server/services/sessionstream"
 	"github.com/tstapler/stapler-squad/server/services/summaryrpc"
@@ -1566,7 +1567,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// creation-progress timestamp has exceeded the configured threshold to
 	// Failed/Stale -- see StaleCreationSweeper doc comment, Epic 4.1).
 	if deps.ReviewQueuePoller != nil && deps.Storage != nil {
-		staleCreationSweeper := services.NewStaleCreationSweeper(deps.ReviewQueuePoller, deps.Storage, deps.EventBus)
+		staleCreationSweeper := sessioncreate.NewStaleCreationSweeper(deps.ReviewQueuePoller, deps.Storage, deps.EventBus)
 		srv.goBackground(func() { staleCreationSweeper.Start(serverCtx) })
 		log.Info("Stale creation sweeper started",
 			"threshold_minutes", cfg.CreationStale.ThresholdMinutesOrDefault())

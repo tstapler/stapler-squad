@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
@@ -69,7 +70,7 @@ func TestSessionService_should_RegisterNewSessionWithTagPoller_When_SessionCreat
 	t.Cleanup(poller.Stop)
 
 	const title = "tag-poller-post-startup-session"
-	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})
+	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), domain.SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 

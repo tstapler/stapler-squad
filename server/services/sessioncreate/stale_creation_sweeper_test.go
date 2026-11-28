@@ -1,4 +1,4 @@
-package services
+package sessioncreate
 
 import (
 	"context"
@@ -251,7 +251,7 @@ func TestStaleCreationSweeper_should_ResolveDeterministically_When_RacingLatePip
 		defer wg.Done()
 		// Simulate the still-alive pipeline's own genuine success commit,
 		// presenting back the same (unbumped) epoch the sweeper also holds.
-		commitTerminalStatus(context.Background(), storage, inst, inst.CreationEpoch(), domain.Active, "")
+		CommitTerminalStatus(context.Background(), storage, inst, inst.CreationEpoch(), domain.Active, "")
 	}()
 	go func() {
 		defer wg.Done()

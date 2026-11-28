@@ -12,6 +12,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/sessioncreate"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -35,7 +36,7 @@ func TestCleanupPartialCreation_should_KeepDirtyWorktree_When_NotForced(t *testi
 	inst := &instance.Instance{Title: "cleanup-dirty-keep"}
 	precious := attachDirtyWorktree(t, inst, "cleanup-dirty-keep")
 
-	err := cleanupPartialCreation(inst, false)
+	err := sessioncreate.CleanupPartialCreation(inst, false)
 
 	require.ErrorIs(t, err, instance.ErrWorktreeDirty)
 	assert.FileExists(t, precious)
@@ -46,7 +47,7 @@ func TestCleanupPartialCreation_should_RemoveDirtyWorktree_When_Forced(t *testin
 	inst := &instance.Instance{Title: "cleanup-dirty-force"}
 	precious := attachDirtyWorktree(t, inst, "cleanup-dirty-force")
 
-	require.NoError(t, cleanupPartialCreation(inst, true))
+	require.NoError(t, sessioncreate.CleanupPartialCreation(inst, true))
 
 	assert.NoFileExists(t, precious)
 }

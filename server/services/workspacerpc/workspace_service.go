@@ -1,4 +1,7 @@
-package services
+// Package workspacerpc serves the VCS and workspace RPCs of a session: status,
+// workspace info, switch targets, switching and the branch list. It never imports
+// server/services.
+package workspacerpc
 
 import (
 	"context"
@@ -43,7 +46,7 @@ var (
 	_ fileops.StatusInvalidator = (*WorkspaceService)(nil)
 )
 
-// LiveInstanceFinder is satisfied by SessionService. It returns the live in-memory
+// LiveInstanceFinder is satisfied by SessionService (server/services). It returns the live in-memory
 // instance by scanning the poller's tracked sessions (O(N)) or nil if the session is
 // not yet in the poller. WorkspaceService uses this as a fast path to avoid calling
 // LoadInstances() — which re-hydrates all sessions from disk and spawns PTY/tmux
@@ -557,3 +560,10 @@ func filterBranches(all []string, filter string, maxResults int) []string {
 	}
 	return result
 }
+
+// VCSCacheForTest exposes the status cache so the host's wiring tests can seed
+// and read it.
+func (ws *WorkspaceService) VCSCacheForTest() *vcsstatus.Cache { return &ws.vcs }
+
+// InFlightSwitchesForTest exposes the switch guard map to the host's tests.
+func (ws *WorkspaceService) InFlightSwitchesForTest() *sync.Map { return &ws.inFlightSwitches }

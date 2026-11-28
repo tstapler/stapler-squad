@@ -1,4 +1,4 @@
-package services
+package sessioncreate
 
 import (
 	"context"
@@ -34,13 +34,13 @@ func addCreatingSession(t *testing.T, storage *session.Storage, title, uuid stri
 
 // TestCommitTerminalStatus_should_UpdatePersistedAndInMemory_When_EpochMatches
 // covers Task 1.2.4c's happy path: a matching DB epoch updates both the
-// persisted row and the in-memory actor state in one commitTerminalStatus call.
+// persisted row and the in-memory actor state in one CommitTerminalStatus call.
 func TestCommitTerminalStatus_should_UpdatePersistedAndInMemory_When_EpochMatches(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	inst := addCreatingSession(t, storage, "commit-terminal-match", "uuid-commit-match")
 
-	applied := commitTerminalStatus(context.Background(), storage, inst, 0, domain.Active, "")
+	applied := CommitTerminalStatus(context.Background(), storage, inst, 0, domain.Active, "")
 
 	assert.True(t, applied)
 	assert.Equal(t, domain.Active, inst.Status, "in-memory status must be synced")
@@ -62,7 +62,7 @@ func TestCommitTerminalStatus_should_LeaveBothUntouched_When_EpochIsStale(t *tes
 
 	// The persisted row's creation_epoch defaults to 0; present a stale captured
 	// value of 1 (as if a cancel/retry had already bumped the DB row past it).
-	applied := commitTerminalStatus(context.Background(), storage, inst, 1, domain.Active, "")
+	applied := CommitTerminalStatus(context.Background(), storage, inst, 1, domain.Active, "")
 
 	assert.False(t, applied)
 	assert.Equal(t, domain.Creating, inst.Status, "in-memory status must be untouched when the durable write is rejected")
@@ -77,7 +77,7 @@ func TestCommitTerminalStatus_should_LeaveBothUntouched_When_EpochIsStale(t *tes
 // is the regression test for pre-mortem.md failure #2 (P1), per Task 1.2.4d: it
 // simulates a process crash between the durable persist and the in-memory sync
 // by calling storage.UpdateInstanceIfEpoch directly (bypassing
-// commitTerminalStatus entirely, modeling "durable write succeeded, process died
+// CommitTerminalStatus entirely, modeling "durable write succeeded, process died
 // before the in-memory call"), then reloads the instance from storage into a
 // fresh registry (no live goroutine involved) and asserts its status is the
 // correct terminal value, not Creating — i.e. the Stale-Creation Sweeper would
@@ -88,7 +88,7 @@ func TestCommitTerminalStatus_should_NeverProduceStaleLookingButLiveSession_When
 	addCreatingSession(t, storage, "commit-terminal-crash", "uuid-commit-crash")
 
 	// Model the crash: the durable persist succeeds, but the process is killed
-	// before commitTerminalStatus can call instance.TryForceStatusIfEpoch.
+	// before CommitTerminalStatus can call instance.TryForceStatusIfEpoch.
 	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-commit-crash", 0, domain.Active, "")
 	require.NoError(t, err)
 	require.True(t, applied, "the durable persist half of the write must succeed")

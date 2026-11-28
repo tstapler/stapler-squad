@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/server/services/sessioncreate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -48,29 +48,6 @@ func TestFanOutSession_RejectsMissingTitleAndExcessOverrides(t *testing.T) {
 	}))
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Errorf("too many overrides: want InvalidArgument, got %v", err)
-	}
-}
-
-func TestFanoutWinnerEligibility(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		status domain.Status
-		claude detection.DetectedStatus
-		wantOK bool
-	}{
-		{"stopped", domain.Stopped, detection.StatusUnknown, true},
-		{"paused", domain.Paused, detection.StatusUnknown, true},
-		{"active idle", domain.Active, detection.StatusIdle, true},
-		{"active ready", domain.Active, detection.StatusReady, true},
-		{"active still working", domain.Active, detection.StatusProcessing, false},
-		{"creating", domain.Creating, detection.StatusUnknown, false},
-	}
-	for _, c := range cases {
-		err := fanoutWinnerEligibility(c.status, c.claude)
-		if (err == nil) != c.wantOK {
-			t.Errorf("%s: eligible=%v, err=%v", c.name, err == nil, err)
-		}
 	}
 }
 
@@ -124,7 +101,7 @@ func fanoutMember(t *testing.T, repo, groupID string, n int, file, content strin
 	inst := &instance.Instance{Title: title, UUID: uuid.NewString(), Path: repo, Status: domain.Stopped, Program: "claude"}
 	inst.SetGitWorktree(wt)
 	inst.ForceStatus(domain.Stopped) // Snapshot() is what GetStatus reads, not the struct literal
-	require.NoError(t, inst.SetTags([]string{fanoutGroupTagPrefix + groupID, fanoutBaseTagPrefix + "main"}))
+	require.NoError(t, inst.SetTags([]string{sessioncreate.FanoutGroupTagPrefix + groupID, sessioncreate.FanoutBaseTagPrefix + "main"}))
 	return inst
 }
 

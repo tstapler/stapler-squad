@@ -1,4 +1,4 @@
-package services
+package sessioncreate
 
 import (
 	"context"
@@ -31,9 +31,9 @@ const (
 	MinFanoutVariants = 2
 	MaxFanoutVariants = 5
 
-	fanoutGroupTagPrefix   = "fanout:"
+	FanoutGroupTagPrefix   = "fanout:"
 	fanoutVariantTagPrefix = "fanout-variant:"
-	fanoutBaseTagPrefix    = "fanout-base:"
+	FanoutBaseTagPrefix    = "fanout-base:"
 )
 
 // fanoutPickLocks serializes PickFanoutWinner per group (striped by group id, so memory is
@@ -53,7 +53,7 @@ func lockFanoutGroup(groupID string) (unlock func()) {
 // FanOutSession creates count sessions from one prompt. CreateSession returns once the
 // session is registered (worktree setup resolves in the background pipeline), so the
 // sequential loop stays fast and avoids worktree-naming races between variants.
-func (s *SessionService) FanOutSession(
+func (h *Handler) FanOutSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.FanOutSessionRequest],
 ) (*connect.Response[sessionv1.FanOutSessionResponse], error) {
@@ -80,9 +80,9 @@ func (s *SessionService) FanOutSession(
 	}
 
 	groupID := uuid.NewString()
-	groupTags := []string{fanoutGroupTagPrefix + groupID}
+	groupTags := []string{FanoutGroupTagPrefix + groupID}
 	if branch, err := git.GetCurrentBranchName(base.Path); err == nil && branch != "" {
-		groupTags = append(groupTags, fanoutBaseTagPrefix+branch)
+		groupTags = append(groupTags, FanoutBaseTagPrefix+branch)
 	}
 	log.Info("creating fan-out group", "group_id", groupID, "count", count, "title", base.Title)
 
@@ -98,7 +98,7 @@ func (s *SessionService) FanOutSession(
 		if i < len(req.Msg.ProgramOverrides) && req.Msg.ProgramOverrides[i] != "" {
 			variantReq.Program = req.Msg.ProgramOverrides[i]
 		}
-		resp, err := s.CreateSession(ctx, connect.NewRequest(variantReq))
+		resp, err := h.CreateSession(ctx, connect.NewRequest(variantReq))
 		if err != nil {
 			// Earlier variants stay running; the caller sees which ones were created via the
 			// group tag and can compare or archive them — silently killing work is worse.
@@ -129,10 +129,10 @@ func fanoutWinnerEligibility(status domain.Status, claude detection.DetectedStat
 	}
 }
 
-func (s *SessionService) fanoutGroupMembers(groupID string) []*instance.Instance {
-	tag := fanoutGroupTagPrefix + groupID
+func (h *Handler) fanoutGroupMembers(groupID string) []*instance.Instance {
+	tag := FanoutGroupTagPrefix + groupID
 	var members []*instance.Instance
-	for _, inst := range s.GetInstances() {
+	for _, inst := range h.d.Instances() {
 		if inst.HasTag(tag) {
 			members = append(members, inst)
 		}
@@ -142,7 +142,7 @@ func (s *SessionService) fanoutGroupMembers(groupID string) []*instance.Instance
 
 func fanoutBaseBranch(inst *instance.Instance) string {
 	for _, t := range inst.GetTags() {
-		if v, ok := strings.CutPrefix(t, fanoutBaseTagPrefix); ok {
+		if v, ok := strings.CutPrefix(t, FanoutBaseTagPrefix); ok {
 			return v
 		}
 	}
@@ -153,7 +153,7 @@ func fanoutBaseBranch(inst *instance.Instance) string {
 // PickFanoutWinner merges the winner's branch into the group's base branch and archives
 // every other member through ArchiveSession (so ArchivedAt is set via the existing path).
 // Repeating a pick for the same winner is idempotent and retries any failed loser archival.
-func (s *SessionService) PickFanoutWinner(
+func (h *Handler) PickFanoutWinner(
 	ctx context.Context,
 	req *connect.Request[sessionv1.PickFanoutWinnerRequest],
 ) (*connect.Response[sessionv1.PickFanoutWinnerResponse], error) {
@@ -163,7 +163,7 @@ func (s *SessionService) PickFanoutWinner(
 	}
 	defer lockFanoutGroup(groupID)()
 
-	winner, members, err := s.resolveFanoutWinner(groupID, req.Msg.WinnerSessionId)
+	winner, members, err := h.resolveFanoutWinner(groupID, req.Msg.WinnerSessionId)
 	if err != nil {
 		return nil, err
 	}
@@ -189,13 +189,13 @@ func (s *SessionService) PickFanoutWinner(
 				wt.GetBranchName(), strings.Join(result.ConflictedFiles, ", ")))
 	}
 
-	archived, archiveFailed := s.archiveFanoutLosers(ctx, groupID, members, winner)
+	archived, archiveFailed := h.archiveFanoutLosers(ctx, groupID, members, winner)
 	return connect.NewResponse(&sessionv1.PickFanoutWinnerResponse{BaseBranch: baseBranch, ArchivedSessionIds: archived, FailedArchiveSessionIds: archiveFailed}), nil
 }
 
 // resolveFanoutWinner returns the group's members and the pickable winner among them.
-func (s *SessionService) resolveFanoutWinner(groupID, winnerID string) (winner *instance.Instance, members []*instance.Instance, err error) {
-	members = s.fanoutGroupMembers(groupID)
+func (h *Handler) resolveFanoutWinner(groupID, winnerID string) (winner *instance.Instance, members []*instance.Instance, err error) {
+	members = h.fanoutGroupMembers(groupID)
 	if len(members) == 0 {
 		return nil, nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("fan-out group not found: %s", groupID))
 	}
@@ -212,8 +212,8 @@ func (s *SessionService) resolveFanoutWinner(groupID, winnerID string) (winner *
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("winner session is archived"))
 	}
 	claude := detection.StatusUnknown
-	if s.statusManager != nil {
-		claude = s.statusManager.GetStatus(winner).ClaudeStatus
+	if h.d.StatusManager() != nil {
+		claude = h.d.StatusManager().GetStatus(winner).ClaudeStatus
 	}
 	if eligErr := fanoutWinnerEligibility(domain.Status(winner.GetStatus()), claude); eligErr != nil {
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, eligErr)
@@ -254,12 +254,12 @@ func checkFanoutMergeTarget(winner *instance.Instance) (wt *git.GitWorktree, bas
 	return wt, baseBranch, nil
 }
 
-func (s *SessionService) archiveFanoutLosers(ctx context.Context, groupID string, members []*instance.Instance, winner *instance.Instance) (archived, failed []string) {
+func (h *Handler) archiveFanoutLosers(ctx context.Context, groupID string, members []*instance.Instance, winner *instance.Instance) (archived, failed []string) {
 	for _, m := range members {
 		if m.UUID == winner.UUID || m.IsArchived() {
 			continue
 		}
-		if _, err := s.ArchiveSession(ctx, connect.NewRequest(&sessionv1.ArchiveSessionRequest{SessionId: m.UUID})); err != nil {
+		if _, err := h.d.ArchiveSession(ctx, connect.NewRequest(&sessionv1.ArchiveSessionRequest{SessionId: m.UUID})); err != nil {
 			log.Warn("failed to archive fan-out loser", "group_id", groupID, "session", m.UUID, "err", err)
 			failed = append(failed, m.UUID)
 			continue

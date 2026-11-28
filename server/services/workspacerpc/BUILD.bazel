@@ -1,0 +1,68 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "workspacerpc",
+    srcs = ["workspace_service.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/workspacerpc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/adapters",
+        "//server/events",
+        "//server/services/access",
+        "//server/services/fileops",
+        "//server/services/vcsstatus",
+        "//session",
+        "//session/domain",
+        "//session/git/backend",
+        "//session/gitprovider",
+        "//session/instance",
+        "//session/vcs",
+        "//telemetry",
+        "@com_connectrpc_connect//:connect",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":workspacerpc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "workspacerpc_test",
+    srcs = [
+        "list_branches_test.go",
+        "workspace_misc_test.go",
+        "workspace_service_test.go",
+        "workspace_service_vcs_wiring_test.go",
+    ],
+    embed = [":workspacerpc"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//server/services/internal/svctest",
+        "//session",
+        "//session/domain",
+        "//session/git",
+        "//session/git/backend",
+        "//session/instance",
+        "//session/vc",
+        "//testutil/gitfake",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

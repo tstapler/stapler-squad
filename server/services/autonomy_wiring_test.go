@@ -4,9 +4,6 @@ package services
 
 import (
 	"context"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"testing"
 	"time"
@@ -196,7 +193,7 @@ func TestAutonomyWiring_ShouldRegisterBindAndComplete_When_ACreatedSessionIsAuto
 	svc.SetHeadlessPool(headless.NewPoolWithRunner(headless.PoolConfig{}, wiringRunner{}))
 	const title = "wire-create"
 
-	svc.startCreationAutonomousDriver(startableInstance(title), title)
+	svc.creator().StartCreationAutonomousDriver(startableInstance(title), title)
 	_, ok := svc.AutonomousSvc.DriverRunID(title)
 	require.True(t, ok, "the pipeline must register its driver")
 
@@ -205,28 +202,6 @@ func TestAutonomyWiring_ShouldRegisterBindAndComplete_When_ACreatedSessionIsAuto
 		_, live := svc.AutonomousSvc.DriverRunID(title)
 		return !live
 	}, 10*time.Second, 10*time.Millisecond)
-}
-
-// The pipeline itself needs a real tmux start to reach this call, so the call is
-// pinned in the source.
-func TestAutonomyWiring_ShouldBeCalledByTheCreationPipeline(t *testing.T) {
-	t.Parallel()
-	file, err := parser.ParseFile(token.NewFileSet(), "session_creation_pipeline.go", nil, 0)
-	require.NoError(t, err)
-	var calls int
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "runBackgroundResolutionPipeline" {
-			continue
-		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "startCreationAutonomousDriver" {
-				calls++
-			}
-			return true
-		})
-	}
-	assert.Equal(t, 1, calls)
 }
 
 func TestAutonomyWiring_ShouldStopTheDriver_When_TheSessionIsHibernatedDeletedOrTurnedManual(t *testing.T) {

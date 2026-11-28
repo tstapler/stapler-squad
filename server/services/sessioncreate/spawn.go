@@ -1,4 +1,4 @@
-package services
+package sessioncreate
 
 import (
 	"context"
@@ -31,27 +31,6 @@ import (
 // safe.
 func uniqueDispatchTitle(prefix, itemID string) string {
 	return fmt.Sprintf("%s:%s:%x", prefix, itemID[:8], time.Now().UnixNano())
-}
-
-// SessionSpawnOptions bundles the session-creation fields shared by
-// CreateDirectorySession and CreateWorktreeSession (Fowler's Introduce
-// Parameter Object), replacing their previous 8/9-parameter positional lists
-// (syntax-rules-go long-parameter-list).
-type SessionSpawnOptions struct {
-	Title   string
-	Prompt  string
-	Tags    []string
-	OneShot bool
-	Hidden  bool
-	// ProgramOverride, when non-empty, replaces config.ResolveDefaults' resolved.Program
-	// as the spawned Instance's InstanceOptions.Program — set before session.NewInstance/
-	// instance.Start(true), never via a post-hoc SwitchProgram/Restart (see Epic 2.4's
-	// design note). Leave "" for callers unaffected by per-stage program overrides.
-	ProgramOverride string
-	// AllowedTools restricts the dispatched session's MCP tool surface (see
-	// diagnosticSessionAllowedTools's doc comment); "" preserves the default,
-	// unrestricted behavior.
-	AllowedTools string
 }
 
 // reviewTarget is where a review session runs and the branch scoping it must be told.
@@ -90,16 +69,16 @@ func resolveReviewTarget(repoPath string, wt domain.GitWorktreeData) reviewTarge
 
 // reviewTargetFor looks up the reviewed work session's worktree. Lookup failure
 // degrades to the repo path with no preamble, as before.
-func (s *SessionService) reviewTargetFor(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string) reviewTarget {
-	if s.concStorage == nil || itemSessionID == "" {
+func (h *Handler) reviewTargetFor(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string) reviewTarget {
+	if h.d.ConcStorage() == nil || itemSessionID == "" {
 		return reviewTarget{Dir: item.RepoPath}
 	}
-	is, err := s.concStorage.GetItemSession(ctx, itemSessionID)
+	is, err := h.d.ConcStorage().GetItemSession(ctx, itemSessionID)
 	if err != nil {
 		log.Warn("[SpawnReviewSession] item session lookup failed; reviewing in repo path", "item", item.ID, "err", err)
 		return reviewTarget{Dir: item.RepoPath}
 	}
-	wt, err := s.concStorage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
+	wt, err := h.d.ConcStorage().GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
 	if err != nil {
 		log.Warn("[SpawnReviewSession] worktree lookup failed; reviewing in repo path", "item", item.ID, "err", err)
 		return reviewTarget{Dir: item.RepoPath}
@@ -112,9 +91,9 @@ func (s *SessionService) reviewTargetFor(ctx context.Context, item *backlogdto.B
 // a work session exits. The session is tagged "backlog:review", runs one-shot, and
 // runs in the work session's worktree (itemSessionID is the work ItemSession), not
 // the shared checkout, whose HEAD is arbitrary.
-func (s *SessionService) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*instance.Instance, error) {
-	target := s.reviewTargetFor(ctx, item, itemSessionID)
-	inst, err := s.CreateDirectorySession(ctx, target.Dir, SessionSpawnOptions{
+func (h *Handler) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*instance.Instance, error) {
+	target := h.reviewTargetFor(ctx, item, itemSessionID)
+	inst, err := h.CreateDirectorySession(ctx, target.Dir, domain.SessionSpawnOptions{
 		Title:   uniqueDispatchTitle("review", item.ID),
 		Prompt:  target.Preamble + prompt,
 		Tags:    []string{"backlog:review"},
@@ -128,7 +107,7 @@ func (s *SessionService) SpawnReviewSession(ctx context.Context, item *backlogdt
 	return inst, nil
 }
 
-// diagnosticSessionAllowedTools restricts a dispatched Diagnose & Nudge
+// DiagnosticSessionAllowedTools restricts a dispatched Diagnose & Nudge
 // session (server/mcp's diagnoseHandlers) to the minimal MCP tool surface its
 // buildDiagnosePrompt action space actually offers: investigate the repo with
 // Claude Code's own read/search tools, then conclude via exactly one of
@@ -145,7 +124,7 @@ func (s *SessionService) SpawnReviewSession(ctx context.Context, item *backlogdt
 // 2026-07-15 addendum). The actual gate is server-side — see
 // server/mcp/diagnose_role_gate.go's denyIfDiagnoseCaller, which the
 // restricted tools above check independent of what a client honors here.
-const diagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
+const DiagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
 	"mcp__stapler-squad__create_backlog_item," +
 	"mcp__stapler-squad__post_backlog_update," +
 	"mcp__stapler-squad__get_backlog_item," +
@@ -161,16 +140,16 @@ const diagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
 // instructions — see server/services/diagnosesvc's
 // buildDiagnosePrompt). Mirrors SpawnReviewSession's shape; satisfies
 // diagnosesvc.DiagnosticSpawner. Unlike SpawnReviewSession, restricts the
-// session's MCP tool surface via diagnosticSessionAllowedTools — see that
+// session's MCP tool surface via DiagnosticSessionAllowedTools — see that
 // constant's doc comment for why this alone isn't the real enforcement.
-func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*instance.Instance, error) {
-	inst, err := s.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
+func (h *Handler) SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*instance.Instance, error) {
+	inst, err := h.CreateDirectorySession(ctx, item.RepoPath, domain.SessionSpawnOptions{
 		Title:        uniqueDispatchTitle("diagnose", item.ID),
 		Prompt:       prompt,
 		Tags:         []string{"backlog:diagnose"},
 		OneShot:      true,
 		Hidden:       true,
-		AllowedTools: diagnosticSessionAllowedTools,
+		AllowedTools: DiagnosticSessionAllowedTools,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("spawn diagnostic session: %w", err)
@@ -185,7 +164,7 @@ func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *backl
 // poller, and returns the Instance. opts.AllowedTools == "" (CreateDirectorySession's
 // own callers, i.e. everyone but SpawnDiagnosticSession) preserves unrestricted
 // tool access.
-func (s *SessionService) CreateDirectorySession(ctx context.Context, path string, opts SessionSpawnOptions) (*instance.Instance, error) {
+func (h *Handler) CreateDirectorySession(ctx context.Context, path string, opts domain.SessionSpawnOptions) (*instance.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
 	program := resolved.Program
@@ -202,9 +181,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 		Tags:             opts.Tags,
 		OneShot:          opts.OneShot,
 		Hidden:           opts.Hidden,
-		MCPServerURL:     s.resolveMCPServerURL(),
+		MCPServerURL:     h.d.MCPServerURL(),
 		CreateIfMissing:  true,
-		TmuxServerSocket: s.testTmuxServerSocket,
+		TmuxServerSocket: h.d.TmuxServerSocket,
 		AllowedTools:     opts.AllowedTools,
 		// Backend consults the session-name override map (tymux-bundled-integration
 		// Epic 4.4.2) so a canary override applies through this entry point too;
@@ -217,38 +196,38 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 	}
 	// Index before Start: Start launches the agent, whose first hook must resolve
 	// as hidden (AddInstance below is too late; see Spike 1.3e).
-	s.indexSessionForDelivery(instance)
+	h.d.IndexForDelivery(instance)
 	// Wire callbacks (including the tagging engine/fire recorder, session-classifier-pipeline
 	// Task 2.3.3d) before Start() so a first-time-setup session's ReclassifyTagsAfterCreate
 	// call has a real engine to evaluate, matching the primary CreateSession pipeline's
 	// wire-before-start ordering (session_creation_pipeline.go).
-	s.wireCallbacks(instance)
+	h.d.WireCallbacks(instance)
 	if err := instance.Start(true); err != nil {
 		return nil, fmt.Errorf("CreateDirectorySession start: %w", err)
 	}
-	if s.statusManager != nil {
-		instance.SetStatusManager(s.statusManager)
+	if h.d.StatusManager() != nil {
+		instance.SetStatusManager(h.d.StatusManager())
 		if ctrlErr := instance.StartController(); ctrlErr != nil {
 			log.Warn("[CreateDirectorySession] failed to start controller after wiring", "session", opts.Title, "err", ctrlErr)
 		}
 	}
 	driver.StartSessionDriver(instance, path)
-	if err := s.storage.AddInstance(instance); err != nil {
+	if err := h.d.Store.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
 	}
-	if s.ReviewQueuePoller != nil {
-		s.ReviewQueuePoller.AddInstance(instance)
+	if h.d.Poller() != nil {
+		h.d.Poller().AddInstance(instance)
 	}
-	if s.sessionTagPoller != nil {
-		s.sessionTagPoller.AddInstance(instance)
+	if h.d.TagPoller() != nil {
+		h.d.TagPoller().AddInstance(instance)
 	}
-	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
-	if s.backlogLifecycleListener != nil {
-		s.backlogLifecycleListener.WireToInstance(instance)
+	h.d.Bus.Publish(events.NewSessionCreatedEvent(instance))
+	if h.d.BacklogListener() != nil {
+		h.d.BacklogListener().WireToInstance(instance)
 	}
-	if s.sessionSummaryGenerator != nil {
-		summaries.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	if h.d.SummaryGenerator() != nil {
+		summaries.WireSessionSummaryListener(h.d.SummaryGenerator(), instance)
 	}
 	return instance, nil
 }
@@ -256,7 +235,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 // CreateWorktreeSession satisfies the services.SessionCreator interface.
 // It spawns a session that uses an already-created git worktree at worktreePath.
 // repoPath is the parent repo (for program resolution). worktreePath must exist on disk.
-func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts SessionSpawnOptions) (*instance.Instance, error) {
+func (h *Handler) CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts domain.SessionSpawnOptions) (*instance.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, repoPath, "")
 	program := resolved.Program
@@ -274,9 +253,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 		Tags:             opts.Tags,
 		OneShot:          opts.OneShot,
 		Hidden:           opts.Hidden,
-		MCPServerURL:     s.resolveMCPServerURL(),
+		MCPServerURL:     h.d.MCPServerURL(),
 		CreateIfMissing:  false,
-		TmuxServerSocket: s.testTmuxServerSocket,
+		TmuxServerSocket: h.d.TmuxServerSocket,
 		// Backend consults the session-name override map (tymux-bundled-integration
 		// Epic 4.4.2) so a canary override applies through this entry point too;
 		// there's no per-request override concept for this internal creator.
@@ -286,36 +265,36 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 	if err != nil {
 		return nil, fmt.Errorf("CreateWorktreeSession: %w", err)
 	}
-	s.indexSessionForDelivery(instance) // before Start, as in CreateDirectorySession
+	h.d.IndexForDelivery(instance) // before Start, as in CreateDirectorySession
 	// See CreateDirectorySession's matching comment: wire callbacks (tagging engine/fire
 	// recorder included) before Start() so ReclassifyTagsAfterCreate has a real engine.
-	s.wireCallbacks(instance)
+	h.d.WireCallbacks(instance)
 	if err := instance.Start(true); err != nil {
 		return nil, fmt.Errorf("CreateWorktreeSession start: %w", err)
 	}
-	if s.statusManager != nil {
-		instance.SetStatusManager(s.statusManager)
+	if h.d.StatusManager() != nil {
+		instance.SetStatusManager(h.d.StatusManager())
 		if ctrlErr := instance.StartController(); ctrlErr != nil {
 			log.Warn("[CreateWorktreeSession] failed to start controller after wiring", "session", opts.Title, "err", ctrlErr)
 		}
 	}
 	driver.StartSessionDriver(instance, repoPath)
-	if err := s.storage.AddInstance(instance); err != nil {
+	if err := h.d.Store.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateWorktreeSession save: %w", err)
 	}
-	if s.ReviewQueuePoller != nil {
-		s.ReviewQueuePoller.AddInstance(instance)
+	if h.d.Poller() != nil {
+		h.d.Poller().AddInstance(instance)
 	}
-	if s.sessionTagPoller != nil {
-		s.sessionTagPoller.AddInstance(instance)
+	if h.d.TagPoller() != nil {
+		h.d.TagPoller().AddInstance(instance)
 	}
-	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
-	if s.backlogLifecycleListener != nil {
-		s.backlogLifecycleListener.WireToInstance(instance)
+	h.d.Bus.Publish(events.NewSessionCreatedEvent(instance))
+	if h.d.BacklogListener() != nil {
+		h.d.BacklogListener().WireToInstance(instance)
 	}
-	if s.sessionSummaryGenerator != nil {
-		summaries.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+	if h.d.SummaryGenerator() != nil {
+		summaries.WireSessionSummaryListener(h.d.SummaryGenerator(), instance)
 	}
 	return instance, nil
 }

@@ -648,7 +648,7 @@ Do not modify the code. Only write the review verdict.
 		s.archiveItemWorkSessions(ctx, []backlogdto.ItemSessionSummary{*mostRecentReviewSession})
 	}
 
-	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, item.RepoPath, services.SessionSpawnOptions{
+	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, item.RepoPath, domain.SessionSpawnOptions{
 		Title:  title,
 		Prompt: reReviewPrompt,
 		Tags:   []string{"backlog:review"},

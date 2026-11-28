@@ -86,14 +86,14 @@ func TestSwitchWorkspace_ShouldReturnFailedPreconditionWithZeroWritesZeroCheckpo
 	for name, st := range types {
 		// A pre-existing in-flight entry would answer Unavailable if the guard ran
 		// after the in-flight store; the guard must come first.
-		e.fix.svc.workspaceSvc.inFlightSwitches.Store("switch-hidden", true)
+		e.fix.svc.workspaceSvc.InFlightSwitchesForTest().Store("switch-hidden", true)
 		_, err := e.fix.svc.SwitchWorkspace(context.Background(), connect.NewRequest(&sessionv1.SwitchWorkspaceRequest{
 			Id: "switch-hidden", Target: "/elsewhere", SwitchType: st,
 		}))
 		requireReadOnlyRefusal(t, err, name)
-		_, stillThere := e.fix.svc.workspaceSvc.inFlightSwitches.Load("switch-hidden")
+		_, stillThere := e.fix.svc.workspaceSvc.InFlightSwitchesForTest().Load("switch-hidden")
 		assert.True(t, stillThere, "%s: the guard must not touch the in-flight map", name)
-		e.fix.svc.workspaceSvc.inFlightSwitches.Delete("switch-hidden")
+		e.fix.svc.workspaceSvc.InFlightSwitchesForTest().Delete("switch-hidden")
 	}
 	assert.Empty(t, hidden.pm.writes(), "no cd marker typed into the pane")
 	assert.Empty(t, hidden.inst.Checkpoints, "no pre-switch checkpoint")
