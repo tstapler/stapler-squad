@@ -12,8 +12,7 @@ import (
 )
 
 // The flag below orders the two goroutines in real time without giving the race detector a
-// happens-before edge (a channel or atomic would), so an unsynchronized read of a field the
-// writer set under i.mu is reported on every -race run rather than only on a lucky interleaving.
+// happens-before edge, as a channel would.
 //
 //go:norace
 func raiseUnseen(flag *bool) { *flag = true }
@@ -28,6 +27,15 @@ func awaitUnseen(flag *bool) bool {
 	return true
 }
 
+// writeStatusUnderMu stands in for a writer that bypasses the actor. It deliberately skips
+// loadStatus: with the mirror's atomic store after the write, the detector was observed to stop
+// reporting an unlocked read in the mid-start test.
+func writeStatusUnderMu(i *Instance, status domain.Status) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.Status = status
+}
+
 // hookedAttachPM runs hook during the hot-restore attach, the last step before
 // startLocked decides whether it still has to transition to Active.
 type hookedAttachPM struct {
@@ -40,30 +48,27 @@ func (p hookedAttachPM) RestoreWithWorkDir(string) error {
 	return nil
 }
 
-// The CI race: the creation pipeline's terminal write lands while a retry's Start is in
-// flight on an instance with no actor.
-func TestInstanceStart_should_ReadStatusUnderLock_When_TerminalWriteLandsMidStart(t *testing.T) {
+// The CI race: a write to Status lands while a retry's Start is in flight on an instance
+// with no actor.
+func TestInstanceStart_should_ReadStatusUnderLock_When_StatusWrittenMidStart(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "terminal-write-mid-start", Status: domain.Creating, Path: t.TempDir()}
+	inst := &Instance{Title: "status-write-mid-start", Status: domain.Creating, Path: t.TempDir()}
 	var written bool
 	attaching := make(chan struct{})
 	inst.processManager = hookedAttachPM{hook: func() {
 		close(attaching)
 		assert.True(t, awaitUnseen(&written), "writer did not finish")
 	}}
-
-	epoch := inst.CreationEpoch()
-	applied := make(chan bool, 1)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		<-attaching
-		ok := inst.TryForceStatusIfEpoch(epoch, domain.Active, "")
+		writeStatusUnderMu(inst, domain.Active)
 		raiseUnseen(&written)
-		applied <- ok
 	}()
 
 	require.NoError(t, inst.Start(false), "a concurrent move to Active must not fail the start")
-	assert.True(t, <-applied)
-	assert.Equal(t, domain.Active, inst.GetLifecycleStatus())
+	<-done
 }
 
 // idleIOPM answers every pane I/O call without touching the Instance.
@@ -167,18 +172,22 @@ func TestInstanceStatusReaders_should_NotRace_When_StatusWrittenOutsideTheReader
 			assert.Error(t, i.ResumeFromHibernation(ctx))
 		}},
 		"TryStartRetry": {domain.Paused, func(_ *testing.T, i *Instance) { i.TryStartRetry() }},
+		"pauseLocked": {domain.Paused, func(t *testing.T, i *Instance) {
+			assert.ErrorContains(t, pauseLocked(&instanceState{inst: i}), "already paused")
+		}},
 	}
 	for name, tc := range readers {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			inst := &Instance{Title: "status-reader-" + name, Status: domain.Creating, Path: t.TempDir(), IsManaged: true}
+			inst.Permissions.CanPause = true
 			inst.processManager = hotRestorablePM{}
 			inst.started.Store(true)
 			var written bool
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				inst.ForceStatus(tc.written)
+				writeStatusUnderMu(inst, tc.written)
 				raiseUnseen(&written)
 			}()
 			require.True(t, awaitUnseen(&written))

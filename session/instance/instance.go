@@ -1222,7 +1222,8 @@ func (i *Instance) Snapshot() *domain.InstanceSnapshot {
 // where scrollForwardVersionMismatchCheck kicks off (Story 1.5.3), so it runs
 // at construction time rather than being deferred until a user scrolls.
 func FinishInstanceConstruction(i *Instance) {
-	i.statusMirror.Store(int32(i.Status) + 1)
+	// Only if nothing wrote Status yet: a concurrent transition's value must not be overwritten.
+	i.statusMirror.CompareAndSwap(0, int32(i.Status)+1)
 	i.snapshot.Store(BuildSnapshot(i))
 	i.kickOffClaudeVersionMismatchCheck()
 }

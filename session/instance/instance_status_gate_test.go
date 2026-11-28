@@ -87,6 +87,22 @@ func TestInstanceStatusQueries_should_FollowStatus_When_OlderSnapshotStoredLast(
 	assert.ErrorContains(t, err, "gitWorktree is nil", "must get past the paused gate")
 }
 
+func TestCaptureCurrentState_should_FollowStatus_When_OlderSnapshotStoredLast(t *testing.T) {
+	t.Parallel()
+	cwd := t.TempDir()
+	inst := newStaleSnapshotInstance(t, cwdPM{path: cwd}, domain.Paused, domain.Active)
+
+	require.NoError(t, inst.CaptureCurrentState())
+	assert.Equal(t, cwd, inst.WorkingDir)
+}
+
+type cwdPM struct {
+	hotRestorablePM
+	path string
+}
+
+func (p cwdPM) PaneCurrentPath() (string, error) { return p.path, nil }
+
 // newStaleSnapshotInstance replays the lost update: a snapshot of old is built, the instance
 // moves to current, and only then is the old snapshot stored.
 func newStaleSnapshotInstance(t *testing.T, pm ProcessManager, old, current domain.Status) *Instance {
@@ -99,6 +115,16 @@ func newStaleSnapshotInstance(t *testing.T, pm ProcessManager, old, current doma
 	inst.ForceStatus(current)
 	inst.snapshot.Store(delayed)
 	return inst
+}
+
+func TestFinishInstanceConstruction_should_KeepMirror_When_StatusAlreadyWritten(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "already-written", Status: domain.Creating}
+	inst.statusMirror.Store(int32(domain.Active) + 1) // a transition that landed first
+
+	FinishInstanceConstruction(inst)
+
+	assert.Equal(t, domain.Active, inst.gateStatus())
 }
 
 func TestGateStatus_should_MatchStatus_When_BuiltByEachConstructionPath(t *testing.T) {
@@ -117,11 +143,14 @@ func TestGateStatus_should_MatchStatus_When_BuiltByEachConstructionPath(t *testi
 	assert.Equal(t, int32(domain.Paused)+1, loaded.statusMirror.Load())
 }
 
-// Status writes outside loadStatus would leave the mirror the I/O gates read behind. The
-// allow-listed expressions are Status fields of other types.
+// Status writes outside loadStatus would leave the mirror the I/O gates read behind. The check
+// is syntactic: it covers this package only, so a write to an *Instance's Status from another
+// package is not caught. The allow-listed targets are Status fields of other types.
 func TestStatusWrites_should_GoThroughLoadStatus(t *testing.T) {
 	t.Parallel()
-	otherTypes := map[string]bool{"tasks[i]": true, "newShell": true, "copied": true}
+	otherTypes := map[string]bool{
+		"session_goal.go:tasks[i]": true, "shell_registry.go:newShell": true, "shell_registry.go:copied": true,
+	}
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
@@ -130,29 +159,53 @@ func TestStatusWrites_should_GoThroughLoadStatus(t *testing.T) {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		src, err := os.ReadFile(name)
-		require.NoError(t, err)
-		file, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
-		require.NoError(t, err)
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
+		for _, w := range statusWrites(t, name) {
+			if !otherTypes[name+":"+w.target] {
+				writes = append(writes, name+":"+w.in)
 			}
-			ast.Inspect(fn, func(n ast.Node) bool {
-				assign, ok := n.(*ast.AssignStmt)
-				if !ok {
-					return true
-				}
-				for _, lhs := range assign.Lhs {
-					sel, ok := lhs.(*ast.SelectorExpr)
-					if ok && sel.Sel.Name == "Status" && !otherTypes[types.ExprString(sel.X)] {
-						writes = append(writes, name+":"+fn.Name.Name)
-					}
-				}
-				return true
-			})
 		}
 	}
 	assert.Equal(t, []string{"instance_state.go:loadStatus"}, writes)
+}
+
+type statusWrite struct{ target, in string }
+
+// statusWrites lists assignments to, range assignments into and addresses taken of any
+// .Status selector in the file, including in package-level function literals.
+func statusWrites(t *testing.T, name string) []statusWrite {
+	t.Helper()
+	src, err := os.ReadFile(name)
+	require.NoError(t, err)
+	file, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
+	require.NoError(t, err)
+	var found []statusWrite
+	for _, decl := range file.Decls {
+		in := "package scope"
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			in = fn.Name.Name
+		}
+		ast.Inspect(decl, func(n ast.Node) bool {
+			for _, expr := range writtenExprs(n) {
+				if sel, ok := ast.Unparen(expr).(*ast.SelectorExpr); ok && sel.Sel.Name == "Status" {
+					found = append(found, statusWrite{types.ExprString(sel.X), in})
+				}
+			}
+			return true
+		})
+	}
+	return found
+}
+
+func writtenExprs(n ast.Node) []ast.Expr {
+	switch node := n.(type) {
+	case *ast.AssignStmt:
+		return node.Lhs
+	case *ast.RangeStmt:
+		return []ast.Expr{node.Key, node.Value}
+	case *ast.UnaryExpr:
+		if node.Op == token.AND {
+			return []ast.Expr{node.X}
+		}
+	}
+	return nil
 }
