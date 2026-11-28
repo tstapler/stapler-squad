@@ -26,7 +26,7 @@ Measure SC6 by applying the move on a throwaway commit and comparing `scoping re
 When `scoping move --dry-run` reports core uses of the cluster, move those declarations out first. They are usually an interface, a callback type or a constant:
 
 ```
-scoping relocate --dir server/services --to backlog_ports.go --decls SessionStopper,redactErrorDetail [--with-methods]
+scoping relocate --dir server/services --to ports.go --decls portInterface,helperFunc [--with-methods]
 scoping deps --dir server/services --decls helperA,helperB   # what a declaration drags with it
 ```
 

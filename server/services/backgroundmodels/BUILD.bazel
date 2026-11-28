@@ -22,7 +22,10 @@ alias(
 
 go_test(
     name = "backgroundmodels_test",
-    srcs = ["background_models_service_test.go"],
+    srcs = [
+        "background_models_service_test.go",
+        "testmain_test.go",
+    ],
     embed = [":backgroundmodels"],
     deps = [
         "//config",

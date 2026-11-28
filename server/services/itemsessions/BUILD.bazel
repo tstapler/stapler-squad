@@ -23,10 +23,15 @@ alias(
 
 go_test(
     name = "itemsessions_test",
-    srcs = ["item_session_uuids_test.go"],
+    srcs = [
+        "item_session_uuids_test.go",
+        "rounds_test.go",
+    ],
     embed = [":itemsessions"],
     deps = [
         "//session/domain/backlogdto",
+        "//session/instance",
+        "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
 )

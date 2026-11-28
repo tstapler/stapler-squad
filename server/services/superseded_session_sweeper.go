@@ -38,11 +38,11 @@ type supersededSessionStore interface {
 // retry, and this sweeper is the self-heal; (2) it converges on rows already
 // persisted as stale, not just ones created after this sweeper exists.
 //
-// "Which round is current" is decided by findSupersededSessions, which
-// reuses findMostRecentSessions' latest-CreatedAt-wins tie-break -- the same
+// "Which round is current" is decided by itemsessions.FindSupersededSessions, which
+// reuses itemsessions.FindMostRecentSessions' latest-CreatedAt-wins tie-break -- the same
 // helper TriggerReReview itself already calls to find the prior review round
 // to archive -- rather than this sweeper re-deriving its own, third
-// definition of "current" (see findSupersededSessions' doc comment for why
+// definition of "current" (see itemsessions.FindSupersededSessions' doc comment for why
 // that's a distinct question from spawnSessionAfterGates' EndedAt/IsSessionLive-based
 // "is a work session already open" guards, and why archiveIfNotLive's own
 // liveness check, not tie-break agreement, is what protects a genuinely-live
@@ -89,7 +89,7 @@ func (s *SupersededSessionSweeper) Start(ctx context.Context) {
 }
 
 // sweep scans every in_progress/review backlog item's session history and
-// archives any tmux-backed session findSupersededSessions identifies as not
+// archives any tmux-backed session itemsessions.FindSupersededSessions identifies as not
 // the current round for its role, skipping any that are still confirmed-live.
 func (s *SupersededSessionSweeper) sweep(ctx context.Context) {
 	if s.storage == nil || s.stopper == nil {

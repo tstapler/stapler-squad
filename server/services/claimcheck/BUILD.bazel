@@ -27,7 +27,10 @@ alias(
 
 go_test(
     name = "claimcheck_test",
-    srcs = ["claim_checker_test.go"],
+    srcs = [
+        "claim_checker_test.go",
+        "testmain_test.go",
+    ],
     embed = [":claimcheck"],
     deps = [
         "//server/services/internal/svctest",
