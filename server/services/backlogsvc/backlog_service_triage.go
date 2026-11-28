@@ -27,7 +27,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvals"
 	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/itemsessions"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/sessionports"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
@@ -1416,7 +1418,7 @@ func findActiveWorkSession(priorSessions []backlogdto.ItemSessionSummary) *backl
 // IsSessionLive — see killEndedWorkSessionPanes' doc comment for why every
 // other one is already known dead by the time this runs, and re-asking would
 // just repeat the same expensive round trip.
-func findConfirmedLiveWorkSession(stopper services.SessionStopper, priorSessions []backlogdto.ItemSessionSummary, mustRecheck map[string]bool) *backlogdto.ItemSessionSummary {
+func findConfirmedLiveWorkSession(stopper sessionports.SessionStopper, priorSessions []backlogdto.ItemSessionSummary, mustRecheck map[string]bool) *backlogdto.ItemSessionSummary {
 	if stopper == nil {
 		return nil
 	}
@@ -2714,7 +2716,7 @@ func (s *BacklogService) IsTriageLive(itemID string) bool {
 // or "" when there's nothing worth telling the spawned session (no worktree to sync,
 // or the branch was already up to date with main).
 func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string, sessions []backlogdto.ItemSessionSummary) string {
-	_, workSession := services.FindMostRecentSessions(sessions)
+	_, workSession := itemsessions.FindMostRecentSessions(sessions)
 	if workSession == nil {
 		return ""
 	}

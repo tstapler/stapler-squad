@@ -11,7 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/claimcheck"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -25,14 +25,14 @@ const minClaimOverrideReasonLength = 5
 
 // SetClaimChecker wires the cross-host claim checker and dispute resolver.
 // Either may be nil.
-func (s *BacklogService) SetClaimChecker(checker services.CrossHostClaimChecker, resolver services.ClaimDisputeResolver) {
+func (s *BacklogService) SetClaimChecker(checker claimcheck.CrossHostClaimChecker, resolver claimcheck.ClaimDisputeResolver) {
 	s.claimWiring.Store(&claimWiring{checker: checker, resolver: resolver})
 }
 
 // claimWiring is the immutable pair SetClaimChecker publishes atomically.
 type claimWiring struct {
-	checker  services.CrossHostClaimChecker
-	resolver services.ClaimDisputeResolver
+	checker  claimcheck.CrossHostClaimChecker
+	resolver claimcheck.ClaimDisputeResolver
 }
 
 func (s *BacklogService) crossHostClaimDedupEnabled() bool {
@@ -42,14 +42,14 @@ func (s *BacklogService) crossHostClaimDedupEnabled() bool {
 	return config.LoadConfig().GetFeatureFlag(featureflags.CrossHostClaimDedupFlagName)
 }
 
-func (s *BacklogService) checker() services.CrossHostClaimChecker {
+func (s *BacklogService) checker() claimcheck.CrossHostClaimChecker {
 	if w := s.claimWiring.Load(); w != nil && w.checker != nil {
 		return w.checker
 	}
-	return services.UnimplementedClaimChecker{}
+	return claimcheck.UnimplementedClaimChecker{}
 }
 
-func (s *BacklogService) disputeResolver() services.ClaimDisputeResolver {
+func (s *BacklogService) disputeResolver() claimcheck.ClaimDisputeResolver {
 	if w := s.claimWiring.Load(); w != nil {
 		return w.resolver
 	}

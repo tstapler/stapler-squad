@@ -1,4 +1,4 @@
-package services
+package backgroundmodels
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 
 func TestUpdateBackgroundModels_ValidatesAndPersists(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	s := &SessionService{}
+	s := Service{}
 	upd := func(p *sessionv1.BackgroundModelsProto) error {
 		_, err := s.UpdateBackgroundModels(context.Background(),
 			connect.NewRequest(&sessionv1.UpdateBackgroundModelsRequest{Settings: p}))

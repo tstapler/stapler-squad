@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
@@ -77,7 +76,7 @@ func (f *recordingBacklogRPC) TriggerTriage(_ context.Context, r *connect.Reques
 }
 func (f *recordingBacklogRPC) TransitionBacklogItemStatus(ctx context.Context, r *connect.Request[sessionv1.TransitionBacklogItemStatusRequest]) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error) {
 	f.transitionReqs = append(f.transitionReqs, r.Msg)
-	f.transitionActs = append(f.transitionActs, services.TransitionActorFromContext(ctx))
+	f.transitionActs = append(f.transitionActs, domain.TransitionActorFromContext(ctx))
 	if f.transitionResp != nil {
 		return connect.NewResponse(f.transitionResp), nil
 	}

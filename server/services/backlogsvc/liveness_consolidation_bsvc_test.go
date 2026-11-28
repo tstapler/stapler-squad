@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/sessionports"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -39,7 +39,7 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 
 	cases := []struct {
 		name        string
-		stopper     services.SessionStopper
+		stopper     sessionports.SessionStopper
 		prior       []backlogdto.ItemSessionSummary
 		mustRecheck map[string]bool
 		wantUUID    string

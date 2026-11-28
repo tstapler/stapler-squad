@@ -1,4 +1,5 @@
-package services
+// Package claimcheck answers whether another host already claims an external item.
+package claimcheck
 
 import (
 	"context"

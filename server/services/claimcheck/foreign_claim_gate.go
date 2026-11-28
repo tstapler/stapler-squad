@@ -1,9 +1,8 @@
-package services
+package claimcheck
 
 import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
-	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -25,10 +24,4 @@ func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (hostclaim
 		return hostclaim.ClaimRecord{}, false
 	}
 	return f.inner.ForeignClaim(externalURL)
-}
-
-// sddDefaultPipelineEnabled reads the flag with its registered default, so an
-// unset flag resolves the same way the Features page reports it.
-func SddDefaultPipelineEnabled(reg *featureflags.Registry) bool {
-	return flagsvc.FlagReader{Reg: reg}.Enabled(config.LoadConfig(), featureflags.SddDefaultPipelineFlagName)
 }

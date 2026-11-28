@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/reviewqueuerpc"
 	"github.com/tstapler/stapler-squad/server/services/rules"
+	"github.com/tstapler/stapler-squad/server/services/sessionports"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -430,7 +431,7 @@ func (s *SessionService) StartAutonomousDriverWithTimeout(inst *instance.Instanc
 }
 
 // Compile-time assertion: SessionService must implement AutonomousDriverStarter.
-var _ AutonomousDriverStarter = (*SessionService)(nil)
+var _ sessionports.AutonomousDriverStarter = (*SessionService)(nil)
 
 // SetReviewQueuePoller wires the ReviewQueuePoller so new/deleted sessions are
 // added/removed from the poller and AcknowledgeSession updates poller references.
