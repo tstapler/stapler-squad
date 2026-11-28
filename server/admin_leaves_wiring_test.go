@@ -22,8 +22,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// Serial: the state directory is process environment.
+// Serial: HOME and the state directory are process environment.
 func TestNewServerWithDeps_should_WireCaptureTapHostAndDiagnosticPoller(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	envtest.NewIsolatedStateDir(t)
 	core, err := BuildCoreDeps()
 	require.NoError(t, err)
