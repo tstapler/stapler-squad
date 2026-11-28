@@ -833,6 +833,27 @@ linters:
             - github.com/tstapler/stapler-squad/session$
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/instance$
+        # server/services/githubrpc serves the session PR RPCs, the user PR panel and the Up Next nudge; it never
+        # imports the services hub (the hub builds it and implements its PRNudger port).
+        isolate_githubrpc:
+          list-mode: strict
+          files:
+            - "**/services/githubrpc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/github$
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/access
+            - github.com/tstapler/stapler-squad/server/services/prs
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/markerstore
+            - google.golang.org/protobuf/types/known/timestamppb
         isolate_updatecheck:
           list-mode: strict
           files:

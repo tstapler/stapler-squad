@@ -1,0 +1,45 @@
+ask/delivered/0 {"detail":"Request sent to the session.","outcome":"NUDGE_OUTCOME_DELIVERED","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+ask/delivered/1 {"detail":"Already requested recently.","outcome":"NUDGE_OUTCOME_DUPLICATE","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+  order=[verify write] fetches=2
+ask/not-attached/0 err code=failed_precondition failed_precondition: session: pull request is not attached to this session: github.com/acme/app#99
+ask/not-attached/1 err code=failed_precondition failed_precondition: session: pull request is not attached to this session: github.com/acme/app#99
+  order=[] fetches=0
+ask/no-token/0 {"detail":"The GitHub account for this PR is no longer connected.","outcome":"NUDGE_OUTCOME_PR_NOT_FOUND","pr":{"host":"github.com","number":11,"owner":"acme","repo":"app"},"reasons":[]}
+ask/no-token/1 {"detail":"The GitHub account for this PR is no longer connected.","outcome":"NUDGE_OUTCOME_PR_NOT_FOUND","pr":{"host":"github.com","number":11,"owner":"acme","repo":"app"},"reasons":[]}
+  order=[] fetches=0
+ask/paused/0 {"detail":"Session paused. Open it to resume","outcome":"NUDGE_OUTCOME_PAUSED","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":[]}
+ask/paused/1 {"detail":"Session paused. Open it to resume","outcome":"NUDGE_OUTCOME_PAUSED","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":[]}
+  order=[] fetches=0
+ask/clean/0 {"detail":"Nothing to fix right now.","outcome":"NUDGE_OUTCOME_NOTHING_TO_FIX","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":[]}
+ask/clean/1 {"detail":"Nothing to fix right now.","outcome":"NUDGE_OUTCOME_NOTHING_TO_FIX","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":[]}
+  order=[] fetches=2
+ask/hidden/0 err code=failed_precondition failed_precondition: this session is a background session and is read-only, so nothing was sent
+ask/hidden/1 err code=failed_precondition failed_precondition: this session is a background session and is read-only, so nothing was sent
+  order=[] fetches=0
+ask/program/0 err code=failed_precondition failed_precondition: this session's program does not support requests
+ask/program/1 err code=failed_precondition failed_precondition: this session's program does not support requests
+  order=[] fetches=0
+ask/fetch-missing/0 {"detail":"PR not found.","outcome":"NUDGE_OUTCOME_PR_NOT_FOUND","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":[]}
+ask/fetch-missing/1 {"detail":"PR not found.","outcome":"NUDGE_OUTCOME_PR_NOT_FOUND","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":[]}
+  order=[] fetches=2
+ask/fetch-other/0 err code=unavailable unavailable: could not read the PR from GitHub; try again
+ask/fetch-other/1 err code=unavailable unavailable: could not read the PR from GitHub; try again
+  order=[] fetches=2
+ask/verify-fails/0 err code=failed_precondition failed_precondition: the session's terminal could not be verified, so nothing was sent
+ask/verify-fails/1 {"detail":"The last request to this session failed. Try again in a few seconds.","outcome":"NUDGE_OUTCOME_BUSY","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+  order=[verify] fetches=2
+ask/write-fails/0 err code=internal internal: could not deliver the request to the session
+ask/write-fails/1 {"detail":"The last request to this session failed. Try again in a few seconds.","outcome":"NUDGE_OUTCOME_BUSY","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+  order=[verify write] fetches=2
+ask/lease-busy/0 {"detail":"Session is busy. Try again when it is idle.","outcome":"NUDGE_OUTCOME_BUSY","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+ask/lease-busy/1 {"detail":"Session is busy. Try again when it is idle.","outcome":"NUDGE_OUTCOME_BUSY","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+  order=[verify write verify write] fetches=2
+ask/busy/0 {"detail":"Session is busy. Try again when it is idle.","outcome":"NUDGE_OUTCOME_BUSY","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+ask/busy/1 {"detail":"Session is busy. Try again when it is idle.","outcome":"NUDGE_OUTCOME_BUSY","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+  order=[] fetches=2
+ask/no-source/0 {"detail":"Session isn't being monitored, so it can't safely take a request. Open it to restart it.","outcome":"NUDGE_OUTCOME_BUSY","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+ask/no-source/1 {"detail":"Session isn't being monitored, so it can't safely take a request. Open it to restart it.","outcome":"NUDGE_OUTCOME_BUSY","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+  order=[] fetches=2
+shared/ask {"detail":"Request sent to the session.","outcome":"NUDGE_OUTCOME_DELIVERED","pr":{"host":"github.com","number":12,"owner":"acme","repo":"app"},"reasons":["NUDGE_REASON_FAILING_CHECKS"]}
+shared/nudge {"detail":"Already requested recently.","outcome":"NUDGE_OUTCOME_DUPLICATE","reasons":["NUDGE_REASON_FAILING_CHECKS"],"sessionId":"uuid-ask-fix"}
+  writes=1

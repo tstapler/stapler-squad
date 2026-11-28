@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -32,11 +33,15 @@ type askFixFixture struct {
 
 // newAskFixFixture wires a running claude session holding acme/app#11 and #12,
 // a fetcher reporting one failing check, and a token for #12 only.
-func newAskFixFixture(t *testing.T, status domain.Status) *askFixFixture {
+func newAskFixFixture(t *testing.T, status domain.Status, opts ...func(*instance.Instance)) *askFixFixture {
 	t.Helper()
 	fix := setupForkTestFixture(t)
 	inst := &instance.Instance{Title: "ask-fix", UUID: "uuid-ask-fix", Program: "claude", Status: status,
 		CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	// Options run before the first snapshot is published.
+	for _, opt := range opts {
+		opt(inst)
+	}
 	for _, n := range []int{11, 12} {
 		ref, err := domain.NewPRRef("", "acme", "app", n)
 		require.NoError(t, err)
@@ -97,7 +102,7 @@ func TestAskSessionToFixPullRequest_ShouldReportPRNotFound_WhenNoAccountTokenFor
 	got, err := f.ask(protoRef(11)) // only #12 has a token
 	require.NoError(t, err)
 	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, got.Outcome)
-	assert.Equal(t, nudgeNoAccountDetail, got.Detail)
+	assert.Equal(t, prs.NudgeNoAccountDetail, got.Detail)
 	assert.Equal(t, 0, f.fetcher.callCount())
 	assert.Equal(t, 0, f.rec.writes)
 }

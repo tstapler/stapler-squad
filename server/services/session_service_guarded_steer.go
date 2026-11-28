@@ -6,13 +6,11 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/githubrpc"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-// ErrSteerPaneOwnership marks a SteerFailed caused by the pre-write pane
-// ownership check (the tmux target no longer belongs to the session), as
-// opposed to a failed write. Nothing was written.
-var ErrSteerPaneOwnership = errors.New("pane ownership verification failed")
+var _ githubrpc.PRNudger = (*SessionService)(nil)
 
 // notReadyReason says why an instance cannot take an unattended PTY write.
 type notReadyReason int
@@ -24,54 +22,6 @@ const (
 	// notReadyBusy: a command is queued or running, or the pane is not at a safe idle prompt.
 	notReadyBusy
 )
-
-// SteerOutcome is the typed result of a guarded steer.
-type SteerOutcome int
-
-const (
-	// SteerUnspecified is the zero value so an unset outcome never reads as delivered.
-	SteerUnspecified SteerOutcome = iota
-	SteerDelivered
-	// SteerGuardBusy: another delivery to the session is in flight.
-	SteerGuardBusy
-	// SteerDuplicate: the same reason signature was delivered moments ago.
-	SteerDuplicate
-	// SteerCoolingDown: the same reason signature just failed to deliver; retry shortly.
-	SteerCoolingDown
-	// SteerBusy: the session is not idle.
-	SteerBusy
-	// SteerNoStatusSource: no active controller/status source to confirm idleness.
-	SteerNoStatusSource
-	// SteerNotTracked: no live instance for the session.
-	SteerNotTracked
-	// SteerFailed: the write or the pre-write pane-ownership check failed; see the error.
-	SteerFailed
-)
-
-func (o SteerOutcome) String() string {
-	switch o {
-	case SteerUnspecified:
-		return "unspecified"
-	case SteerDelivered:
-		return "delivered"
-	case SteerGuardBusy:
-		return "guard_busy"
-	case SteerDuplicate:
-		return "duplicate"
-	case SteerCoolingDown:
-		return "cooling_down"
-	case SteerBusy:
-		return "busy"
-	case SteerNoStatusSource:
-		return "no_status_source"
-	case SteerNotTracked:
-		return "not_tracked"
-	case SteerFailed:
-		return "failed"
-	default:
-		return fmt.Sprintf("SteerOutcome(%d)", int(o))
-	}
-}
 
 // guardedSteerState is SessionService's single field for guarded steering.
 // The nil hooks are production behavior; tests inject fakes and a clock.
@@ -107,7 +57,7 @@ func (s *SessionService) instanceReadyForSteer(inst *instance.Instance) notReady
 	return notReadyNone
 }
 
-// InstanceReadyForSteer implements PRNudger: true only when the shared idle
+// InstanceReadyForSteer implements githubrpc.PRNudger: true only when the shared idle
 // gate confirms inst is safe to write to.
 func (s *SessionService) InstanceReadyForSteer(inst *instance.Instance) bool {
 	return s.instanceReadyForSteer(inst) == notReadyNone
@@ -119,19 +69,19 @@ func (s *SessionService) InstanceReadyForSteer(inst *instance.Instance) bool {
 // verified unconditionally and immediately before the write because
 // steerInternal does not do it itself (tmux-name collision, ce71ad1a).
 // Not-delivered outcomes other than SteerFailed return a nil error.
-func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *instance.Instance, sig, msg string) (SteerOutcome, error) {
+func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *instance.Instance, sig, msg string) (access.SteerOutcome, error) {
 	if inst == nil {
-		return SteerNotTracked, nil
+		return access.SteerNotTracked, nil
 	}
 	id := inst.GetStableID()
 	release, outcome := s.guardedSteer.guard.TryBegin(id, sig)
 	switch outcome {
 	case access.GuardBusy:
-		return SteerGuardBusy, nil
+		return access.SteerGuardBusy, nil
 	case access.GuardDuplicate:
-		return SteerDuplicate, nil
+		return access.SteerDuplicate, nil
 	case access.GuardCoolingDown:
-		return SteerCoolingDown, nil
+		return access.SteerCoolingDown, nil
 	}
 	// A panic in ready/verify/write must not leave the session GuardBusy
 	// forever. release is once-guarded, so this is a no-op after a normal
@@ -148,11 +98,11 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *instanc
 	case notReadyNoStatusSource:
 		s.guardedSteer.guard.Abandon(id)
 		abandoned = true
-		return SteerNoStatusSource, nil
+		return access.SteerNoStatusSource, nil
 	case notReadyBusy:
 		s.guardedSteer.guard.Abandon(id)
 		abandoned = true
-		return SteerBusy, nil
+		return access.SteerBusy, nil
 	}
 
 	verify := s.guardedSteer.verifyPane
@@ -161,7 +111,7 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *instanc
 	}
 	if err := verify(ctx, inst); err != nil {
 		release(false)
-		return SteerFailed, fmt.Errorf("verify pane ownership before steering session %q: %w: %w", id, ErrSteerPaneOwnership, err)
+		return access.SteerFailed, fmt.Errorf("verify pane ownership before steering session %q: %w: %w", id, access.ErrSteerPaneOwnership, err)
 	}
 
 	write := s.guardedSteer.write
@@ -174,17 +124,17 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *instanc
 			// cooldown (same as the not-ready paths above).
 			s.guardedSteer.guard.Abandon(id)
 			abandoned = true
-			return SteerBusy, nil
+			return access.SteerBusy, nil
 		}
 		release(false)
-		return SteerFailed, err
+		return access.SteerFailed, err
 	}
 	release(true)
-	return SteerDelivered, nil
+	return access.SteerDelivered, nil
 }
 
 // SteerSessionGuarded implements SessionSteerer for the UUID-only backlog
 // auto-steer path, resolving the live instance once.
-func (s *SessionService) SteerSessionGuarded(ctx context.Context, sessionUUID, sig, msg string) (SteerOutcome, error) {
+func (s *SessionService) SteerSessionGuarded(ctx context.Context, sessionUUID, sig, msg string) (access.SteerOutcome, error) {
 	return s.SteerInstanceGuarded(ctx, s.FindLiveInstance(sessionUUID), sig, msg)
 }

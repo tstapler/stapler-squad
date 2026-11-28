@@ -703,7 +703,7 @@ func (s *SessionService) CreateSession(
 
 	// Union statically-configured hosts with hosts from dynamically-added
 	// accounts (gh CLI import, device auth) — mirrors ListGitHubAccounts'
-	// host union in github_user_service.go so CreateSession recognizes the
+	// host union in githubrpc/github_user_service.go so CreateSession recognizes the
 	// same enterprise URLs the omnibar's detector does.
 	enterpriseHosts := s.enterpriseHosts(cfg)
 
@@ -1143,7 +1143,7 @@ func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) (dom
 
 // enterpriseHosts unions statically-configured GitHub Enterprise hosts with hosts
 // from dynamically-added accounts (gh CLI import, device auth) — mirrors
-// ListGitHubAccounts' host union in github_user_service.go so every caller
+// ListGitHubAccounts' host union in githubrpc/github_user_service.go so every caller
 // recognizes the same enterprise URLs the omnibar's detector does. CreateSession
 // and PreviewDestinationPath both call this so the two never diverge.
 func (s *SessionService) enterpriseHosts(cfg *config.Config) []string {

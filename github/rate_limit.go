@@ -15,7 +15,7 @@ import (
 // maxRetryAfterSleep caps how long we honour a Retry-After header so a
 // misbehaving server cannot block us indefinitely.
 //
-// server/services/github_service.go's secondaryRateLimitMaxWait mirrors this
+// server/services/prs/github_ratelimit.go's secondaryRateLimitMaxWait mirrors this
 // exact value under its own name (it uses the same cap to classify a
 // rate-limit error's reset time as secondary vs. primary) — github cannot
 // import server/services (a cycle) so the value is duplicated rather than

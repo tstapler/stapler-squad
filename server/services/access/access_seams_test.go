@@ -2,11 +2,13 @@ package access
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,13 +28,17 @@ func TestNewInputSourceFromContext_ShouldCountUnderTheStampedListener_WhenARecor
 		"no stamped record is counted under the bounded unknown label")
 }
 
+var reportRuns atomic.Int64
+
 func TestTerminalInputReport_ShouldListRecordedSessions_WhenInputWasRecordedOnTheDefaultMetrics(t *testing.T) {
 	t.Parallel()
-	RecordTerminalInput(NewInputSource(PathCapture, ListenerLocal, "report-session"), []byte("x"), StageReceived)
+	// The default metrics live as long as the process, so each run (-count=N) needs its own row.
+	session := fmt.Sprintf("report-session-%d", reportRuns.Add(1))
+	RecordTerminalInput(NewInputSource(PathCapture, ListenerLocal, session), []byte("x"), StageReceived)
 
 	var row *TerminalInputSession
 	for _, r := range TerminalInputReport() {
-		if r.SessionID == "report-session" {
+		if r.SessionID == session {
 			row = &r
 		}
 	}

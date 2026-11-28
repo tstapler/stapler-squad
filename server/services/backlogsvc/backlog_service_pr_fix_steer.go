@@ -17,11 +17,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/prs"
@@ -353,15 +353,15 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	message := buildSteerMessage(program, fixContext)
 	outcome, deliverErr := s.sessionSteerer.SteerSessionGuarded(ctx, activeSessionUUID, candidate.key(s.prLinkKeyForItem(ctx, itemID)), message)
 	switch outcome {
-	case services.SteerGuardBusy, services.SteerDuplicate, services.SteerCoolingDown:
+	case access.SteerGuardBusy, access.SteerDuplicate, access.SteerCoolingDown:
 		// A manual nudge is in flight, just landed, or a just-failed write is cooling down; not a failure, retry next tick.
 		log.InfoLog().Printf("[AutoReopenForPRFix] steer for item=%s skipped by nudge guard (outcome=%s); retrying next tick", itemID, outcome)
 		return
-	case services.SteerBusy, services.SteerNoStatusSource, services.SteerNotTracked:
+	case access.SteerBusy, access.SteerNoStatusSource, access.SteerNotTracked:
 		// Session stopped being safely writable after the IsReadyForSteer check above.
 		s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
 		return
-	case services.SteerUnspecified:
+	case access.SteerUnspecified:
 		// An unset outcome must never read as delivered.
 		if deliverErr == nil {
 			deliverErr = errors.New("guarded steer returned an unspecified outcome")

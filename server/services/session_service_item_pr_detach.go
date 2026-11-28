@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 
-	"connectrpc.com/connect"
 	"context"
+
+	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/terminalstate"
@@ -28,7 +30,7 @@ func (s *SessionService) DetachItemPullRequest(
 	if itemID == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("item_id is required"))
 	}
-	ref, err := prRefFromProto(req.Msg.GetPr())
+	ref, err := prs.PRRefFromProto(req.Msg.GetPr())
 	if err != nil {
 		return nil, err
 	}

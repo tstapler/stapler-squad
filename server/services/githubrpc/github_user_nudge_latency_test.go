@@ -1,6 +1,6 @@
 //go:build !race
 
-package services
+package githubrpc
 
 import (
 	"sort"

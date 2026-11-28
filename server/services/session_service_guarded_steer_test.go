@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -60,7 +61,7 @@ func TestSteerInstanceGuarded_should_WriteOnce_When_IdleAndPaneOwned(t *testing.
 	out, err := svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 
 	require.NoError(t, err)
-	assert.Equal(t, SteerDelivered, out)
+	assert.Equal(t, access.SteerDelivered, out)
 	assert.Equal(t, 1, rec.writes)
 }
 
@@ -75,7 +76,7 @@ func TestSteerInstanceGuarded_should_CallVerifyPaneOwnershipExactlyOncePerWriteB
 	rec.order = nil
 	out, err := svc.SteerSessionGuarded(context.Background(), inst.GetStableID(), "sigB", "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerDelivered, out)
+	assert.Equal(t, access.SteerDelivered, out)
 	assert.Equal(t, []string{"verify", "write"}, rec.order)
 }
 
@@ -85,12 +86,12 @@ func TestSteerInstanceGuarded_should_WriteZeroBytesAndNotRecord_When_PaneOwnersh
 
 	out, err := svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 	require.Error(t, err)
-	assert.Equal(t, SteerFailed, out)
+	assert.Equal(t, access.SteerFailed, out)
 	assert.Zero(t, rec.writes)
 
 	out, err = svc.SteerSessionGuarded(context.Background(), inst.GetStableID(), "sigB", "msg")
 	require.Error(t, err)
-	assert.Equal(t, SteerFailed, out)
+	assert.Equal(t, access.SteerFailed, out)
 	assert.Zero(t, rec.writes)
 
 	// Identity fixed: a retry of the same signature delivers exactly once after the 10s cooldown.
@@ -99,7 +100,7 @@ func TestSteerInstanceGuarded_should_WriteZeroBytesAndNotRecord_When_PaneOwnersh
 	svc.guardedSteer.guard.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 11, 0, time.UTC) })
 	out, err = svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerDelivered, out)
+	assert.Equal(t, access.SteerDelivered, out)
 	assert.Equal(t, 1, rec.writes)
 }
 
@@ -112,21 +113,21 @@ func TestSteerInstanceGuarded_should_ReleaseWithFailureAndSkipDuplicateRecord_Wh
 
 	clk.Advance(5 * time.Second)
 	out, _ := svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
-	assert.Equal(t, SteerCoolingDown, out, "inside the 10s failure cooldown; must not read as already delivered")
+	assert.Equal(t, access.SteerCoolingDown, out, "inside the 10s failure cooldown; must not read as already delivered")
 
 	clk.Advance(6 * time.Second)
 	out, err = svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerDelivered, out, "cooldown, not the 60s delivery window, applied")
+	assert.Equal(t, access.SteerDelivered, out, "cooldown, not the 60s delivery window, applied")
 }
 
 func TestSteerInstanceGuarded_should_NotVerifyWriteOrRecord_When_NotReady(t *testing.T) {
 	for name, tc := range map[string]struct {
 		reason notReadyReason
-		want   SteerOutcome
+		want   access.SteerOutcome
 	}{
-		"busy":             {notReadyBusy, SteerBusy},
-		"no status source": {notReadyNoStatusSource, SteerNoStatusSource},
+		"busy":             {notReadyBusy, access.SteerBusy},
+		"no status source": {notReadyNoStatusSource, access.SteerNoStatusSource},
 	} {
 		t.Run(name, func(t *testing.T) {
 			svc, inst, rec, _ := newGuardedSteerFixture(t, tc.reason)
@@ -141,7 +142,7 @@ func TestSteerInstanceGuarded_should_NotVerifyWriteOrRecord_When_NotReady(t *tes
 			svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return notReadyNone }
 			out, err = svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 			require.NoError(t, err)
-			assert.Equal(t, SteerDelivered, out)
+			assert.Equal(t, access.SteerDelivered, out)
 		})
 	}
 }
@@ -153,7 +154,7 @@ func TestSteerInstanceGuarded_should_ReturnGuardBusyOrDuplicateWithoutWrite_When
 
 	out, err := svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerDuplicate, out)
+	assert.Equal(t, access.SteerDuplicate, out)
 	assert.Equal(t, 1, rec.writes)
 
 	release, g := svc.guardedSteer.guard.TryBegin(inst.GetStableID(), "sigZ")
@@ -161,7 +162,7 @@ func TestSteerInstanceGuarded_should_ReturnGuardBusyOrDuplicateWithoutWrite_When
 	defer release(false)
 	out, err = svc.SteerInstanceGuarded(context.Background(), inst, "sigB", "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerGuardBusy, out)
+	assert.Equal(t, access.SteerGuardBusy, out)
 	assert.Equal(t, 1, rec.writes)
 }
 
@@ -171,7 +172,7 @@ func TestSteerSessionGuarded_should_ReturnNotTrackedWithoutWrite_When_FindLiveIn
 	out, err := svc.SteerSessionGuarded(context.Background(), "no-such-session", "sigA", "msg")
 
 	require.NoError(t, err)
-	assert.Equal(t, SteerNotTracked, out)
+	assert.Equal(t, access.SteerNotTracked, out)
 	assert.Zero(t, rec.writes)
 }
 
@@ -186,20 +187,20 @@ func TestSteerInstanceGuarded_should_ReleaseClaim_When_WritePanics(t *testing.T)
 	svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { return nil }
 	out, err := svc.SteerInstanceGuarded(context.Background(), inst, "sigB", "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerDelivered, out, "a panic must not leave the session GuardBusy")
+	assert.Equal(t, access.SteerDelivered, out, "a panic must not leave the session GuardBusy")
 }
 
 func TestSteerOutcome_should_NotBeDelivered_When_ZeroValue(t *testing.T) {
-	var o SteerOutcome
-	assert.Equal(t, SteerUnspecified, o)
-	assert.NotEqual(t, SteerDelivered, o)
+	var o access.SteerOutcome
+	assert.Equal(t, access.SteerUnspecified, o)
+	assert.NotEqual(t, access.SteerDelivered, o)
 }
 
 func TestSteerOutcome_String_should_NameEveryOutcome(t *testing.T) {
-	for o, want := range map[SteerOutcome]string{
-		SteerUnspecified: "unspecified", SteerDelivered: "delivered", SteerGuardBusy: "guard_busy",
-		SteerDuplicate: "duplicate", SteerCoolingDown: "cooling_down", SteerBusy: "busy", SteerNoStatusSource: "no_status_source",
-		SteerNotTracked: "not_tracked", SteerFailed: "failed", SteerOutcome(99): "SteerOutcome(99)",
+	for o, want := range map[access.SteerOutcome]string{
+		access.SteerUnspecified: "unspecified", access.SteerDelivered: "delivered", access.SteerGuardBusy: "guard_busy",
+		access.SteerDuplicate: "duplicate", access.SteerCoolingDown: "cooling_down", access.SteerBusy: "busy", access.SteerNoStatusSource: "no_status_source",
+		access.SteerNotTracked: "not_tracked", access.SteerFailed: "failed", access.SteerOutcome(99): "SteerOutcome(99)",
 	} {
 		assert.Equal(t, want, o.String())
 	}
@@ -213,16 +214,16 @@ func TestSteerSessionGuarded_should_ReturnDuplicate_When_PRWatchSignatureRepeats
 
 	out, err := svc.SteerSessionGuarded(context.Background(), inst.GetStableID(), sig, "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerDelivered, out)
+	assert.Equal(t, access.SteerDelivered, out)
 
 	out, err = svc.SteerSessionGuarded(context.Background(), inst.GetStableID(), sig, "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerDuplicate, out)
+	assert.Equal(t, access.SteerDuplicate, out)
 	assert.Equal(t, 1, rec.writes)
 
 	// A manual-nudge style signature for the same PR and reason also dedupes.
 	out, err = svc.SteerSessionGuarded(context.Background(), inst.GetStableID(),
 		access.GuardSignature(guardedSteerWatchPR, access.ReasonSetSignature("FAILING_CHECKS")), "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerDuplicate, out)
+	assert.Equal(t, access.SteerDuplicate, out)
 }

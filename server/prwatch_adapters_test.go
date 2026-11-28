@@ -9,7 +9,7 @@ import (
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/prs"
 )
 
@@ -17,7 +17,7 @@ type prwatchSpy struct {
 	calls  []string
 	hidden bool
 	sigs   []string
-	out    services.SteerOutcome
+	out    access.SteerOutcome
 }
 
 func (p *prwatchSpy) IsHiddenSession(string) bool {
@@ -25,7 +25,7 @@ func (p *prwatchSpy) IsHiddenSession(string) bool {
 	return p.hidden
 }
 
-func (p *prwatchSpy) SteerSessionGuarded(_ context.Context, _, sig, _ string) (services.SteerOutcome, error) {
+func (p *prwatchSpy) SteerSessionGuarded(_ context.Context, _, sig, _ string) (access.SteerOutcome, error) {
 	p.calls = append(p.calls, "SteerSessionGuarded")
 	p.sigs = append(p.sigs, sig)
 	return p.out, nil
@@ -34,7 +34,7 @@ func (p *prwatchSpy) SteerSessionGuarded(_ context.Context, _, sig, _ string) (s
 // The spy implements only the two-method subset, so IsReadyForSteer and
 // SteerActiveSession cannot be called by construction.
 func TestPRWatchSteerer_should_CheckHiddenThenGuardedSteerWithoutIsReadyPrecheck_When_Steering(t *testing.T) {
-	spy := &prwatchSpy{out: services.SteerDelivered}
+	spy := &prwatchSpy{out: access.SteerDelivered}
 	out, err := prwatchSteerer{svc: spy}.Steer(context.Background(), prwatch.SteerRequest{
 		SessionUUID: "u", Repo: "o/r", PR: 3, Kinds: []prwatch.Kind{prwatch.KindCI}, Text: "t"})
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestPRWatchSteerer_should_CheckHiddenThenGuardedSteerWithoutIsReadyPrecheck
 }
 
 func TestPRWatchSteerer_should_RefuseWithoutSteering_When_SessionHidden(t *testing.T) {
-	spy := &prwatchSpy{hidden: true, out: services.SteerDelivered}
+	spy := &prwatchSpy{hidden: true, out: access.SteerDelivered}
 	out, err := prwatchSteerer{svc: spy}.Steer(context.Background(), prwatch.SteerRequest{
 		SessionUUID: "u", Repo: "o/r", PR: 3, Kinds: []prwatch.Kind{prwatch.KindCI}})
 	require.Error(t, err)
@@ -52,25 +52,25 @@ func TestPRWatchSteerer_should_RefuseWithoutSteering_When_SessionHidden(t *testi
 }
 
 func TestPRWatchSteerer_should_MapEverySteerOutcomeToAPortOutcome_When_Converted(t *testing.T) {
-	for o := services.SteerUnspecified; !isUnknownSteerOutcome(o); o++ {
+	for o := access.SteerUnspecified; !isUnknownSteerOutcome(o); o++ {
 		got := prwatchOutcome(o)
 		assert.NotEmpty(t, got, o.String())
-		if o == services.SteerUnspecified {
+		if o == access.SteerUnspecified {
 			assert.Equal(t, prwatch.OutcomeUnspecified, got)
 		} else {
 			assert.NotEqual(t, prwatch.OutcomeUnspecified, got, o.String())
 			assert.Equal(t, o.String(), string(got))
 		}
 	}
-	assert.Equal(t, prwatch.OutcomeUnspecified, prwatchOutcome(services.SteerOutcome(999)))
+	assert.Equal(t, prwatch.OutcomeUnspecified, prwatchOutcome(access.SteerOutcome(999)))
 }
 
-func isUnknownSteerOutcome(o services.SteerOutcome) bool {
+func isUnknownSteerOutcome(o access.SteerOutcome) bool {
 	return len(o.String()) > 12 && o.String()[:12] == "SteerOutcome"
 }
 
 func TestPRWatchSteerer_should_PassStablePerPRPerKindSignature_When_Steering(t *testing.T) {
-	spy := &prwatchSpy{out: services.SteerDelivered}
+	spy := &prwatchSpy{out: access.SteerDelivered}
 	s := prwatchSteerer{svc: spy}
 	steer := func(repo string, pr int, kinds ...prwatch.Kind) {
 		_, err := s.Steer(context.Background(), prwatch.SteerRequest{SessionUUID: "u", Repo: repo, PR: pr, Kinds: kinds})
