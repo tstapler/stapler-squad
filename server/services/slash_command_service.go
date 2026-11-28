@@ -61,7 +61,7 @@ func (s *SlashCommandService) ListSlashCommands(
 	// fsops.ValidateTargetDirectory check CreateWorkflow/UpdateWorkflow apply to the identical
 	// field (workflow_service.go) before it's ever joined into a filesystem path.
 	if targetDir != "" {
-		expanded, err := expandTilde(targetDir)
+		expanded, err := fsops.ExpandTilde(targetDir)
 		if err == nil {
 			if valErr := fsops.ValidateTargetDirectory(expanded); valErr != nil {
 				log.Warn("[ListSlashCommands] rejected target_directory", "target_directory", targetDir, "err", valErr)

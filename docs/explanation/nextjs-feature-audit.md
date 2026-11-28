@@ -61,7 +61,7 @@ investigate `size-limit` failures when they happen. Tracked in
 **`content-security-policy`** ([guide](https://nextjs.org/docs/app/guides/content-security-policy)) —
 The guide's nonce-based CSP requires a live server and doesn't apply here, but
 its static "without nonces" fixed-header approach does. The app currently
-ships zero CSP for its own pages — `server/services/file_service.go:789` only
+ships zero CSP for its own pages — `server/services/fileops/file_service.go:639` only
 sets `Content-Security-Policy: sandbox` when serving untrusted user-uploaded
 files (PDF/HTML previews), not for the app itself. Since `next.config.ts`'s
 `headers()` doesn't run under static export either, this has to be added on

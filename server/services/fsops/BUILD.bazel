@@ -4,10 +4,12 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "fsops",
     srcs = [
+        "dir_cache.go",
         "dup_fd_unix.go",
         "dup_fd_windows.go",
         "exec_unix.go",
         "exec_windows.go",
+        "expand_tilde.go",
         "file_atomic.go",
         "file_backend.go",
         "file_backend_mem.go",
@@ -53,6 +55,8 @@ alias(
 go_test(
     name = "fsops_test",
     srcs = [
+        "dir_cache_test.go",
+        "expand_tilde_test.go",
         "file_atomic_test.go",
         "file_backend_test.go",
         "file_codec_test.go",
@@ -70,6 +74,7 @@ go_test(
         "//proto/session/v1:sessionv1_go",
         "//server/services/fsops/fsopstest",
         "//session/domain",
+        "//testutil",
         "@com_connectrpc_connect//:connect",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

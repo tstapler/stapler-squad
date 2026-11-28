@@ -400,6 +400,7 @@ go_test(
         "//server/services/backlogflow",
         "//server/services/backlogsvc",
         "//server/services/featureflags",
+        "//server/services/fileops",
         "//server/services/flagsvc",
         "//server/services/forwardsync",
         "//server/services/guidance",

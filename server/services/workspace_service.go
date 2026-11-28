@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +15,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/fileops"
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -39,6 +40,12 @@ import (
 type WorkspaceProvider interface {
 	GetWorkspace(sessionID string) (domain.Workspace, error)
 }
+
+// FileService finds these by type assertion, so a signature drift would otherwise drop them silently.
+var (
+	_ fileops.WriteGuard        = (*WorkspaceService)(nil)
+	_ fileops.StatusInvalidator = (*WorkspaceService)(nil)
+)
 
 // LiveInstanceFinder is satisfied by SessionService. It returns the live in-memory
 // instance by scanning the poller's tracked sessions (O(N)) or nil if the session is
@@ -166,10 +173,10 @@ func (ws *WorkspaceService) CheckWriteAccess(sessionID string) error {
 		return err
 	}
 	if inst.IsArchived() {
-		return archivedSessionRefusal()
+		return fileops.ArchivedSessionRefusal()
 	}
 	if _, err := access.AccessForUnary(inst, ws.guards).Writer(nil); err != nil {
-		return hiddenSessionRefusal()
+		return fileops.HiddenSessionRefusal()
 	}
 	return nil
 }

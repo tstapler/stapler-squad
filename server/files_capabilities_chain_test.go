@@ -13,7 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/middleware"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/fileops"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -25,7 +25,7 @@ func (noWorkspace) GetWorkspace(string) (domain.Workspace, error) {
 
 type capsStub struct {
 	sessionv1connect.UnimplementedSessionServiceHandler
-	files *services.FileService
+	files *fileops.FileService
 }
 
 func (s capsStub) GetFileTransportCapabilities(ctx context.Context, req *connect.Request[sessionv1.GetFileTransportCapabilitiesRequest]) (*connect.Response[sessionv1.GetFileTransportCapabilitiesResponse], error) {
@@ -38,7 +38,7 @@ func TestGetFileTransportCapabilities_ShouldBeUnguardedAndTruthful_OnRealLocalAn
 	srv, _ := newServerBase("localhost:8543")
 	t.Cleanup(srv.connCtxCancel)
 	path, h := sessionv1connect.NewSessionServiceHandler(
-		capsStub{files: services.NewFileService(noWorkspace{})}, ConnectOptions(nil)...)
+		capsStub{files: fileops.NewFileService(noWorkspace{})}, ConnectOptions(nil)...)
 	srv.RegisterConnectHandler("/api"+path, http.StripPrefix("/api", h))
 
 	_, guarded := guardedProcedures["/api"+sessionv1connect.SessionServiceGetFileTransportCapabilitiesProcedure]

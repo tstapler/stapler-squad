@@ -861,7 +861,7 @@ func isPathUnderAnyRoot(cleanPath string, roots []string) bool {
 // submit_triage_result "plan_artifact_path" argument) — so this enforces
 // containment under one of planArtifactsAllowedRoots(repoPath) before ever
 // touching disk, the same baseDir-prefix pattern used in
-// server/services/workspacedb/database_service.go and server/services/file_service.go.
+// server/services/workspacedb/database_service.go and server/services/fileops/file_service.go.
 // Returns "" on any error, including a containment rejection (plan is
 // best-effort context, not required).
 func readPlanFile(artifactsDir, repoPath string) string {
