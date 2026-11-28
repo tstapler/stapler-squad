@@ -203,6 +203,7 @@ go_test(
     name = "services_test",
     srcs = [
         "ack_env_helpers_test.go",
+        "admin_rpc_golden_test.go",
         "analytics_escape_rollup_test.go",
         "approval_fixtures_test.go",
         "approval_handler_composition_test.go",
