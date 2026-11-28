@@ -49,6 +49,7 @@ go_test(
         "sessions_test.go",
         "snapshot_test.go",
         "start_test.go",
+        "testmain_test.go",
     ],
     embed = [":prwatchhost"],
     deps = [

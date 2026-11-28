@@ -43,10 +43,12 @@ go_test(
         "terminal_input_test.go",
         "terminal_latency_test.go",
         "terminal_mux_test.go",
+        "testmain_test.go",
         "workflow_engine_w21a_test.go",
     ],
     embed = [":actuator"],
     deps = [
+        "//envtest",
         "//internal/termlat",
         "//profiling",
         "//server/services/access",

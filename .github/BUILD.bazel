@@ -8,7 +8,10 @@ exports_files(
 )
 
 exports_files(
-    ["workflows/bazel.yml"],
+    [
+        "workflows/bazel.yml",
+        "workflows/lint.yml",
+    ],
     visibility = ["//tools/bzl/scoping:__pkg__"],
 )
 

@@ -20,8 +20,12 @@ alias(
 
 go_test(
     name = "tlscert_test",
-    srcs = ["tls_test.go"],
+    srcs = [
+        "testmain_test.go",
+        "tls_test.go",
+    ],
     embed = [":tlscert"],
+    deps = ["//envtest"],
 )
 
 # Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.

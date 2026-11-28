@@ -1,13 +1,16 @@
 package server
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/prwatchhost"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -53,4 +56,27 @@ func TestPRWatchDeps_should_CarryTheServerAddrDependenciesAndLifecycle_When_Buil
 	require.Len(t, srv.shutdownHooks, 1)
 	srv.shutdownHooks[0]()
 	assert.True(t, ran)
+}
+
+// A nil *SessionService or *Storage would reach the leaf as a non-nil interface,
+// so startPRWatch has to stop before building Deps. Reads the process-global
+// status provider, so not parallel.
+func TestStartPRWatch_should_StartNothing_When_SessionServiceOrStorageIsNil(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	t.Cleanup(func() { prwatchhost.SetStatusProvider(nil) })
+	for name, deps := range map[string]*ServerDependencies{
+		"no session service": {Storage: &session.Storage{}},
+		"no storage":         {SessionService: &services.SessionService{}},
+	} {
+		prwatchhost.SetStatusProvider(nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		srv := &Server{}
+
+		startPRWatch(ctx, srv, deps)
+
+		assert.Nil(t, prwatchhost.CurrentStatusProvider(), name)
+		assert.Empty(t, srv.shutdownHooks, name)
+		cancel()
+		srv.backgroundTasksWG.Wait()
+	}
 }

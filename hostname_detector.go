@@ -148,7 +148,7 @@ type HostnameDetector struct {
 	// goroutine touches it. nil until seedVerified or the first recompute.
 	verified map[string]*verifyState
 
-	// certPublisher wraps server.EnsureNetworkTLSCerts by default; tests
+	// certPublisher is tlscert.EnsureNetworkTLSCerts by default; tests
 	// inject a fake to simulate issuance failure or to count invocations
 	// without touching disk.
 	certPublisher func(map[string][]string) (string, map[string]*tlscert.NetworkCert, error)
@@ -349,7 +349,7 @@ func (d *HostnameDetector) publishVerified(verifiedNew []string) {
 	}
 }
 
-// publishCertsWithTimeout runs d.certPublisher (server.EnsureNetworkTLSCerts
+// publishCertsWithTimeout runs d.certPublisher (tlscert.EnsureNetworkTLSCerts
 // by default) with its own bounded timeout. certPublisher takes no context of
 // its own and does synchronous, blocking disk I/O (MkdirAll, LoadX509KeyPair,
 // WriteFile) plus cert generation -- calling it directly from redetect, as
