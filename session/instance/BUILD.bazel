@@ -64,6 +64,7 @@ go_library(
         "pr_set.go",
         "pr_set_rules.go",
         "pr_tracking.go",
+        "pr_url_repo.go",
         "process_capabilities.go",
         "process_manager.go",
         "prompt_delivery.go",

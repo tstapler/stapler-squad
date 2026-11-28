@@ -129,6 +129,7 @@ func TestNewCore_should_UseInjectedWorktreeOpener_ForStuckReportCICheck(t *testi
 
 	assert.Contains(t, text, "No failing checks right now.", "the fake's PR status must drive the cross-check")
 	assert.Equal(t, [5]string{"/repo", "/repo", "", "", ""}, fake.opened)
+	assert.Equal(t, "o/r", fake.ghRepo, "the report must query the PR's repo")
 }
 
 func TestNewCore_should_ReportCICheckUnavailable_When_OpenerAbsent(t *testing.T) {
@@ -142,4 +143,17 @@ func TestWithWorktreeOpener_should_CarryCallersOpener(t *testing.T) {
 	t.Parallel()
 	assert.Nil(t, WorktreeOpenerFromOptions())
 	assert.NotNil(t, WorktreeOpenerFromOptions(WithWorktreeOpener(realWorktreeOpener)))
+}
+
+func TestStuckReportCheckerFactory_PointsGHAtThePRsRepo(t *testing.T) {
+	t.Parallel()
+	for url, want := range map[string]string{
+		"https://github.com/tstapler/stapler-squad/pull/1785": "tstapler/stapler-squad",
+		"not-a-url": "",
+		"https://github.com/git@localhost:o/r/pull/1": "",
+	} {
+		fake := &fakeWorktree{}
+		stuckReportCheckerFactory(recordingOpener(fake))("/repo", url)
+		assert.Equal(t, want, fake.ghRepo, url)
+	}
 }

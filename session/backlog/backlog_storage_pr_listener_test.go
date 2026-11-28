@@ -51,7 +51,7 @@ func TestPushAndCreatePR_ShouldReuseTrackedPROnlyWhenOpenOnBranch_WhenReaderOn(t
 			defer cleanup()
 			h := newPreflightHarness(storage, func() (github.RepoSettingsResult, bool) { return autoMergeOff, true })
 			h.listener.backlogReaderOverride = func() bool { return tc.reader }
-			h.listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+			h.listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 				return &github.PRInfo{State: tc.state, HeadRef: tc.head}, nil
 			})
 			item, is := newPreflightFixture(t, storage)

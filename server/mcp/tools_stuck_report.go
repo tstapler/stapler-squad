@@ -26,6 +26,7 @@ type stuckReportPRChecker interface {
 	GetPRStatus(ctx context.Context, prNumber int) (*git.PRStatus, error)
 	GetPRDiffFiles(ctx context.Context, prNumber int) ([]string, error)
 	GetCheckRunLog(ctx context.Context, ref git.CheckRunRef) (string, error)
+	SetGHRepo(repo string)
 }
 
 var (
@@ -186,7 +187,7 @@ func (h *backlogHandlers) writeCICrossCheck(ctx context.Context, sb *strings.Bui
 	sb.WriteString("## Live CI cross-check against this PR's own diff\n")
 	var checker stuckReportPRChecker
 	if h.prCheckerFactory != nil {
-		checker = h.prCheckerFactory(item.RepoPath)
+		checker = h.prCheckerFactory(item.RepoPath, item.PrURL)
 	}
 	if checker == nil {
 		sb.WriteString("  (unavailable: no worktree for this repo path)\n\n")

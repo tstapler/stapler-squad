@@ -78,7 +78,7 @@ func newUntrackedWorkSessionWithBranchName(t *testing.T, storage *session.Storag
 // the "verified" stub shape a pre-existing mutation-path test needs so
 // Story 6's new guard confirms the match instead of failing closed.
 func stubMatchingPRByNumberFinder(listener *BacklogLifecycleListener, headBranch string) {
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: headBranch}, nil
 	})
 }
@@ -90,11 +90,11 @@ func TestVerifyPRBelongsToItem_should_ReturnTrue_When_HeadBranchMatches(t *testi
 	ctx := context.Background()
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: "backlog/x"}, nil
 	})
 
-	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", prOwnership{branches: []string{"backlog/x"}}, 42)
+	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", "", prOwnership{branches: []string{"backlog/x"}}, 42)
 
 	require.NoError(t, err)
 	assert.True(t, matches)
@@ -107,11 +107,11 @@ func TestVerifyPRBelongsToItem_should_ReturnFalse_When_HeadBranchDiffers(t *test
 	ctx := context.Background()
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: "feature/y"}, nil
 	})
 
-	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", prOwnership{branches: []string{"backlog/x"}}, 42)
+	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", "", prOwnership{branches: []string{"backlog/x"}}, 42)
 
 	require.NoError(t, err)
 	assert.False(t, matches)
@@ -129,12 +129,12 @@ func TestVerifyPRBelongsToItem_should_ReturnFalse_When_TrackedBranchEmpty(t *tes
 
 	listener := NewBacklogLifecycleListener(storage)
 	finderCalled := false
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		finderCalled = true
 		return &github.PRInfo{HeadRef: "backlog/x"}, nil
 	})
 
-	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", prOwnership{}, 42)
+	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", "", prOwnership{}, 42)
 
 	assert.False(t, matches)
 	require.Error(t, err)
@@ -148,11 +148,11 @@ func TestVerifyPRBelongsToItem_should_ReturnFalse_When_FinderErrors(t *testing.T
 	ctx := context.Background()
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return nil, errors.New("transient GitHub failure")
 	})
 
-	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", prOwnership{branches: []string{"backlog/x"}}, 42)
+	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", "", prOwnership{branches: []string{"backlog/x"}}, 42)
 
 	assert.False(t, matches, "a lookup failure must never be read as a verified match")
 	require.Error(t, err)
@@ -195,7 +195,7 @@ func TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetect
 	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/tracked-branch", shippedSHA)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		// Mismatched: report_pr_created's override_reason path would attach
 		// a PR whose real head branch differs from the item's tracked one.
 		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
@@ -258,7 +258,7 @@ func TestReconcilePRPending_should_NotTransitionToDone_When_HeadBranchMismatchDe
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
 	})
 
@@ -337,7 +337,7 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
 	})
 	notifier := &sessiontest.FakeNotifier{}
@@ -398,7 +398,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHead
 	listener.SetPRFixSpawner(fakeSpawner)
 	// Mismatched: the finder reports a different head branch than this
 	// item's actually-tracked branch (backlog/closed-mismatch).
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
 	})
 
@@ -458,7 +458,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_CIFailingPRH
 	overridePRPendingChecker(t, listener, checker)
 	fakeSpawner := &fakePRFixSpawner{}
 	listener.SetPRFixSpawner(fakeSpawner)
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
 	})
 
@@ -584,7 +584,7 @@ func TestReconcilePRPending_should_TransitionToDone_When_OnlyTipCommitSurvives(t
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: "backlog/stapler-squad-terminal-bar-layout-fix", HeadSHA: tip}, nil
 	})
 
@@ -648,7 +648,7 @@ func TestReconcilePRPending_should_RetryWithoutMarkingStuck_When_OwnershipVerifi
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
 	calls := 0
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		calls++
 		if calls == 1 {
 			return nil, fmt.Errorf("PR request failed: %w", errors.New("github: admission control rejected request: background headroom reserved for resource core"))
@@ -716,11 +716,11 @@ func TestVerifyPRBelongsToItem_should_ReturnFalse_When_NeitherBranchNorTipMatche
 	defer cleanup()
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+	listener.SetPRByNumberFinder(func(context.Context, string, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: "someone-elses-branch", HeadSHA: "ffff"}, nil
 	})
 
-	matches, err := listener.verifyPRBelongsToItem(context.Background(), "/tmp/fake-repo",
+	matches, err := listener.verifyPRBelongsToItem(context.Background(), "/tmp/fake-repo", "",
 		prOwnership{branches: []string{"backlog/x"}, tipSHA: "aaaa"}, 42)
 
 	require.NoError(t, err)

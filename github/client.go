@@ -585,7 +585,7 @@ func GetPRByNumber(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, err
 	}
 
 	wantFullName := owner + "/" + repo
-	if prResp.Base.Repo.FullName != wantFullName {
+	if !strings.EqualFold(prResp.Base.Repo.FullName, wantFullName) { // GitHub names ignore case
 		return nil, fmt.Errorf("PR #%d base.repo.full_name %q does not match requested repo %q",
 			prNumber, prResp.Base.Repo.FullName, wantFullName)
 	}
@@ -618,6 +618,9 @@ func ghRepoArg(ref RepoRef) string {
 	}
 	return fmt.Sprintf("%s/%s", ref.Owner(), ref.Repo())
 }
+
+// GHArg is ref as the value of gh's --repo flag.
+func (r RepoRef) GHArg() string { return ghRepoArg(r) }
 
 // setGHHostEnv sets GH_HOST=host on cmd's environment when host is a GitHub
 // Enterprise host. gh's --repo flag alone is not always sufficient to pick

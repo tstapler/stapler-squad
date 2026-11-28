@@ -133,11 +133,15 @@ func defaultPRCreatorFactory(repoPath, worktreePath, sessionName, branchName, ba
 	return git.NewGitWorktreeFromStorage(repoPath, worktreePath, sessionName, branchName, baseCommitSHA)
 }
 
-// defaultPRPendingCheckerFactory constructs the PR-status checker for a given
-// repo path. This is the production default installed by newListenerBase;
+// defaultPRPendingCheckerFactory constructs the PR-status checker for a PR
+// tracked from repoPath; prURL, when parseable, names the repo to query. This is the production default installed by newListenerBase;
 // SetPRPendingCheckerFactory overrides it in tests.
-func defaultPRPendingCheckerFactory(repoPath string) prPendingChecker {
-	return git.NewGitWorktreeFromStorage(repoPath, repoPath, "", "", "")
+func defaultPRPendingCheckerFactory(repoPath, prURL string) prPendingChecker {
+	g := git.NewGitWorktreeFromStorage(repoPath, repoPath, "", "", "")
+	if ref, ok := instance.PRURLRepo(prURL); ok {
+		g.SetGHRepo(ref.GHArg())
+	}
+	return g
 }
 
 // defaultOrphanedPRFinder resolves repoPath's GitHub owner/repo from its git
@@ -155,13 +159,13 @@ func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*git
 	return github.GetPRForBranch(ctx, ref, branch)
 }
 
-// defaultPRByNumberFinder resolves repoPath's GitHub owner/repo from its git
-// remote, then looks up prNumber directly (immutable-number-keyed, not
+// defaultPRByNumberFinder resolves the PR's repo (see instance.ResolvePRRepo),
+// then looks up prNumber directly (immutable-number-keyed, not
 // branch-name-keyed — see github.GetPRByNumber's doc comment). This is the
 // production default installed by newListenerBase for
 // verifyPRBelongsToItem's live-GitHub re-check.
-func defaultPRByNumberFinder(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
-	ref, err := github.GetOwnerRepoFromRemote(repoPath, instance.EnterpriseHostsForRemoteParsing())
+func defaultPRByNumberFinder(ctx context.Context, repoPath, prURL string, prNumber int) (*github.PRInfo, error) {
+	ref, err := instance.ResolvePRRepo(prURL, repoPath)
 	if err != nil {
 		return nil, err
 	}
@@ -570,6 +574,9 @@ func buildFallbackPRBody(item *backlogdto.BacklogItemData, origin PRFooterOrigin
 //     failures already surface, and both remediation paths are identical
 //     (investigate manually, or retry).
 func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {
+	if l.keptCrossRepoPR(ctx, item) {
+		return
+	}
 	runner := l.getOneShotShipRunner()
 	if runner == nil {
 		log.InfoLog().Printf("[BacklogLifecycle] shipViaAgentOrFallback item=%s: no OneShotShipRunner wired, using mechanical push directly", item.ID)
@@ -670,6 +677,10 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 			return
 		}
 		l.cleanupTerminalItemSync(ctx, item.ID)
+	}
+
+	if l.keptCrossRepoPR(ctx, item) {
+		return
 	}
 
 	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
@@ -823,6 +834,65 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 	log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
 }
 
+// keptCrossRepoPR leaves a tracked PR from another repo as it is and moves the
+// item to pr_pending. Shipping from the workspace repo would replace it, or
+// auto-merge the unrelated PR that has its number here.
+func (l *BacklogLifecycleListener) keptCrossRepoPR(ctx context.Context, item *backlogdto.BacklogItemData) bool {
+	repo, cross := instance.CrossRepoPR(item.PrURL, item.RepoPath)
+	if !cross || item.PrNumber <= 0 {
+		return false
+	}
+	if transErr := l.resolveToPRPending(ctx, item.ID, "", "pushAndCreatePR"); transErr != nil {
+		l.handlePRPendingTransitionFailed(ctx, item.ID, "keptCrossRepoPR", transErr)
+		return true
+	}
+	l.notify(item.ID,
+		"Auto-merge not enabled",
+		fmt.Sprintf("%s — PR #%d is in %s, not this workspace's repo. Handle and merge it there.", item.Title, item.PrNumber, repo),
+		8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+		false, true, // urgent, important
+	)
+	return true
+}
+
+// holdUnverifiedCrossRepoPR stops another repo's PR feedback from reaching an
+// autonomous session unless the PR verified as the item's; it records a stuck
+// row and notifies once instead. A rate-limited lookup just retries next tick.
+func (l *BacklogLifecycleListener) holdUnverifiedCrossRepoPR(ctx context.Context, er *session.EntRepository, item *ent.BacklogItem, prURL string, verified bool, verifyErr error) bool {
+	if _, cross := instance.CrossRepoPR(prURL, item.RepoPath); !cross || verified {
+		return false
+	}
+	if verifyErr != nil && github.IsTransientRequestError(verifyErr) {
+		return true
+	}
+	itemID := item.ID.String()
+	detail := fmt.Sprintf("%s is closed or failing, but nothing ties it to this item's work, so no fix session was started", prURL)
+	applied, err := er.MarkStuck(ctx, itemID, domain.StuckReasonPRNeedsFix, domain.BacklogStatusPRPending, detail)
+	if err != nil || !applied {
+		if err != nil {
+			log.WarningLog().Printf("[BacklogLifecycle] holdUnverifiedCrossRepoPR MarkStuck item=%s: %v", itemID, err)
+		}
+		return true
+	}
+	rows, findErr := er.FindOpenStuckStates(ctx)
+	if findErr != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] holdUnverifiedCrossRepoPR FindOpenStuckStates item=%s: %v", itemID, findErr)
+		return true
+	}
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonPRNeedsFix)
+	if !ok || row.NotifiedAt != nil {
+		return true
+	}
+	l.notify(itemID, "Cross-repo PR needs you", fmt.Sprintf("%s — %s.", item.Title, detail),
+		8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+		false, true, // urgent, important
+	)
+	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonPRNeedsFix); notifyErr != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] holdUnverifiedCrossRepoPR MarkStuckNotified item=%s: %v", itemID, notifyErr)
+	}
+	return true
+}
+
 // canReuseTrackedPR reports whether pushAndCreatePR may reuse the item's recorded PR.
 // With reader:backlog on it must still be open on this item's branch (a closed or
 // foreign PR is replaced by a fresh one); a lookup failure is returned so the caller
@@ -834,7 +904,7 @@ func (l *BacklogLifecycleListener) canReuseTrackedPR(ctx context.Context, item *
 	if !l.backlogReaderEnabled() {
 		return true, nil
 	}
-	info, err := l.getPRByNumberFinder()(ctx, wt.RepoPath, item.PrNumber)
+	info, err := l.getPRByNumberFinder()(ctx, wt.RepoPath, item.PrURL, item.PrNumber)
 	if err != nil {
 		return false, err
 	}
@@ -1705,7 +1775,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	if repoPath == "" {
 		return
 	}
-	g := l.getPRPendingCheckerFactory()(repoPath)
+	g := l.getPRPendingCheckerFactory()(repoPath, item.PrURL)
 
 	// Tag outbound GitHub calls with the same trigger source already recorded
 	// on ctx (ReconcilePRPending's 60s tick vs. TriggerPRFixForEvent's
@@ -1774,7 +1844,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// ownership evidence is treated identically to a definitive mismatch
 		// — fail closed.
 		own := prOwnershipFor(lastWork, wt)
-		matches, verifyErr := l.verifyPRBelongsToItem(ghCtx, item.RepoPath, own, item.PrNumber)
+		matches, verifyErr := l.verifyPRBelongsToItem(ghCtx, item.RepoPath, item.PrURL, own, item.PrNumber)
 		if verifyErr != nil && github.IsTransientRequestError(verifyErr) {
 			// A rate-limit/admission-control rejection means the ownership
 			// lookup was never sent — it says nothing about whether PR
@@ -1891,8 +1961,13 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: PR #%d closed without merging but no PRFixSpawner configured", item.ID, closedPrNum)
 			return
 		}
+		matches, verifyErr := l.verifyPRAssociation(ctx, item.ID.String(), item.RepoPath, closedPrURL, closedPrNum)
+		verified := verifyErr == nil && matches
+		if l.holdUnverifiedCrossRepoPR(ctx, er, item, closedPrURL, verified, verifyErr) {
+			return
+		}
 		fixCtx := fmt.Sprintf("PR #%d (%s) was closed without merging. Investigate why, address any concerns, and open a fresh PR.", closedPrNum, closedPrURL)
-		if !l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, closedPrNum) {
+		if !verified {
 			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
@@ -2020,7 +2095,8 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 
 	// 2d. CI is the only problem and every failing test is outside this PR's
 	// diff: a free `gh run rerun --failed` first, fix session only if it fails again.
-	if prStatus.CIFailing && !prStatus.HasBlockingReviews && !prStatus.HasConflicts && !hasNewFeedback {
+	_, crossRepo := instance.CrossRepoPR(item.PrURL, repoPath)
+	if !crossRepo && prStatus.CIFailing && !prStatus.HasBlockingReviews && !prStatus.HasConflicts && !hasNewFeedback {
 		if runIDs, allActions := prStatus.FailedRunIDs(); allActions &&
 			l.maybeFlakyCheckRerun(ctx, item.ID.String(), item.RepoPath, item.PrNumber, runIDs) {
 			return
@@ -2032,8 +2108,13 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: CI/review issues found but no PRFixSpawner configured", item.ID)
 		return
 	}
+	matches, verifyErr := l.verifyPRAssociation(ctx, item.ID.String(), item.RepoPath, item.PrURL, item.PrNumber)
+	verified := verifyErr == nil && matches
+	if l.holdUnverifiedCrossRepoPR(ctx, er, item, item.PrURL, verified, verifyErr) {
+		return
+	}
 	fixCtx := fmt.Sprintf("PR #%d (%s) needs fixes:\n\n%s", item.PrNumber, item.PrURL, prStatus.FeedbackText)
-	if !l.verifyPRAssociationForFixSpawn(ctx, item.ID.String(), item.RepoPath, item.PrNumber) {
+	if !verified {
 		fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress for PR fix (CI=%v, reviews=%v, conflict=%v, feedback=%v)",
@@ -2131,11 +2212,11 @@ func findPRPendingItemForEvent(ctx context.Context, er *session.EntRepository, r
 		if item.PrNumber != prNumber {
 			continue
 		}
-		ref, refErr := github.GetOwnerRepoFromRemote(item.RepoPath, instance.EnterpriseHostsForRemoteParsing())
+		ref, refErr := instance.ResolvePRRepo(item.PrURL, item.RepoPath)
 		if refErr != nil || !ref.IsValid() {
 			continue
 		}
-		if ref.String() == repoFullName {
+		if strings.EqualFold(ref.String(), repoFullName) {
 			return item, true
 		}
 	}
@@ -2311,11 +2392,11 @@ func (o prOwnership) String() string {
 // completing action. Fails closed: no evidence (own.empty()) returns an error
 // without calling the finder, and a finder error also returns false — neither
 // is ever read as a verified match.
-func (l *BacklogLifecycleListener) verifyPRBelongsToItem(ctx context.Context, repoPath string, own prOwnership, prNumber int) (bool, error) {
+func (l *BacklogLifecycleListener) verifyPRBelongsToItem(ctx context.Context, repoPath, prURL string, own prOwnership, prNumber int) (bool, error) {
 	if own.empty() {
 		return false, fmt.Errorf("verifyPRBelongsToItem: no branch or tip commit recorded to verify PR #%d against", prNumber)
 	}
-	info, err := l.getPRByNumberFinder()(ctx, repoPath, prNumber)
+	info, err := l.getPRByNumberFinder()(ctx, repoPath, prURL, prNumber)
 	if err != nil {
 		return false, err
 	}
@@ -2350,10 +2431,16 @@ const unverifiedPRAssociationDisclaimer = "NOTE: this PR's association with this
 // closed identically to verifyPRBelongsToItem's own contract: no
 // work session, a GetWorktreeDataBySessionUUID error, or the guard itself
 // erroring all count as "unverified", never "verified".
-func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Context, itemIDStr, repoPath string, prNumber int) bool {
+func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Context, itemIDStr, repoPath, prURL string, prNumber int) bool {
+	matches, err := l.verifyPRAssociation(ctx, itemIDStr, repoPath, prURL, prNumber)
+	return err == nil && matches
+}
+
+// verifyPRAssociation is verifyPRAssociationForFixSpawn keeping the lookup error.
+func (l *BacklogLifecycleListener) verifyPRAssociation(ctx context.Context, itemIDStr, repoPath, prURL string, prNumber int) (bool, error) {
 	sessions, sessErr := l.storage.ListItemSessions(ctx, itemIDStr)
 	if sessErr != nil {
-		return false
+		return false, sessErr
 	}
 	var lastWork *backlogdto.ItemSessionSummary
 	for i := range sessions {
@@ -2365,14 +2452,13 @@ func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Co
 		}
 	}
 	if lastWork == nil {
-		return false
+		return false, nil
 	}
 	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID)
 	if wtErr != nil {
-		return false
+		return false, wtErr
 	}
-	matches, verifyErr := l.verifyPRBelongsToItem(ctx, repoPath, prOwnershipFor(lastWork, &wt), prNumber)
-	return verifyErr == nil && matches
+	return l.verifyPRBelongsToItem(ctx, repoPath, prURL, prOwnershipFor(lastWork, &wt), prNumber)
 }
 
 // closeIfSupersededByMain checks whether item's last known work-session commit
@@ -2409,6 +2495,10 @@ func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Co
 // the done transition, which is the one write that actually matters once the
 // commit is confirmed shipped.
 func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, checker prPendingChecker, item *backlogdto.BacklogItemData) bool {
+	// A commit on the workspace repo's main says nothing about a PR in another repo.
+	if _, cross := instance.CrossRepoPR(item.PrURL, item.RepoPath); cross {
+		return false
+	}
 	sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 	if sessErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain ListItemSessions item=%s: %v", item.ID, sessErr)
@@ -2491,7 +2581,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		return false
 	}
 	own := prOwnershipFor(lastWork, &wt)
-	if matches, verifyErr := l.verifyPRBelongsToItem(ctx, item.RepoPath, own, item.PrNumber); verifyErr != nil || !matches {
+	if matches, verifyErr := l.verifyPRBelongsToItem(ctx, item.RepoPath, item.PrURL, own, item.PrNumber); verifyErr != nil || !matches {
 		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: PR #%d can't be verified as this item's — skipping auto-close (%s, verifyErr=%v, matched=%t; was it attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber, own, verifyErr, matches)
 		return false
 	}

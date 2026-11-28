@@ -135,7 +135,7 @@ type BacklogLifecycleListener struct {
 
 	// prPendingCheckerMu guards prPendingCheckerFactory for concurrent Set/get access.
 	prPendingCheckerMu      sync.RWMutex
-	prPendingCheckerFactory func(repoPath string) prPendingChecker
+	prPendingCheckerFactory func(repoPath, prURL string) prPendingChecker
 
 	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
 	backlogReaderOverride func() bool
@@ -188,7 +188,7 @@ type BacklogLifecycleListener struct {
 	// (resolves owner/repo from repoPath's git remote, then queries GitHub by
 	// PR number); overridable in tests to avoid real GitHub API calls or
 	// needing a real git remote on disk.
-	prByNumberFinder func(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error)
+	prByNumberFinder func(ctx context.Context, repoPath, prURL string, prNumber int) (*github.PRInfo, error)
 
 	// branchReconcilerMu guards branchReconciler for concurrent Set/get access.
 	branchReconcilerMu sync.RWMutex
@@ -597,14 +597,14 @@ func (l *BacklogLifecycleListener) getOneShotShipRunner() OneShotShipRunner {
 // PR-status checker for ReconcilePRPending. Overridable in tests (mirrors the
 // timeNow seam in instance_workspace.go:581); production code never needs to
 // call this, since newListenerBase installs defaultPRPendingCheckerFactory.
-func (l *BacklogLifecycleListener) SetPRPendingCheckerFactory(f func(repoPath string) prPendingChecker) {
+func (l *BacklogLifecycleListener) SetPRPendingCheckerFactory(f func(repoPath, prURL string) prPendingChecker) {
 	l.prPendingCheckerMu.Lock()
 	defer l.prPendingCheckerMu.Unlock()
 	l.prPendingCheckerFactory = f
 }
 
 // getPRPendingCheckerFactory returns the current PR-pending-checker factory under a read lock.
-func (l *BacklogLifecycleListener) getPRPendingCheckerFactory() func(repoPath string) prPendingChecker {
+func (l *BacklogLifecycleListener) getPRPendingCheckerFactory() func(repoPath, prURL string) prPendingChecker {
 	l.prPendingCheckerMu.RLock()
 	defer l.prPendingCheckerMu.RUnlock()
 	return l.prPendingCheckerFactory
@@ -649,14 +649,14 @@ func (l *BacklogLifecycleListener) getOrphanedPRFinder() func(ctx context.Contex
 // Overridable in tests to avoid real GitHub API calls or needing a real git
 // remote on disk; production code never needs to call this, since
 // newListenerBase installs defaultPRByNumberFinder.
-func (l *BacklogLifecycleListener) SetPRByNumberFinder(f func(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error)) {
+func (l *BacklogLifecycleListener) SetPRByNumberFinder(f func(ctx context.Context, repoPath, prURL string, prNumber int) (*github.PRInfo, error)) {
 	l.prByNumberFinderMu.Lock()
 	defer l.prByNumberFinderMu.Unlock()
 	l.prByNumberFinder = f
 }
 
 // getPRByNumberFinder returns the current PR-by-number finder under a read lock.
-func (l *BacklogLifecycleListener) getPRByNumberFinder() func(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
+func (l *BacklogLifecycleListener) getPRByNumberFinder() func(ctx context.Context, repoPath, prURL string, prNumber int) (*github.PRInfo, error) {
 	l.prByNumberFinderMu.RLock()
 	defer l.prByNumberFinderMu.RUnlock()
 	return l.prByNumberFinder
@@ -1829,7 +1829,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			if l.liveHoldFromRows(ctx, er, item.ID, item.Title) {
 				continue
 			}
-			checker := l.getPRPendingCheckerFactory()(item.RepoPath)
+			checker := l.getPRPendingCheckerFactory()(item.RepoPath, item.PrURL)
 			merged, mergedErr := checker.IsPRMerged(ctx, item.PrNumber)
 			if mergedErr != nil {
 				log.Debug("[BacklogLifecycle] reconcileBouncingItems IsPRMerged failed", "item", item.ID, "pr", item.PrNumber, "error", mergedErr)
@@ -1846,7 +1846,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 				// before auto-completing it on the strength of item.PrNumber
 				// alone. Fails closed identically to
 				// verifyPRAssociationForFixSpawn's own contract.
-				if !l.verifyPRAssociationForFixSpawn(ctx, item.ID, item.RepoPath, item.PrNumber) {
+				if !l.verifyPRAssociationForFixSpawn(ctx, item.ID, item.RepoPath, item.PrURL, item.PrNumber) {
 					log.Warn("[BacklogLifecycle] reconcileBouncingItems: PR head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", "item", item.ID, "pr", item.PrNumber)
 					continue
 				}

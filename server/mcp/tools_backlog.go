@@ -401,7 +401,7 @@ type backlogHandlers struct {
 	// prCheckerFactory backs get_backlog_stuck_report's live CI cross-check.
 	// Built from the injected WorktreeOpener; nil (or a nil result) reports the
 	// cross-check unavailable. Tests set it directly to avoid the real `gh` CLI.
-	prCheckerFactory func(repoPath string) stuckReportPRChecker
+	prCheckerFactory func(repoPath, prURL string) stuckReportPRChecker
 }
 
 // --- get_backlog_item ---
