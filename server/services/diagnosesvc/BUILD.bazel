@@ -1,0 +1,61 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "diagnosesvc",
+    srcs = ["diagnostic_service.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/diagnosesvc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/adapters",
+        "//session",
+        "//session/autonomous",
+        "//session/backlog/pipeline",
+        "//session/diagnose",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/external",
+        "//session/git/backend",
+        "//session/gitprovider",
+        "//session/instance",
+        "@com_connectrpc_connect//:connect",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":diagnosesvc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "diagnosesvc_test",
+    srcs = [
+        "diagnostic_git_log_test.go",
+        "diagnostic_service_test.go",
+        "testmain_test.go",
+    ],
+    embed = [":diagnosesvc"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/internal/svctest",
+        "//session/diagnose",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/git/backend",
+        "//session/instance",
+        "//testutil/gitfake",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

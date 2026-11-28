@@ -177,7 +177,7 @@ func (s *SessionService) FocusWindow(
 	ctx context.Context,
 	req *connect.Request[sessionv1.FocusWindowRequest],
 ) (*connect.Response[sessionv1.FocusWindowResponse], error) {
-	return s.windowFocusSvc.FocusWindow(ctx, req)
+	return s.windowFocus.FocusWindow(ctx, req)
 }
 
 // RenameSession changes the title of an existing session.
@@ -292,7 +292,7 @@ func (s *SessionService) CreateDebugSnapshot(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateDebugSnapshotRequest],
 ) (*connect.Response[sessionv1.CreateDebugSnapshotResponse], error) {
-	return s.utilitySvc.CreateDebugSnapshot(ctx, req)
+	return s.debugLogs.CreateDebugSnapshot(ctx, req)
 }
 
 // GetNotificationHistory returns persisted notification history with optional filtering.

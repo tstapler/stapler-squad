@@ -17,6 +17,7 @@ go_test(
         "//server/reviewqueue",
         "//server/services",
         "//server/services/approvals",
+        "//server/services/errorregistry",
         "//server/services/guidance",
         "//session",
         "//session/domain",

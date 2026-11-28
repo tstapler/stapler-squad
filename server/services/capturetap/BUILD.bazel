@@ -1,0 +1,47 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "capturetap",
+    srcs = ["service.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/capturetap",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/middleware",
+        "//session/streamhub",
+        "@com_connectrpc_connect//:connect",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":capturetap",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "capturetap_test",
+    srcs = [
+        "host_test.go",
+        "service_test.go",
+        "testmain_test.go",
+    ],
+    embed = [":capturetap"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//proto/session/v1:sessionv1connect_go",
+        "//server/services/internal/svctest",
+        "//session/streamhub",
+        "@com_connectrpc_connect//:connect",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

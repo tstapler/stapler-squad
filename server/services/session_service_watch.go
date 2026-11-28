@@ -298,7 +298,7 @@ func (s *SessionService) GetLogs(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetLogsRequest],
 ) (*connect.Response[sessionv1.GetLogsResponse], error) {
-	return s.utilitySvc.GetLogs(ctx, req)
+	return s.debugLogs.GetLogs(ctx, req)
 }
 
 // WatchReviewQueue streams real-time review queue events.

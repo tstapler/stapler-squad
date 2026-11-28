@@ -25,6 +25,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/diagnosesvc"
+	"github.com/tstapler/stapler-squad/server/services/errorregistry"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -221,7 +223,7 @@ func goldenErrors(t *testing.T, g *adminGolden, svc *SessionService) {
 	}
 	list("errors/unwired", true)
 	storage := svctest.CreateTestStorage(t)
-	registry := NewErrorRegistry(storage.GetEntClient(), true)
+	registry := errorregistry.NewErrorRegistry(storage.GetEntClient(), true)
 	svc.SetErrorRegistry(registry)
 	registry.Record(ctx, errors.New("read /var/lib/a/b: code 12"), "/p.A")
 	registry.Record(ctx, errors.New("read /var/lib/c/d: code 99"), "/p.A")
@@ -248,7 +250,7 @@ func goldenDiagnose(t *testing.T, g *adminGolden) {
 	})
 	require.NoError(t, err)
 	spawner := &adminSpawner{}
-	d := NewDiagnosticService(storage, spawner)
+	d := diagnosesvc.NewDiagnosticService(storage, spawner)
 	for _, id := range []string{"", "00000000-0000-0000-0000-000000000001", item.ID} {
 		resp, aerr := d.AssembleDiagnosticBundle(ctx, connect.NewRequest(&sessionv1.AssembleDiagnosticBundleRequest{ItemId: id}))
 		g.record("diagnose/assemble", adminMsg(resp), aerr)
@@ -258,7 +260,7 @@ func goldenDiagnose(t *testing.T, g *adminGolden) {
 		g.record("diagnose/dispatch", adminMsg(resp), derr)
 		g.line("diagnose/prompt %q", spawner.prompt)
 	}
-	resp, err := NewDiagnosticService(storage, nil).DispatchDiagnose(ctx, connect.NewRequest(&sessionv1.DispatchDiagnoseRequest{ItemId: item.ID}))
+	resp, err := diagnosesvc.NewDiagnosticService(storage, nil).DispatchDiagnose(ctx, connect.NewRequest(&sessionv1.DispatchDiagnoseRequest{ItemId: item.ID}))
 	g.record("diagnose/no-spawner", adminMsg(resp), err)
 }
 

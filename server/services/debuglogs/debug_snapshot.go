@@ -1,0 +1,420 @@
+package debuglogs
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"os"
+	"path/filepath"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/tmux"
+	"runtime"
+	"strings"
+	"time"
+)
+
+// DebugSnapshot is the top-level JSON structure written to disk.
+type DebugSnapshot struct {
+	Version    int                `json:"version"`
+	Timestamp  time.Time          `json:"timestamp"`
+	Note       string             `json:"note,omitempty"`
+	Server     ServerInfo         `json:"server"`
+	Sessions   []SessionSnapshot  `json:"sessions"`
+	Tmux       TmuxSnapshot       `json:"tmux"`
+	Approvals  ApprovalSnapshot   `json:"approvals"`
+	RecentLogs RecentLogsSnapshot `json:"recent_logs"`
+	Errors     []string           `json:"errors,omitempty"`
+}
+
+// ServerInfo contains runtime metadata for the server process.
+type ServerInfo struct {
+	PID           int    `json:"pid"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	GoVersion     string `json:"go_version"`
+	OS            string `json:"os"`
+	Arch          string `json:"arch"`
+}
+
+// SessionSnapshot captures the state of a single session at snapshot time.
+type SessionSnapshot struct {
+	Title                string    `json:"title"`
+	Status               string    `json:"status"`
+	Program              string    `json:"program"`
+	Path                 string    `json:"path"`
+	Branch               string    `json:"branch"`
+	SessionType          string    `json:"session_type"`
+	Category             string    `json:"category"`
+	Tags                 []string  `json:"tags"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`
+	LastMeaningfulOutput time.Time `json:"last_meaningful_output,omitempty"`
+	LastOutputSignature  string    `json:"last_output_signature,omitempty"`
+	PaneContent          string    `json:"pane_content,omitempty"`
+	PaneContentRaw       string    `json:"pane_content_raw,omitempty"`
+	PaneContentTruncated bool      `json:"pane_content_truncated,omitempty"`
+	InstanceType         string    `json:"instance_type"`
+	GitHubPRNumber       int       `json:"github_pr_number,omitempty"`
+	// PullRequests lists every attached PR as "host/owner/repo#n state".
+	PullRequests []string `json:"pull_requests,omitempty"`
+}
+
+// TmuxSnapshot captures global tmux state.
+type TmuxSnapshot struct {
+	ListSessionsOutput string              `json:"list_sessions_output"`
+	PerSession         []TmuxSessionDetail `json:"per_session"`
+}
+
+// TmuxSessionDetail captures per-tmux-session diagnostic info.
+type TmuxSessionDetail struct {
+	TmuxSessionName string `json:"tmux_session_name"`
+	ListPanesOutput string `json:"list_panes_output,omitempty"`
+	PaneContent     string `json:"pane_content,omitempty"`
+}
+
+// ApprovalSnapshot captures the pending approvals state.
+type ApprovalSnapshot struct {
+	PendingCount int              `json:"pending_count"`
+	Pending      []ApprovalDetail `json:"pending,omitempty"`
+}
+
+// ApprovalDetail captures the fields of a single pending approval.
+type ApprovalDetail struct {
+	ID              string                 `json:"id"`
+	SessionID       string                 `json:"session_id"`
+	ClaudeSessionID string                 `json:"claude_session_id"`
+	ToolName        string                 `json:"tool_name"`
+	ToolInput       map[string]interface{} `json:"tool_input,omitempty"`
+	Cwd             string                 `json:"cwd"`
+	PermissionMode  string                 `json:"permission_mode"`
+	CreatedAt       time.Time              `json:"created_at"`
+	ExpiresAt       time.Time              `json:"expires_at"`
+}
+
+// RecentLogsSnapshot contains the most recent log lines.
+type RecentLogsSnapshot struct {
+	LogFilePath string   `json:"log_file_path"`
+	LineCount   int      `json:"line_count"`
+	Lines       []string `json:"lines"`
+}
+
+const (
+	maxPaneContentBytes = 10000
+	defaultLogLines     = 200
+)
+
+// CollectSnapshot gathers all diagnostic data into a DebugSnapshot.
+// Individual subsystem failures are recorded in Errors and do not abort the collection.
+func CollectSnapshot(ctx context.Context, note string, instances []*instance.Instance, approvalStore *approvalkit.ApprovalStore, logLines int, startedAt time.Time) *DebugSnapshot {
+	if logLines <= 0 {
+		logLines = defaultLogLines
+	}
+
+	snap := &DebugSnapshot{
+		Version:   1,
+		Timestamp: time.Now().UTC(),
+		Note:      note,
+	}
+
+	snap.Server = collectServerInfo(startedAt)
+	snap.Sessions, snap.Errors = collectSessionSnapshots(ctx, instances)
+	snap.Tmux, snap.Errors = collectTmuxSnapshot(ctx, snap.Errors)
+	snap.Approvals = collectApprovalSnapshot(approvalStore)
+	snap.RecentLogs = collectRecentLogs(logLines)
+
+	return snap
+}
+
+// collectServerInfo returns runtime metadata for the current process.
+func collectServerInfo(startedAt time.Time) ServerInfo {
+	return ServerInfo{
+		PID:           os.Getpid(),
+		UptimeSeconds: int64(time.Since(startedAt).Seconds()),
+		GoVersion:     runtime.Version(),
+		OS:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+	}
+}
+
+// collectSessionSnapshots captures the state of all active sessions.
+func collectSessionSnapshots(ctx context.Context, instances []*instance.Instance) ([]SessionSnapshot, []string) {
+	var snapshots []SessionSnapshot
+	var errors []string
+
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+
+		data := inst.ToInstanceData()
+
+		ss := SessionSnapshot{
+			Title:                data.Title,
+			Status:               data.Status.String(),
+			Program:              data.Program,
+			Path:                 data.Path,
+			Branch:               data.Branch,
+			SessionType:          string(data.SessionType),
+			Category:             data.Category,
+			Tags:                 data.Tags,
+			CreatedAt:            data.CreatedAt,
+			UpdatedAt:            data.UpdatedAt,
+			LastTerminalUpdate:   data.LastTerminalUpdate,
+			LastMeaningfulOutput: data.LastMeaningfulOutput,
+			LastOutputSignature:  data.LastOutputSignature,
+			GitHubPRNumber:       data.GitHubPRNumber,
+			PullRequests:         describePRs(inst.Snapshot().GitHub.PRs),
+		}
+
+		// Capture pane content with per-instance timeout
+		paneCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		content, err := inst.CapturePaneContentFinal()
+		cancel()
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("capture-pane for session '%s': %v", inst.Title, err))
+		} else {
+			_ = paneCtx
+			if len(content) > maxPaneContentBytes {
+				content = content[:maxPaneContentBytes]
+				ss.PaneContentTruncated = true
+			}
+			ss.PaneContent = content
+		}
+
+		// Capture raw pane content
+		rawCtx, rawCancel := context.WithTimeout(ctx, 5*time.Second)
+		rawContent, err := inst.CapturePaneContentRaw()
+		rawCancel()
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("capture-pane-raw for session '%s': %v", inst.Title, err))
+		} else {
+			_ = rawCtx
+			if len(rawContent) > maxPaneContentBytes {
+				rawContent = rawContent[:maxPaneContentBytes]
+			}
+			ss.PaneContentRaw = string(rawContent)
+		}
+
+		snapshots = append(snapshots, ss)
+	}
+
+	return snapshots, errors
+}
+
+// collectTmuxSnapshot runs global tmux diagnostic commands.
+func collectTmuxSnapshot(ctx context.Context, existingErrors []string) (TmuxSnapshot, []string) {
+	snap := TmuxSnapshot{}
+	errors := existingErrors
+
+	// list-sessions
+	listCtx, listCancel := context.WithTimeout(ctx, 5*time.Second)
+	listArgs := tmux.ResolveSocket("").Args("list-sessions")
+	listOut, err := safeexec.CommandContext(listCtx, tmux.Binary(), listArgs...).Output()
+	listCancel()
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("tmux list-sessions: %v", err))
+		snap.ListSessionsOutput = fmt.Sprintf("<error: %v>", err)
+	} else {
+		snap.ListSessionsOutput = strings.TrimSpace(string(listOut))
+	}
+
+	// For each tmux session, get list-panes and capture-pane
+	for _, line := range strings.Split(snap.ListSessionsOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "<error") {
+			continue
+		}
+		// session name is the part before the first ':'
+		sessionName := strings.SplitN(line, ":", 2)[0]
+		if sessionName == "" {
+			continue
+		}
+
+		detail := TmuxSessionDetail{TmuxSessionName: sessionName}
+
+		// list-panes
+		panesCtx, panesCancel := context.WithTimeout(ctx, 5*time.Second)
+		panesArgs := tmux.ResolveSocket("").Args("list-panes", "-t", sessionName)
+		panesOut, err := safeexec.CommandContext(panesCtx, tmux.Binary(), panesArgs...).Output()
+		panesCancel()
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("tmux list-panes -t %s: %v", sessionName, err))
+		} else {
+			detail.ListPanesOutput = strings.TrimSpace(string(panesOut))
+		}
+
+		// capture-pane (visible area only, no full scrollback to avoid timeouts)
+		capCtx, capCancel := context.WithTimeout(ctx, 5*time.Second)
+		capArgs := tmux.ResolveSocket("").Args("capture-pane", "-p", "-t", sessionName)
+		capOut, err := safeexec.CommandContext(capCtx, tmux.Binary(), capArgs...).Output()
+		capCancel()
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("tmux capture-pane -t %s: %v", sessionName, err))
+		} else {
+			content := strings.TrimSpace(string(capOut))
+			if len(content) > maxPaneContentBytes {
+				content = content[:maxPaneContentBytes]
+			}
+			detail.PaneContent = content
+		}
+
+		snap.PerSession = append(snap.PerSession, detail)
+	}
+
+	return snap, errors
+}
+
+// collectApprovalSnapshot captures the current pending approval state.
+func collectApprovalSnapshot(store *approvalkit.ApprovalStore) ApprovalSnapshot {
+	if store == nil {
+		return ApprovalSnapshot{}
+	}
+
+	pending := store.ListAll()
+	snap := ApprovalSnapshot{
+		PendingCount: len(pending),
+	}
+
+	for _, a := range pending {
+		snap.Pending = append(snap.Pending, ApprovalDetail{
+			ID:              a.ID,
+			SessionID:       a.SessionID,
+			ClaudeSessionID: a.ClaudeSessionID,
+			ToolName:        a.ToolName,
+			ToolInput:       a.ToolInput,
+			Cwd:             a.Cwd,
+			PermissionMode:  a.PermissionMode,
+			CreatedAt:       a.CreatedAt,
+			ExpiresAt:       a.ExpiresAt,
+		})
+	}
+
+	return snap
+}
+
+// collectRecentLogs reads the last n lines from the main log file.
+func collectRecentLogs(lineCount int) RecentLogsSnapshot {
+	cfg := log.ConfigToLogConfig(config.LoadConfig())
+	logFilePath, err := log.GetLogFilePath(cfg)
+	snap := RecentLogsSnapshot{
+		LogFilePath: logFilePath,
+	}
+	if err != nil {
+		snap.Lines = []string{fmt.Sprintf("<error getting log file path: %v>", err)}
+		return snap
+	}
+
+	lines, err := tailFile(logFilePath, lineCount)
+	if err != nil {
+		snap.Lines = []string{fmt.Sprintf("<error reading log file: %v>", err)}
+		return snap
+	}
+
+	snap.Lines = lines
+	snap.LineCount = len(lines)
+	return snap
+}
+
+// tailFile returns the last n lines of a file efficiently.
+func tailFile(path string, n int) ([]string, error) {
+	// #nosec G304 -- path is always logFilePath from log.GetLogFilePath(cfg), the
+	// server's own configured log path; never network/RPC input.
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	// Use a ring buffer of size n
+	ring := make([]string, n)
+	count := 0
+	for scanner.Scan() {
+		ring[count%n] = scanner.Text()
+		count++
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	if count <= n {
+		lines = ring[:count]
+	} else {
+		// Reconstruct in order
+		start := count % n
+		lines = make([]string, n)
+		copy(lines, ring[start:])
+		copy(lines[n-start:], ring[:start])
+	}
+
+	return lines, nil
+}
+
+// WriteSnapshot serializes the snapshot to a JSON file in the given directory.
+// Returns the absolute path of the written file.
+//
+// The filename includes nanosecond precision, not just to-the-second, because two
+// concurrent CreateDebugSnapshot calls landing in the same wall-clock second would
+// otherwise both os.WriteFile the same path — one call's truncate-then-write can
+// interleave with another's, producing a transient zero-byte read
+// (TestCreateDebugSnapshot_Succeeds flaked on exactly this under t.Parallel()).
+func WriteSnapshot(snap *DebugSnapshot, dir string) (string, error) {
+	filename := fmt.Sprintf("debug-snapshot-%s.json", snap.Timestamp.Format("20060102-150405.000000000"))
+	path := filepath.Join(dir, filename)
+
+	data, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal snapshot: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return "", fmt.Errorf("failed to write snapshot file: %w", err)
+	}
+
+	pruneOldSnapshots(dir)
+
+	return path, nil
+}
+
+// debugSnapshotMaxAge bounds how long debug-snapshot-*.json files accumulate in
+// the log directory. Nothing else ever deletes them, and every high-goroutine-count
+// or crash-loop episode writes one -- 703 of them (66MB) piled up across two months
+// before this was added, all predating the control-mode panic fix (2b93ea421) that
+// was causing them.
+const debugSnapshotMaxAge = 30 * 24 * time.Hour
+
+// pruneOldSnapshots deletes debug-snapshot-*.json files in dir older than
+// debugSnapshotMaxAge. Best-effort: a stat/remove failure for one file is logged
+// and skipped rather than aborting the rest.
+func pruneOldSnapshots(dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, "debug-snapshot-*.json"))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-debugSnapshotMaxAge)
+	for _, path := range matches {
+		info, err := os.Stat(path)
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			log.Warn("pruneOldSnapshots: failed to remove stale debug snapshot", "path", path, "err", err)
+		}
+	}
+}
+
+func describePRs(prs []domain.PRView) []string {
+	out := make([]string, 0, len(prs))
+	for _, v := range prs {
+		out = append(out, fmt.Sprintf("%s %s", v.Ref, v.State))
+	}
+	return out
+}
