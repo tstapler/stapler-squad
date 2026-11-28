@@ -17,7 +17,7 @@ import (
 // errorEventMaxAge bounds how long ErrorEvent rows accumulate. Nothing else
 // ever deletes them -- the same unbounded-growth shape as service.log and
 // debug-snapshot-*.json before their retention was added (see
-// pruneOldSnapshots in debug_snapshot.go), just less visually alarming since
+// pruneOldSnapshots in debuglogs), just less visually alarming since
 // it's SQLite rows rather than a file size.
 const errorEventMaxAge = 30 * 24 * time.Hour
 
@@ -93,7 +93,7 @@ func (r *ErrorRegistry) Record(ctx context.Context, errVal error, procedure stri
 }
 
 // pruneOld deletes ErrorEvent rows not seen in errorEventMaxAge. Best-effort,
-// mirroring pruneOldSnapshots in debug_snapshot.go.
+// mirroring pruneOldSnapshots in debuglogs.
 func (r *ErrorRegistry) pruneOld(ctx context.Context) {
 	cutoff := time.Now().Add(-errorEventMaxAge)
 	if _, err := r.entClient.ErrorEvent.Delete().
