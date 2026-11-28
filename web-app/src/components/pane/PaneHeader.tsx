@@ -65,13 +65,14 @@ export function PaneHeader({
         <span
           className={paneDragHandle}
           draggable
+          role="button"
           onDragStart={onDragStart}
           onClick={(e) => e.stopPropagation()}
           title="Drag to swap with another pane"
           role="img"
           aria-label="Drag to swap panes"
           data-testid={`pane-drag-handle-${pane.id}`}
-        >
+        >{/* analytics-exempt */}
           <GripVertical size={14} aria-hidden="true" />
         </span>
       )}

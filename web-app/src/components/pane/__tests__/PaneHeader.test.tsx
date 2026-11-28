@@ -1,3 +1,4 @@
+import type AxeCore from "axe-core";
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { PaneHeader } from "../PaneHeader";
@@ -151,5 +152,21 @@ describe("PaneHeader — overflow menu wiring", () => {
     mockUpdate.mockResolvedValueOnce({});
     await mockOverflow.mock.calls[0][0].onChangeProgram?.("s1", "aider");
     expect(mockUpdate).toHaveBeenCalledWith({ program: "aider" });
+  });
+});
+
+describe("PaneHeader — drag handle accessibility", () => {
+  // axe `aria-prohibited-attr`: aria-label is not allowed on a role-less <span> (failed the UX Analysis axe spec).
+  it("drag handle carries a role that permits its aria-label", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const axe = require("axe-core") as typeof AxeCore;
+    const { container } = renderHeader({ onDragStart: jest.fn() });
+
+    const handle = screen.getByTestId("pane-drag-handle-p1");
+    expect(handle).toHaveAttribute("aria-label", "Drag to swap panes");
+    expect(handle).toHaveAttribute("role", "button");
+
+    const results = await axe.run(container, { runOnly: ["aria-prohibited-attr"] });
+    expect(results.violations.map((v) => v.id)).toEqual([]);
   });
 });
