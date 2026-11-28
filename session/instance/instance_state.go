@@ -17,12 +17,21 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// loadStatus sets Status directly without state machine validation.
-// Call ONLY from FromInstanceData() deserialization or test setup.
-// Never call from operational code paths.
+// loadStatus is the only writer of Status; it applies no state machine validation, so
+// operational code transitions through transitionTo or transitionToLocked.
 // Must be called with i.mu held (or before the instance is shared).
 func (i *Instance) loadStatus(status domain.Status) {
 	i.Status = status
+	i.statusMirror.Store(int32(status) + 1)
+}
+
+// gateStatus is the status the terminal I/O gates read. It never waits on i.mu, and unlike
+// Snapshot() it cannot be rolled back by a publisher that stores an older snapshot late.
+func (i *Instance) gateStatus() domain.Status {
+	if v := i.statusMirror.Load(); v != 0 {
+		return domain.Status(v - 1)
+	}
+	return i.Snapshot().Status
 }
 
 // setStatus is a backward-compatibility alias for loadStatus.
@@ -51,7 +60,7 @@ func (i *Instance) transitionTo(ctx context.Context, to domain.Status) error {
 			return fmt.Errorf("transition %s → %s blocked: %w", i.Status, to, err)
 		}
 	}
-	i.Status = to
+	i.loadStatus(to)
 	if to == domain.Creating {
 		i.creationProgressUpdatedAt = time.Now() // see transitionToLocked
 	}
@@ -124,7 +133,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to domain.Status)
 	// runActor's doc comment in actor.go for the full explanation.
 	i.mu.Lock()
 	from := i.Status
-	i.Status = to
+	i.loadStatus(to)
 	if to == domain.Creating {
 		// Re-entering Creating (e.g. a retry) starts a new episode: without this the stale-creation
 		// sweeper reads the previous attempt's old timestamp and fails the session within a minute.
@@ -312,6 +321,7 @@ func (i *Instance) transitionIf(ctx context.Context, from, to domain.Status, loa
 		if err != nil && loadOnError {
 			s.inst.mu.Lock()
 			s.inst.loadStatus(to)
+			s.inst.touchUpdatedAt()
 			s.inst.snapshot.Store(BuildSnapshot(s.inst))
 			s.inst.mu.Unlock()
 		}

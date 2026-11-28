@@ -153,11 +153,11 @@ func (i *Instance) combineErrors(errs []error) error {
 // either because it hasn't started yet, or because its lifecycle status makes a live
 // terminal capture meaningless (Paused/Stopped/Hibernated).
 //
-// Reads Status via Snapshot(), which never waits on i.mu: StopController holds it
-// across a controller join, and terminal I/O must not stall behind that.
+// Reads gateStatus(), which never waits on i.mu: StopController holds it across a
+// controller join, and terminal I/O must not stall behind that.
 // Preview() and PreviewFullHistory() share this check so the two can't drift.
 func (i *Instance) PreviewBlocked() bool {
-	status := i.Snapshot().Status
+	status := i.gateStatus()
 	return !i.started.Load() || status == domain.Paused || status == domain.Stopped || status == domain.Hibernated
 }
 
@@ -289,7 +289,7 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 // later used unguarded. Gating the write itself closes the gap at its source
 // instead of only defending against it on read.
 func (i *Instance) CaptureCurrentState() error {
-	if !i.started.Load() || i.Paused() {
+	if !i.started.Load() || i.gateStatus() == domain.Paused {
 		return nil
 	}
 	if !i.pm().IsAlive() {
@@ -340,7 +340,7 @@ func (i *Instance) GetStatusIconForType() string {
 	}
 
 	// Managed instance - use standard status icons
-	switch i.Snapshot().Status {
+	switch i.gateStatus() {
 	case domain.Active:
 		return "●"
 	case domain.Creating:

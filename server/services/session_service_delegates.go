@@ -585,7 +585,7 @@ func (s *SessionService) ForkSession(
 	go func() {
 		if startErr := newInst.Start(true); startErr != nil {
 			log.Warn("ForkSession: failed to start forked session", "session", newInst.Title, "err", startErr)
-			newInst.Status = domain.Stopped
+			newInst.ForceStatus(domain.Stopped)
 			if saveErr := s.storage.SaveInstances(s.allInstances()); saveErr != nil {
 				log.Warn("ForkSession: failed to persist Stopped status", "session", newInst.Title, "err", saveErr)
 			}

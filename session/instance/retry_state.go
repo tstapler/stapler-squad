@@ -372,7 +372,7 @@ func MarkSessionPermanentlyFailed(inst *Instance, reason string) {
 	alreadyFailed := inst.Status == domain.PermanentlyFailed
 	var snap *domain.InstanceSnapshot
 	if !alreadyFailed {
-		inst.Status = domain.PermanentlyFailed
+		inst.loadStatus(domain.PermanentlyFailed)
 		// Publish the transition to inst.snapshot (the atomic pointer
 		// GetEffectiveStatus()/Snapshot() actually read) — this write, unlike
 		// transitionToLocked's, doesn't route through the state machine (there

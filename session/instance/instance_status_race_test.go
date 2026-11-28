@@ -73,6 +73,7 @@ func (idleIOPM) HasUpdated() (bool, bool, string)                      { return 
 func (idleIOPM) CapturePaneContent() (string, error)                   { return "", nil }
 func (idleIOPM) SetDetachedSize(int, int, string) error                { return nil }
 func (idleIOPM) SetWindowSize(int, int) error                          { return nil }
+func (idleIOPM) GetPaneDimensions() (int, int, error)                  { return 80, 24, nil }
 func (idleIOPM) SendKeys(string) (int, error)                          { return 0, nil }
 func (idleIOPM) SendInputViaControlMode(context.Context, []byte) error { return nil }
 
@@ -90,6 +91,8 @@ func TestInstanceIOGates_should_NotBlock_When_MuIsWriteHeld(t *testing.T) {
 		"CapturePaneContent":         func() { _, _ = inst.CapturePaneContent() },
 		"CapturePaneContentPriority": func() { _, _ = inst.CapturePaneContentPriority() },
 		"SetWindowSize":              func() { _ = inst.SetWindowSize(80, 24) },
+		"GetPaneDimensions":          func() { _, _, _ = inst.GetPaneDimensions() },
+		"GetPaneDimensionsPriority":  func() { _, _, _ = inst.GetPaneDimensionsPriority(context.Background()) },
 		"SendKeys":                   func() { _ = inst.SendKeys("x") },
 		"SendKeysN":                  func() { _, _ = inst.SendKeysN("x") },
 		"SendInputViaControlMode":    func() { _ = inst.SendInputViaControlMode(context.Background(), []byte("x")) },
@@ -126,7 +129,10 @@ func TestTransitionIf_should_LoadAndPublishTarget_When_TransitionRefused(t *test
 				want = domain.Paused
 			}
 
+			before := inst.UpdatedAt
 			err := inst.transitionIf(context.Background(), domain.Creating, domain.Paused, loadOnError)
+
+			assert.Equal(t, loadOnError, inst.UpdatedAt.After(before), "UpdatedAt marks the change")
 
 			assert.ErrorAs(t, err, &domain.ErrInvalidTransition{})
 			assert.Equal(t, want, inst.liveStatus())

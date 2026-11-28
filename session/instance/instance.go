@@ -521,6 +521,9 @@ type Instance struct {
 	// BUG-025 follow-up: a stateMutex-guarded bool caught a real -race failure
 	// at exactly two of these ~30+ access sites; the rest were equally unsafe.
 	started atomic.Bool
+	// statusMirror holds Status+1 for the terminal I/O gates (see gateStatus); zero means
+	// Status has not been written since the struct literal.
+	statusMirror atomic.Int32
 	// processManager abstracts the terminal process lifecycle and I/O.
 	// Initialized to a TmuxBackend by default; future backends implement the ProcessManager interface.
 	pmMu           sync.Mutex
@@ -1219,6 +1222,7 @@ func (i *Instance) Snapshot() *domain.InstanceSnapshot {
 // where scrollForwardVersionMismatchCheck kicks off (Story 1.5.3), so it runs
 // at construction time rather than being deferred until a user scrolls.
 func FinishInstanceConstruction(i *Instance) {
+	i.statusMirror.Store(int32(i.Status) + 1)
 	i.snapshot.Store(BuildSnapshot(i))
 	i.kickOffClaudeVersionMismatchCheck()
 }
