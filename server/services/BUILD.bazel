@@ -357,6 +357,7 @@ go_test(
         "session_service_hibernation_identity_test.go",
         "session_service_item_pr_detach_test.go",
         "session_service_kill_owner_test.go",
+        "session_service_lifecycle_wiring_test.go",
         "session_service_misc_test.go",
         "session_service_pr_ask_fix_test.go",
         "session_service_pr_refs_followup_test.go",

@@ -277,6 +277,8 @@ type SessionService struct {
 	// SetJulesConfigDependencies once server/dependencies.go builds them
 	// (Task 2.4.4a), since Jules-enablement is only known after config load.
 	julesConfigSvc *julesrpc.JulesConfigService
+	// julesUsage is re-applied whenever SetJulesConfigDependencies replaces julesConfigSvc.
+	julesUsage julesrpc.JulesUsageSnapshotter
 
 	// credChain resolves AI-provider credentials (Anthropic, Google, Jules)
 	// for capacityMonitor's limits clients. Its JulesCredentialSource starts
