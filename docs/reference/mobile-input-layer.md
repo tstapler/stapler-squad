@@ -73,7 +73,7 @@ The server counts every input frame at its entry path (`server/services/access/t
 | `cm` | `handleReadLoopInput` (shared read loop; covers the control-mode and hub `onInput` closures) | when the `onInput` closure returns true, after the closure's own gates | writer present, `CanSendCommand` |
 | `shell` | `handleShellInput` after `forwardShellInput` | when `forwardShellInput` returns true | writer present, `CanSendCommand` |
 | `capture` | `handleCapturePaneInput` after `forwardCapturePaneInput` | when `forwardCapturePaneInput` returns true | writer present, `CanSendCommand` |
-| `stream` | `StreamTerminal` (`session_service_stream_terminal.go`) | after the PTY write succeeds | writer present |
+| `stream` | `StreamTerminal` (`sessionstream/stream_terminal.go`) | after the PTY write succeeds | writer present |
 
 For `cm`, `shell` and `capture`, a `SendInput` error is swallowed (logged at most) and the frame still counts as `forwarded`: the stream is kept alive and keystrokes may be lost under load, so `forwarded` is "issued", not "delivered". `stream` is the exception: a write error ends the stream before `forwarded` is recorded. The terminal mux bridge reaches one of these sites, so mux input is counted under `cm`.
 

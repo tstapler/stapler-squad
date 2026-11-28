@@ -33,7 +33,7 @@ func assertPathCounts(t *testing.T, id string, path access.InputPath, received, 
 
 func newSiteSessionID(prefix string) string { return prefix + "-" + uuid.NewString()[:8] }
 
-// session_service_stream_terminal.go: needs a real tmux-backed session, like the read-only test next to it.
+// sessionstream/stream_terminal.go: needs a real tmux-backed session, like the read-only test next to it.
 func TestInputSites_ShouldRecordReceivedAndForwarded_When_PermittedWriterAtStreamSite(t *testing.T) {
 	svc, srv := newBidiStreamTestServer(t)
 	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)

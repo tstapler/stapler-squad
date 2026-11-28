@@ -20,7 +20,7 @@ func TestManualNudgeRecorders_should_BeCalledOnlyFromHumanDrivenHandlers(t *test
 		"backlogsvc/backlog_service_lifecycle.go", // TransitionBacklogItemStatus, user actor only
 		"githubrpc/github_user_nudge.go",          // "Ask to fix" NudgeSessionForPR RPC
 		"session_service_lifecycle.go",            // RestartSession RPC
-		"terminal_service.go",                     // WriteToSession RPC
+		"sessionstream/terminal_service.go",       // WriteToSession RPC
 	}
 	var got []string
 	for _, dir := range servicesSourceDirs(t) {

@@ -1093,6 +1093,34 @@ linters:
             - github.com/tstapler/stapler-squad/server/services/access$
             - github.com/tstapler/stapler-squad/session/instance$
             - github.com/tstapler/stapler-squad/session/tcc$
+        # server/services/sessionstream serves the terminal and event stream RPCs; it never imports the services hub.
+        isolate_sessionstream:
+          list-mode: strict
+          files:
+            - "**/services/sessionstream/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/adapters$
+            - github.com/tstapler/stapler-squad/server/events$
+            - github.com/tstapler/stapler-squad/server/notifications$
+            - github.com/tstapler/stapler-squad/server/services/access$
+            - github.com/tstapler/stapler-squad/server/services/federation$
+            - github.com/tstapler/stapler-squad/server/services/fsops$
+            - github.com/tstapler/stapler-squad/server/services/internal/streammetrics$
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/detection$
+            - github.com/tstapler/stapler-squad/session/domain$
+            - github.com/tstapler/stapler-squad/session/external$
+            - github.com/tstapler/stapler-squad/session/git$
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/markerstore$
+            - github.com/tstapler/stapler-squad/session/sshremote$
+            - github.com/tstapler/stapler-squad/session/tmux$
         # server/services/tmuxadmin serves the tmux version-mismatch and server-restart RPCs; it never imports the services hub.
         isolate_tmuxadmin:
           list-mode: strict

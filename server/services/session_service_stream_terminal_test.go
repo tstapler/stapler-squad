@@ -27,20 +27,6 @@ import (
 // bidirectional streaming (used by StreamTerminal) requires full-duplex
 // HTTP/2; the plain HTTP/1.1 server used by newNotificationTestServer only
 // supports unary and server-streaming RPCs.
-func TestWaitForTerminalResume_Cancelled(t *testing.T) {
-	t.Parallel()
-	inst := &instance.Instance{Status: domain.Active}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	require.ErrorIs(t, waitForTerminalResume(ctx, inst), context.Canceled)
-}
-
-func TestWaitForTerminalResume_FailedStartup(t *testing.T) {
-	t.Parallel()
-	inst := &instance.Instance{Status: domain.Hibernated}
-	require.ErrorContains(t, waitForTerminalResume(context.Background(), inst), "session startup failed")
-}
-
 func newBidiStreamTestServer(t *testing.T) (*SessionService, *httptest.Server) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
@@ -199,24 +185,4 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	stimulusWG.Wait()
 
 	require.True(t, gotOutput, "expected at least one TerminalData_Output frame from the live PTY")
-}
-
-// TestWaitWithTimeout pins waitWithTimeout's two branches directly, without
-// depending on tmux or the e2e StreamTerminal path above.
-func TestWaitWithTimeout(t *testing.T) {
-	t.Parallel()
-	t.Run("returns true when goroutines finish in time", func(t *testing.T) {
-		t.Parallel()
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() { defer wg.Done() }()
-		require.True(t, waitWithTimeout(&wg, time.Second))
-	})
-
-	t.Run("returns false when goroutines don't finish in time", func(t *testing.T) {
-		t.Parallel()
-		var wg sync.WaitGroup
-		wg.Add(1) // deliberately never Done()
-		require.False(t, waitWithTimeout(&wg, 10*time.Millisecond))
-	})
 }

@@ -1,4 +1,4 @@
-package services
+package sessionstream
 
 // ExternalWebSocketHandler provides approval monitoring endpoints for external sessions.
 //

@@ -49,6 +49,7 @@ go_library(
         "//server/services/flagsvc",
         "//server/services/internal/streammetrics",
         "//server/services/questionkit",
+        "//server/services/sessionstream",
         "//server/services/streamhubrollout",
         "//session/domain",
         "//session/external",

@@ -150,6 +150,7 @@ go_library(
         "//server/services/searchrpc",
         "//server/services/sessionbundle",
         "//server/services/sessionretention",
+        "//server/services/sessionstream",
         "//server/services/summaryrpc",
         "//server/services/taggingrules",
         "//server/services/triggerlimit",

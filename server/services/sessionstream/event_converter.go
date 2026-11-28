@@ -1,4 +1,4 @@
-package services
+package sessionstream
 
 import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"

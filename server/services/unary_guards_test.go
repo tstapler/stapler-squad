@@ -31,8 +31,7 @@ func TestWriteToSession_ShouldReturnFailedPreconditionWhenHiddenAndSucceedWhenVi
 	e := newSteerEnv(t)
 	hidden := e.addSession("wts-hidden", true, "")
 	visible := e.addSession("wts-visible", false, "")
-	ts := newLeaseTerminalService(t, hidden.inst)
-	ts.poller.SetInstances([]*instance.Instance{hidden.inst, visible.inst})
+	ts := newLeaseTerminalService(t, hidden.inst, visible.inst)
 	ts.SetGuardsFlag(e.fix.svc.guards)
 
 	_, err := ts.WriteToSession(context.Background(), writeToSessionReq("wts-hidden"))

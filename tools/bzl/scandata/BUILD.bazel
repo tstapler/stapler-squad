@@ -186,6 +186,7 @@ filegroup(
         "//server/services/sessiondefaults:go_sources",
         "//server/services/sessionports:go_sources",
         "//server/services/sessionretention:go_sources",
+        "//server/services/sessionstream:go_sources",
         "//server/services/slashcommands:go_sources",
         "//server/services/streamhubrollout:go_sources",
         "//server/services/summaryrpc:go_sources",
