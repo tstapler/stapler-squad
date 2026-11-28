@@ -478,7 +478,7 @@ Differences from 5 and section 6: (1) `sessioncreate` alone would have left the 
 
 `session_create_characterization_test.go` and `testdata/session_create.golden` were committed before the move; the only change to them since is the `domain.SessionSpawnOptions` qualifier. The golden records one behaviour that looks like a defect and was not changed: nothing writes the `creation_epoch` column, so after `RetrySessionCreation` the epoch-fenced terminal write is rejected and a retry that fails stays `Creating`.
 
-Stage 7: `T9dServicesLOCMax` (10,000) in `tools/bzl/scoping/t9.go` now caps `server/services` in T9d; `session` keeps `LargestPkgLOCMax`. No CI workflow or make target runs `scoping t9`. The cap itself is enforced on every PR by `scoping services-cap`, a step of the `bazel-guards` job in `.github/workflows/bazel.yml` that checks only this value (not a required status check, like every check in this repo). The exact `server/services` row in `budget.txt` is still checked only by `make ready-scoping-budget`, which CI reaches through the Fallback canary workflow.
+Stage 7: `T9dServicesLOCMax` (10,000) in `tools/bzl/scoping/t9.go` now caps `server/services` in T9d; `session` keeps `LargestPkgLOCMax`. No CI workflow or make target runs `scoping t9`. The cap itself is enforced on every PR by `scoping services-cap`, a step of the `bazel-guards` job in `.github/workflows/bazel.yml` that checks only this value (not a required status check, like every check in this repo). It counts every non-test `.go` file directly in the directory, including build-tagged, cgo and generated ones; `t9` itself still counts host-build files only. The step is last in its job, and `lint.yml` runs the test that pins this wiring. The exact `server/services` row in `budget.txt` is still checked only by `make ready-scoping-budget`, which CI reaches through the Fallback canary workflow.
 
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
@@ -510,7 +510,11 @@ Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes whi
 - Part 3's `sessionlife`/`terminal` packages correspond to `sessionrpc`/`sessionstream` here. The stage order differs: this plan moves all leaves before the hub so that hub handlers import finished leaves.
 - Part 3's cross-part gap (`DerivePriority`, `SessionStopper`, `SessionSteerer`, claim types, `Steer*` consts, `ReasonName*`) is partly closed here: the `Steer*` constants and `NudgeRecorder` go to `access` (deferred from stage 1 to the Stage 5 `providers`/`notify` PRs); `DerivePriority` goes to `notify`; the rest are unresolved.
 
-## 8a. Every package over 10k today (V: `ls <dir>/*.go | grep -v _test.go | xargs cat | wc -l`, run 2026-11-23; matches the reviewer's table)
+## 8a. Every package over 10k
+
+**Status 2026-11-28** (`wc -l` over each directory's own `*.go` files minus `_test.go`, at `e95687f2f`): `server/services` (8,803) and `session` (9,451) are now under 10k. Over 10k and not yet scoped: `session/instance` 23,541, `server/services/backlogsvc` 16,016, `server/mcp` 13,451, `server` 10,667, `session/tmux` 10,454 and `session/unfinished` 10,186.
+
+The table below is the 2026-11-23 snapshot, before the split (V: `ls <dir>/*.go | grep -v _test.go | xargs cat | wc -l`, run 2026-11-23; matches the reviewer's table).
 
 | Package | Non-test lines | Plan |
 |---|---|---|

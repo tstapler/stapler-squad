@@ -23,6 +23,7 @@ on:
       - '!third_party/**'
       - 'scripts/ssq-hook-handler'
       - '.github/workflows/lint.yml'
+      - '.github/workflows/bazel.yml'  # for the services-cap pin step
   workflow_dispatch:
   pull_request:
     branches: [ main ]
@@ -47,6 +48,7 @@ on:
       - 'scripts/ssq-hook-handler'
       - '.github/workflows/lint.yml'
       - '.github/workflows/main-ci.yml'  # for the full-suite shard guard step
+      - '.github/workflows/bazel.yml'  # for the services-cap pin step
 
 concurrency:
   group: lint-${{ github.event.pull_request.number || github.ref }}
@@ -156,6 +158,12 @@ jobs:
         run: |
           go test ./tools/ci/testshards
           go run ./tools/ci/testshards rest > /dev/null
+
+      # Here, not in bazel-guards: a `needs` or `if` added to that job would skip a test inside it,
+      # and test-affected narrows on .go files, so a bazel.yml-only PR would not run the test.
+      - name: services-cap CI wiring pin
+        if: ${{ !cancelled() }}
+        run: go test -count=1 -run '^TestServicesCap_' ./tools/bzl/scoping
 
       # Soft-timeout wrapper (16m, below this job's hard timeout-minutes ceiling):
       # golangci-lint-action is a `uses:` step, so it can't be wrapped with the shell

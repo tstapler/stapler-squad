@@ -52,6 +52,15 @@ func newFixture(t *testing.T) *fixture {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = safeexec.CommandContext(ctx, tmux.Binary(), tmux.ResolveSocket(f.socket).Args("kill-server")...).Run()
+		// kill-server can leave the socket file. tmux puts it under $TMUX_TMPDIR, else /tmp.
+		dir := os.Getenv("TMUX_TMPDIR")
+		if dir == "" {
+			dir = "/tmp"
+		}
+		path := filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()), f.socket)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Logf("remove tmux socket %s: %v", path, err)
+		}
 	})
 	bus := events.NewEventBus(64)
 	t.Cleanup(bus.Close)

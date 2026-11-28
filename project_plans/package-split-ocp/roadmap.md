@@ -347,6 +347,10 @@ Physical leaf moves that become honest only after waves 1-3 removed the concrete
 
 - **2026-11-23, owner: "every package under 10k" still applies to `server/services`** (65,807 non-test lines, 268 files). Status: PLANNED, nothing moved. The measured hub redesign and 54-PR staged sequence are in [session-service-hub-plan.md](session-service-hub-plan.md) (assignment: [session-service-hub-assignment.csv](session-service-hub-assignment.csv)): one proto `SessionService` kept, Go-level facade of embedded handlers, nine kernel packages with an explicit symbol-cut list, minimum path to under 10k is stages 0-6b (top level 8,645). Seven other packages are also over 10k (plan section 8a); their scope is an open owner question. It refines Part 3 of [other-packages-under-10k-plan.md](other-packages-under-10k-plan.md).
 
+## Size status (2026-11-28)
+
+Measured with `wc -l` over each directory's own `*.go` files minus `_test.go`, at `e95687f2f`. `server/services` (8,803) and `session` (9,451) are now under 10k. Over 10k and not yet scoped: `session/instance` 23,541, `server/services/backlogsvc` 16,016, `server/mcp` 13,451, `server` 10,667, `session/tmux` 10,454 and `session/unfinished` 10,186. Whether the goal covers them is open question 5 of [session-service-hub-plan.md](session-service-hub-plan.md); its section 8a has the earlier measurements.
+
 ## Owner questions
 
 Answered on 2026-11-19 (see the linked plans for the measured follow-through):

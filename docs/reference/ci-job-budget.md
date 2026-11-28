@@ -17,7 +17,7 @@ The script is an upper bound for jobs whose skip comes from `needs:` or a `detec
 |---|---|---|
 | Every non-docs PR | `build.yml` | `detect-changes`, `prepare`, `web-checks` (smoke next+bun, built-assets, supply chain, Storybook), `test-affected`, `go-guards` (delivery gate, git oracle, install check, PTY race), the e2e jobs |
 | Every PR | `backlog-scaffolding-guard.yml` | Two always-run jobs, no `paths:` filter. `guard` (`pr-diff-guards`): API-only diff checks. `promo-guards`: depth-2 checkout, prebuilt `promoguard`, banned-term scan, binary-media guard (`allow-media` label override) and docs coverage, reading every gate input from the base blob. The workflow also fires on `labeled`/`unlabeled`; `guard` skips those events and `promo-guards` runs only for the `allow-media` label |
-| PR touching Go/web/proto paths or `main-ci.yml` | `lint.yml` | one `lint` job (Go, web, ShellCheck, buf breaking, `make vet-tags` for opt-in build tags, the `tools/ci/testshards` guard) |
+| PR touching Go/web/proto paths, `main-ci.yml` or `bazel.yml` | `lint.yml` | one `lint` job (Go, web, ShellCheck, buf breaking, `make vet-tags` for opt-in build tags, the `tools/ci/testshards` guard, the `services-cap` CI wiring pin) |
 | PR touching Go files | `goreleaser-check.yml` | config check + CGO_ENABLED=0 build smoke in one job |
 | PR touching `server/mcp/**`, `server/services/**` | `mcp-integration.yml` | one job, two sequential suites |
 | PR touching web build paths | `ux-analysis.yml` | Axe + Lighthouse |
