@@ -167,7 +167,7 @@ func BenchmarkGogitstoreSoakUnderSustainedLoad(b *testing.B) {
 	// dotgit.ErrPackfileNotFound go-git itself would otherwise surface) for
 	// exactly this race, so existing plumbing.ErrObjectNotFound-tolerant
 	// callers elsewhere in this codebase (e.g. gogit_vcs_reader.go's
-	// findMergeBase) can actually catch it.
+	// FindMergeBase) can actually catch it.
 	var opErrorsStaleIndex atomic.Int64
 	var opErrorsUnexpected atomic.Int64
 	var repackCount atomic.Int64

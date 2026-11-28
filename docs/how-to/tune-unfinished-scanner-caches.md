@@ -22,7 +22,7 @@ The handler is `handleActuatorUnfinishedScanner` (`server/actuator.go`); it rend
 | `scan_cycles_total`, `scan_cycle_seconds_sum` | completed scan tasks and their wall time |
 | `caches.{graph,reach,aheadbehind,behind,messages,diffmemo,index,untracked}` | `hits`, `misses`, `evictions`, `coalesced`, `bytes`, `entries`; `index` and `untracked` report only hits/misses (their skip counters) |
 | `repostates`, `repostate_bytes` | live shared `RepoState` count and summed bytes |
-| `decoded_commits_total` | commit decodes by the stock parents reader (`commit_parents_stock.go`) |
+| `decoded_commits_total` | commit decodes by the stock parents reader (`session/unfinished/commitwalk/parents_stock.go`) |
 | `parity_mismatch_total`, `parity_transient_total` | per field (`ahead`, `behind`, `messages`, `dirty`, `shortstat`) |
 | `shadow_verify` | `sampled`, `skipped_pressure`, `oracle_errors` |
 | `dirty_full_walk_total` | forced full walks by reason |

@@ -175,7 +175,7 @@ type Walk struct {
 const ctxCheckEvery = 64
 
 // NewWalk starts a walk over the current generation under stamp ordinal ord.
-// limit is the per-side visit cap (the plain walk's mergeBaseBFSLimit).
+// limit is the per-side visit cap (the plain walk's MergeBaseBFSLimit).
 func (s *RepoState) NewWalk(ctx context.Context, src ParentsSource, ord StampOrd, limit int) Walk {
 	g := s.Graph()
 	return Walk{
@@ -262,7 +262,7 @@ func (w *Walk) intern(h plumbing.Hash) (uint32, error) {
 }
 
 // FindMergeBase is git's paint-down-to-common over interned ids: the exact
-// port of the plain walk's findMergeBase (same heap order, flag propagation,
+// port of the plain walk's FindMergeBase (same heap order, flag propagation,
 // 2*limit visit cap and candidate filtering).
 func (w *Walk) FindMergeBase(h1, h2 plumbing.Hash) (plumbing.Hash, error) {
 	if h1 == h2 {

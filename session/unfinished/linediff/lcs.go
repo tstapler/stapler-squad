@@ -1,4 +1,4 @@
-package unfinished
+package linediff
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ func LinesDiff(old, newContent string) (insertions, deletions int) {
 	return len(newLines) - lcs, len(oldLines) - lcs
 }
 
-// maxLCSLines caps the input size to the O(n*m) LCS DP below. A file well
+// MaxLCSLines caps the input size to the O(n*m) LCS DP below. A file well
 // under maxUntrackedFileSize in bytes can still contain hundreds of
 // thousands of lines (e.g. mostly-blank or single-character lines), and
 // n×m cells at that scale turns a shortstat poll into minutes of CPU on one
@@ -28,15 +28,15 @@ func LinesDiff(old, newContent string) (insertions, deletions int) {
 // rolling two-row implementation keeps memory at O(min(n,m)) (~160 KB of
 // ints), not O(n*m); it's the CPU time, not memory, that this cap bounds.
 // Declared as var (not const) so tests can lower it without generating huge fixtures.
-var maxLCSLines = 20_000
+var MaxLCSLines = 20_000
 
 // lcsLength computes the length of the longest common subsequence of two line slices.
-// Uses O(n*m) DP — acceptable for typical source files, capped by maxLCSLines.
+// Uses O(n*m) DP — acceptable for typical source files, capped by MaxLCSLines.
 func lcsLength(a, b []string) int {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
 	}
-	if len(a) > maxLCSLines || len(b) > maxLCSLines {
+	if len(a) > MaxLCSLines || len(b) > MaxLCSLines {
 		return 0
 	}
 	// Use two rows to keep memory O(min(n,m)).
@@ -75,9 +75,9 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// countBytesLines counts the number of lines in data by counting '\n' bytes,
+// CountBytesLines counts the number of lines in data by counting '\n' bytes,
 // treating a trailing newline as not creating an extra empty line.
-func countBytesLines(data []byte) int {
+func CountBytesLines(data []byte) int {
 	if len(data) == 0 {
 		return 0
 	}
@@ -88,9 +88,9 @@ func countBytesLines(data []byte) int {
 	return n
 }
 
-// linesDiffBytes returns LCS-based insertion and deletion counts between old and new,
+// LinesDiffBytes returns LCS-based insertion and deletion counts between old and new,
 // operating directly on []byte to avoid string conversion overhead.
-func linesDiffBytes(old, newData []byte) (insertions, deletions int) {
+func LinesDiffBytes(old, newData []byte) (insertions, deletions int) {
 	a := splitLinesBytes(old)
 	b := splitLinesBytes(newData)
 	lcs := lcsLengthBytes(a, b)
@@ -110,12 +110,12 @@ func splitLinesBytes(data []byte) [][]byte {
 }
 
 // lcsLengthBytes computes the LCS length of two byte-slice-of-lines sequences.
-// Uses O(min(n,m)) space rolling DP, same algorithm as lcsLength, capped by maxLCSLines.
+// Uses O(min(n,m)) space rolling DP, same algorithm as lcsLength, capped by MaxLCSLines.
 func lcsLengthBytes(a, b [][]byte) int {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
 	}
-	if len(a) > maxLCSLines || len(b) > maxLCSLines {
+	if len(a) > MaxLCSLines || len(b) > MaxLCSLines {
 		return 0
 	}
 	if len(a) < len(b) {

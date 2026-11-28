@@ -2,6 +2,7 @@ package unfinished
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"slices"
 	"testing"
 )
@@ -59,9 +60,9 @@ func TestCommitMessages_ShouldBuildOneReachSet_WhenThreeWorktreesShareBase(t *te
 
 func TestCommitMessages_ShouldEqualLegacy_WhenReachSetIsCappedAndFlagOn(t *testing.T) {
 	_, dir, _ := divergedClocked(t, 60, 3, 2)
-	prev := maxReachableSetCommits
-	maxReachableSetCommits = 20
-	t.Cleanup(func() { maxReachableSetCommits = prev })
+	prev := commitwalk.MaxReachableSetCommits
+	commitwalk.MaxReachableSetCommits = 20
+	t.Cleanup(func() { commitwalk.MaxReachableSetCommits = prev })
 
 	legacy, err := NewCountingReader(Flags{SharedCommitState: false}).CommitMessages(context.Background(), dir, "base", 20)
 	if err != nil {

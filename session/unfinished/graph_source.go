@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
 
@@ -30,7 +31,7 @@ import (
 // used by one walk on one goroutine, so it reuses a parents buffer.
 type graphSource struct {
 	st      storer.EncodedObjectStorer
-	reader  CommitParentsReader
+	reader  commitwalk.CommitParentsReader
 	shallow bool
 	buf     []plumbing.Hash
 	decodes int       // commits decoded by this walk; non-zero means it extended the graph
@@ -38,7 +39,7 @@ type graphSource struct {
 }
 
 func newGraphSource(st storer.EncodedObjectStorer, shallow bool) *graphSource {
-	return &graphSource{st: st, reader: stockCommitParents, shallow: shallow, born: time.Now()}
+	return &graphSource{st: st, reader: commitwalk.StockCommitParents, shallow: shallow, born: time.Now()}
 }
 
 var _ repostate.ParentsSource = (*graphSource)(nil)

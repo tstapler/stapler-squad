@@ -1,4 +1,4 @@
-package unfinished
+package commitwalk
 
 import (
 	"github.com/go-git/go-git/v5/plumbing"
@@ -18,6 +18,6 @@ type CommitParentsReader interface {
 	Parents(s storer.EncodedObjectStorer, h plumbing.Hash, buf []plumbing.Hash) (parents []plumbing.Hash, when int64, err error)
 }
 
-// stockCommitParents is the in-package header-only reader; the fork's
+// StockCommitParents is the header-only reader; the fork's
 // DecodeCommitHeader (Story 1.2.2/1.2.3) is deferred, see ADR-004.
-var stockCommitParents CommitParentsReader = stockParentsReader{}
+var StockCommitParents CommitParentsReader = stockParentsReader{}

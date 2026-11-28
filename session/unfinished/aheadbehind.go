@@ -11,17 +11,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
-
-// parentSource supplies commit parents and committer times to the merge-base
-// and counting walks. parentMemo is the per-call implementation.
-type parentSource interface {
-	info(h plumbing.Hash) (commitInfo, error)
-	get(h plumbing.Hash) ([]plumbing.Hash, error)
-}
-
-var _ parentSource = (*parentMemo)(nil)
 
 // aheadBehindLocked computes (ahead, behind) for entry's HEAD against key.base
 // on the plain walk, reusing or storing the TTL cache entry. The caller holds
@@ -41,7 +33,7 @@ func (g *GoGitVCSReader) aheadBehindLocked(entry *cachedRepo, key aheadBehindKey
 // aheadBehindMemoized answers without any walk when head == base or when a
 // TTL-expired entry's head/base hashes still match the current ones: neither
 // ref moved since the last computation, so the result can't have changed, and
-// reusing it skips findMergeBase and two countCommitsTo walks (the actual
+// reusing it skips FindMergeBase and two CountCommitsTo walks (the actual
 // expensive work; resolving HEAD/base is cheap by comparison).
 func (g *GoGitVCSReader) aheadBehindMemoized(key aheadBehindKey, head, baseHash plumbing.Hash) (ahead, behind int, ok bool) {
 	if head == baseHash {
@@ -56,9 +48,9 @@ func (g *GoGitVCSReader) aheadBehindMemoized(key aheadBehindKey, head, baseHash 
 	return 0, 0, false
 }
 
-// aheadBehindPlain is the plainWalk: per-call parentMemo, caller holds entry.mu.
+// aheadBehindPlain is the plainWalk: per-call ParentMemo, caller holds entry.mu.
 func (g *GoGitVCSReader) aheadBehindPlain(entry *cachedRepo, key aheadBehindKey, head, baseHash plumbing.Hash) (int, int, error) {
-	ahead, behind, err := aheadBehindFrom(newParentMemo(entry.repo), head, baseHash)
+	ahead, behind, err := commitwalk.AheadBehindFrom(commitwalk.NewParentMemo(entry.repo), head, baseHash)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -128,18 +120,18 @@ func aheadBehindOnShared(ctx context.Context, rs *repostate.RepoState, entry *ca
 	if !ok {
 		return aheadBehindOnGraph(ctx, rs, src, ord, head, base)
 	}
-	res, err := rs.AheadBehind(ctx, src, ord, repostate.ABKey{Repo: repo, Head: head, Base: base, Cap: mergeBaseBFSLimit})
+	res, err := rs.AheadBehind(ctx, src, ord, repostate.ABKey{Repo: repo, Head: head, Base: base, Cap: commitwalk.MergeBaseBFSLimit})
 	return res.Ahead, res.Behind, err
 }
 
 // aheadBehindOnGraph runs phase 2 on the id graph; it reads no cachedRepo.
 func aheadBehindOnGraph(ctx context.Context, rs *repostate.RepoState, src repostate.ParentsSource, ord repostate.StampOrd, head, base plumbing.Hash) (int, int, error) {
-	w := rs.NewWalk(ctx, src, ord, mergeBaseBFSLimit)
+	w := rs.NewWalk(ctx, src, ord, commitwalk.MergeBaseBFSLimit)
 	defer w.Close()
 	return aheadBehindWalk(&w, head, base)
 }
 
-// aheadBehindWalk is aheadBehindFrom over interned ids.
+// aheadBehindWalk is AheadBehindFrom over interned ids.
 func aheadBehindWalk(w *repostate.Walk, head, base plumbing.Hash) (ahead, behind int, err error) {
 	mb, err := w.FindMergeBase(head, base)
 	if err != nil {
@@ -169,22 +161,6 @@ func resolveAheadBehindRefs(entry *cachedRepo, base string) (head, baseHash plum
 		return head, baseHash, fmt.Errorf("resolve base %q: %w", base, baseErr)
 	}
 	return headRef.Hash(), baseHash, nil
-}
-
-// aheadBehindFrom is phase 2: a pure function of the commit graph behind src.
-// It reads nothing from any cachedRepo.
-func aheadBehindFrom(src parentSource, head, base plumbing.Hash) (ahead, behind int, err error) {
-	mb, mbErr := findMergeBase(src, head, base)
-	if mbErr != nil {
-		return 0, 0, fmt.Errorf("merge base: %w", mbErr)
-	}
-	if ahead, err = countCommitsTo(src, head, mb); err != nil {
-		return 0, 0, err
-	}
-	if behind, err = countCommitsTo(src, base, mb); err != nil {
-		return 0, 0, err
-	}
-	return ahead, behind, nil
 }
 
 // resolveCommitMessageRefs snapshots HEAD and base as plain hash values under a

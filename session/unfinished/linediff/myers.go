@@ -1,4 +1,4 @@
-package unfinished
+package linediff
 
 import "sync"
 
@@ -18,7 +18,7 @@ var myersScratch = sync.Pool{New: func() any {
 // It needs only the edit distance D (LCS = (n+m-D)/2), so no trace is kept
 // and the steady-state cost is zero heap allocations.
 //
-// Unlike lcsLength it has no maxLCSLines cap: callers keep that cap and its
+// Unlike lcsLength it has no MaxLCSLines cap: callers keep that cap and its
 // "fully replaced" approximation at the call site.
 func MyersEditCounts(a, b []string) EditCounts {
 	for len(a) > 0 && len(b) > 0 && a[0] == b[0] {

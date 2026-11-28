@@ -462,7 +462,7 @@ func (s *SharedObjectStore) dirObjectPack(pack plumbing.Hash) (billy.File, error
 			// propagates whatever raw error the pack-open call returns,
 			// unwrapped — so this is not a gogitstore-introduced regression.
 			// It matters here because gogit_vcs_reader.go's callers (e.g.
-			// findMergeBase) already tolerate plumbing.ErrObjectNotFound
+			// FindMergeBase) already tolerate plumbing.ErrObjectNotFound
 			// specifically as "skip and continue" — translating the sentinel
 			// here lets that existing tolerance logic actually catch this
 			// case, instead of a transient staleness race surfacing as an

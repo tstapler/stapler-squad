@@ -1,8 +1,8 @@
 package unfinished
 
 // Parity of the integer-id walks (repostate.Walk) with the retained oracles
-// (Story 2.1.3): the plain walk that stays in production (findMergeBase and
-// countCommitsTo over parentMemo), the committed-old legacyStack* walk through
+// (Story 2.1.3): the plain walk that stays in production (FindMergeBase and
+// CountCommitsTo over ParentMemo), the committed-old legacyStack* walk through
 // the recorded golden divergence set, and object.Commit.MergeBase.
 
 import (
@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
@@ -24,9 +25,9 @@ import (
 // idOutcome runs the id walk for one case on rs and returns the comparable
 // outcome. shallow selects whether an absent commit is remembered as a shallow
 // boundary (truncated) or surfaces as a not-found error on every read.
-func idOutcome(t testing.TB, d *builtDAG, rs *repostate.RepoState, shallow bool, head, base plumbing.Hash) walkOutcome {
+func idOutcome(t testing.TB, d *testrepo.BuiltDAG, rs *repostate.RepoState, shallow bool, head, base plumbing.Hash) walkOutcome {
 	t.Helper()
-	w := rs.NewWalk(context.Background(), newGraphSource(d.Repo.Storer, shallow), 0, mergeBaseBFSLimit)
+	w := rs.NewWalk(context.Background(), newGraphSource(d.Repo.Storer, shallow), 0, commitwalk.MergeBaseBFSLimit)
 	defer w.Close()
 	mb, err := w.FindMergeBase(head, base)
 	if errors.Is(err, repostate.ErrFallback) {
@@ -52,7 +53,7 @@ func TestIDWalk_ShouldEqualLockstep_WhenRandom500DAGsOnAndOffFlag(t *testing.T) 
 	}
 	for _, c := range cases {
 		withMergeBaseLimit(t, c.limit)
-		d := buildDAG(t, c.spec, nil)
+		d := testrepo.BuildDAG(t, c.spec, nil)
 		h, b := d.Hashes[c.head], d.Hashes[c.base]
 		want := lockstepOutcome(d, h, b) // flag off: the plain walk
 		for _, shallow := range []bool{len(c.spec.Missing) > 0, false} {
@@ -73,13 +74,13 @@ const mergeBaseBFSLimitDefault = 2000
 
 // assertSameOracleVerdict is the second check: against the object.Commit.MergeBase
 // best set the id walk classifies exactly as the plain walk, never a non-ancestor.
-func assertSameOracleVerdict(t *testing.T, c divergenceCase, d *builtDAG, h, b plumbing.Hash, plain, id walkOutcome) {
+func assertSameOracleVerdict(t *testing.T, c divergenceCase, d *testrepo.BuiltDAG, h, b plumbing.Hash, plain, id walkOutcome) {
 	t.Helper()
-	best, err := d.bestSet(h, b)
+	best, err := d.BestSet(h, b)
 	if err != nil {
 		return
 	}
-	common := c.spec.commonAncestors(c.head, c.base)
+	common := c.spec.CommonAncestors(c.head, c.base)
 	vp, vi := oracleVerdict(plain.MB, best, common), oracleVerdict(id.MB, best, common)
 	if vi == "NOT-ANCESTOR" || vi != vp {
 		t.Errorf("%s: MergeBase oracle verdict id=%s plain=%s", c.name, vi, vp)
@@ -105,7 +106,7 @@ func TestIDWalk_ShouldAddNoDivergenceBeyondGolden_WhenComparedToLegacyStack(t *t
 	var got []string
 	for _, c := range append(namedDivergenceCases(), seededDivergenceCases()...) {
 		withMergeBaseLimit(t, c.limit)
-		d := buildDAG(t, c.spec, nil)
+		d := testrepo.BuildDAG(t, c.spec, nil)
 		h, b := d.Hashes[c.head], d.Hashes[c.base]
 		l, k := legacyOutcome(d, h, b), idOutcome(t, d, newTestRepoState(), len(c.spec.Missing) > 0, h, b)
 		if l != k {
@@ -121,10 +122,10 @@ func TestIDWalk_ShouldAddNoDivergenceBeyondGolden_WhenComparedToLegacyStack(t *t
 func TestIDWalk_ShouldKeepBFSOrder_WhenDFSAndBFSDifferAtCap(t *testing.T) {
 	for seed := range 300 {
 		rng := rand.New(rand.NewSource(int64(31000 + seed)))
-		spec, h, b := randomGeneral(rng)
+		spec, h, b := testrepo.RandomGeneral(rng)
 		for _, limit := range []int{2, 3, 5, 8} {
 			withMergeBaseLimit(t, limit)
-			d := buildDAG(t, spec, nil)
+			d := testrepo.BuildDAG(t, spec, nil)
 			want := lockstepOutcome(d, d.Hashes[h], d.Hashes[b])
 			if got := idOutcome(t, d, newTestRepoState(), false, d.Hashes[h], d.Hashes[b]); got != want {
 				t.Fatalf("seed %d limit %d: id walk %v, plain walk %v", seed, limit, got, want)

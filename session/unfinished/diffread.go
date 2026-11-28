@@ -81,7 +81,7 @@ func readSmallFilePooled(path string) (*[]byte, bool) {
 }
 
 // countFileLines streams path through a pooled buffer and returns what
-// countBytesLines would return for its content, allocating nothing per file.
+// CountBytesLines would return for its content, allocating nothing per file.
 func countFileLines(path string) (int, bool) {
 	f, _, ok := openSmallFile(path)
 	if !ok {

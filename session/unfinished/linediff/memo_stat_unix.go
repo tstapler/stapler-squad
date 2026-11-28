@@ -1,6 +1,6 @@
 //go:build unix
 
-package unfinished
+package linediff
 
 import "golang.org/x/sys/unix"
 

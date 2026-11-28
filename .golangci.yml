@@ -240,6 +240,26 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent/sessiongoal
             - github.com/tstapler/stapler-squad/session/instance
             - github.com/tstapler/stapler-squad/session/tmux
+        # session/unfinished/linediff counts line diffs and memoizes them; it never imports session/unfinished.
+        isolate_linediff:
+          list-mode: strict
+          files:
+            - "**/session/unfinished/linediff/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/go-git/go-git/v5/plumbing$
+            - github.com/puzpuzpuz/xsync/v4
+            - golang.org/x/sys/unix
+        # session/unfinished/commitwalk walks go-git commit history; it never imports session/unfinished.
+        isolate_commitwalk:
+          list-mode: strict
+          files:
+            - "**/session/unfinished/commitwalk/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/go-git/go-git/v5
         # session/ptydiscovery backs only the `test-pty` debug command (main.go); it never imports
         # session, github or server.
         isolate_ptydiscovery:

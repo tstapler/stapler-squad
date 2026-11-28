@@ -48,6 +48,8 @@ server/services/gatestats !server/web
 server/services/quota !server/web
 session/ptyio !server
 session/ptydiscovery !server
+session/unfinished/linediff !server
+session/unfinished/commitwalk !server
 session/hostclaim !server
 session/dialogpresence !server
 session/summaries !server

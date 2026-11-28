@@ -2,6 +2,8 @@ package unfinished
 
 import (
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
+	"github.com/tstapler/stapler-squad/session/unfinished/linediff"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,13 +25,13 @@ func readBufferFixture(t *testing.T, n, lines int) []string {
 }
 
 // assertReadBufferCeiling requires newImpl to allocate at most 25% of the
-// legacy readFileIfSmall+countBytesLines path over the fixture (Story 4.4.1,
+// legacy readFileIfSmall+CountBytesLines path over the fixture (Story 4.4.1,
 // the read-buffer row: 75.9% of S1 scanner alloc_space).
-func assertReadBufferCeiling(tb gateTB, paths []string, newImpl func(path string)) {
+func assertReadBufferCeiling(tb testrepo.GateTB, paths []string, newImpl func(path string)) {
 	tb.Helper()
 	legacy := func(p string) {
 		if data, ok := readFileIfSmall(p); ok {
-			countBytesLines(data)
+			linediff.CountBytesLines(data)
 		}
 	}
 	each := func(f func(string)) func() {
@@ -39,8 +41,8 @@ func assertReadBufferCeiling(tb gateTB, paths []string, newImpl func(path string
 			}
 		}
 	}
-	oldBytes, _ := allocDelta(20, each(legacy))
-	newBytes, _ := allocDelta(20, each(newImpl))
+	oldBytes, _ := testrepo.AllocDelta(20, each(legacy))
+	newBytes, _ := testrepo.AllocDelta(20, each(newImpl))
 	if newBytes > 0.25*oldBytes {
 		tb.Errorf("4.4.1 read buffers: B/op = %.0f, ceiling = 25%% of legacy %.0f", newBytes, oldBytes)
 	}
@@ -57,7 +59,7 @@ func TestResidualAllocator_ShouldMeetCeilingVsLegacy_WhenAssignedTo441(t *testin
 	t.Run("tracked read uses the pool", func(t *testing.T) {
 		assertReadBufferCeiling(t, paths, func(p string) {
 			if bp, ok := readSmallFilePooled(p); ok {
-				countBytesLines(*bp)
+				linediff.CountBytesLines(*bp)
 				releaseFileBuf(bp)
 			}
 		})
@@ -68,13 +70,13 @@ func TestReadBufferGate_ShouldFail_WhenLegacyIsWiredAsNew(t *testing.T) {
 	if raceEnabled {
 		t.Skip("allocation counts are not meaningful under -race")
 	}
-	rec := &failRecorder{}
+	rec := &testrepo.FailRecorder{}
 	assertReadBufferCeiling(rec, readBufferFixture(t, 20, 400), func(p string) {
 		if data, ok := readFileIfSmall(p); ok {
-			countBytesLines(data)
+			linediff.CountBytesLines(data)
 		}
 	})
-	if rec.failures == 0 {
+	if rec.Failures == 0 {
 		t.Error("gate passed with the legacy reader wired as the new implementation")
 	}
 }
@@ -102,8 +104,8 @@ func TestReadSmallFilePooled_ShouldMatchReadFileIfSmall_WhenContentAndLimitsVary
 			releaseFileBuf(bp)
 		}
 		n, nOK := countFileLines(p)
-		if nOK != wantOK || (nOK && n != countBytesLines(want)) {
-			t.Errorf("%s: countFileLines = (%d,%v), want (%d,%v)", name, n, nOK, countBytesLines(want), wantOK)
+		if nOK != wantOK || (nOK && n != linediff.CountBytesLines(want)) {
+			t.Errorf("%s: countFileLines = (%d,%v), want (%d,%v)", name, n, nOK, linediff.CountBytesLines(want), wantOK)
 		}
 	}
 	for _, missing := range []string{filepath.Join(dir, "nope"), dir} {

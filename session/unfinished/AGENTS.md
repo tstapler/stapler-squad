@@ -34,12 +34,12 @@ event invalidates it, and the scanner multiplies it by W.
 
 | Operation | Cost | Notes and improvement levers |
 |---|---|---|
-| `findMergeBase` | O(d1 + d2) commit decodes, capped at 2L visits; with `shared_commit_state` an id walk over the shared graph (`repostate/walk.go`), so a repeat costs 0 decodes | Git-style paint-down-to-common (newest-first heap, FIFO ties, stale propagation); returns a best common ancestor, matching the `object.Commit.MergeBase` oracle on 100% of 600 single-merge/general cases (the pre-lockstep walk: 550/600). Was O(min(L, history)): ~2000 decodes per call. On a 2500-commit history: 114,780 → 8,347 allocs/op for the full ahead/behind, 57 decodes. |
-| `countCommitsTo` ×2 | O(a) + O(b), capped at L | `b` can reach L when base moves far ahead. Flag on: the `behind` count is memoized per (base, merge base) and the whole result per `(head, base)` (`repostate/products.go`), so a second worktree at the same pair walks nothing and a hit allocates 0. |
-| Commit decode (go-git) | one inflate + full message/signature parse per commit | Replaced on the walk path by the stock header-only reader (`commit_parents_stock.go`: stops at the committer line, no message or gpgsig parse). Every decode is counted in `decoded_commits_total`. The fork header reader (F2) is deferred (`plan.md` Story 1.2.2). |
+| `commitwalk.FindMergeBase` | O(d1 + d2) commit decodes, capped at 2L visits; with `shared_commit_state` an id walk over the shared graph (`repostate/walk.go`), so a repeat costs 0 decodes | Git-style paint-down-to-common (newest-first heap, FIFO ties, stale propagation); returns a best common ancestor, matching the `object.Commit.MergeBase` oracle on 100% of 600 single-merge/general cases (the pre-lockstep walk: 550/600). Was O(min(L, history)): ~2000 decodes per call. On a 2500-commit history: 114,780 → 8,347 allocs/op for the full ahead/behind, 57 decodes. |
+| `commitwalk.CountCommitsTo` ×2 | O(a) + O(b), capped at L | `b` can reach L when base moves far ahead. Flag on: the `behind` count is memoized per (base, merge base) and the whole result per `(head, base)` (`repostate/products.go`), so a second worktree at the same pair walks nothing and a hit allocates 0. |
+| Commit decode (go-git) | one inflate + full message/signature parse per commit | Replaced on the walk path by the stock header-only reader (`commitwalk/parents_stock.go`: stops at the committer line, no message or gpgsig parse). Every decode is counted in `decoded_commits_total`. The fork header reader (F2) is deferred (`plan.md` Story 1.2.2). |
 | `HasUncommitted` | O(n) index/HEAD compares + O(n) `lstat` + O(f) untracked walk | Cheapest exits first (staged, deleted, size/mtime). `scan_skip`: parsed-index cache by `IndexStatSig`, per-directory untracked verdict cache, and one stat pass shared with `DiffShortstat`. Stats are counted in `stat_calls_total` (nested `.gitignore` re-checks included); hashes forced only by a nanosecond mtime mismatch in `nanos_forced_hashes_total`. |
-| `diffShortstatUncached` | per modified file, LCS DP O(m·k) time, guarded by `maxLCSLines` | `diff_counter`: hybrid Myers byte-line counter, O((m+k)·D), with a DP fallback, plus a per-file diff memo (`myers_bytes.go`, `diffmemo.go`). |
-| `CommitMessages` / `reachableSet` | O(R) commit decodes per (worktree, base hash) | With `shared_commit_state` on, the set is a `repostate.ReachBitset` keyed `{RepoKey, base, cap, ShallowStamp, GraphEpoch}`: one build per (repo, base), O(delta) when base advances from a complete set (6,352 bytes at 50,000 commits; three worktrees cold `CommitMessages`: DecodeCount 7,521 flag-off vs 2,515 shared; `plan.md` "Epic 2.2/2.3 status"). Message lists and first lines are hash-keyed memos. Flag off keeps the per-worktree map: O(W·R). A cold 50,000-commit build over a primed graph measured 0.33 ms (`BenchmarkReachScratch50000`). |
+| `diffShortstatUncached` | per modified file, LCS DP O(m·k) time, guarded by `linediff.MaxLCSLines` | `diff_counter`: hybrid Myers byte-line counter, O((m+k)·D), with a DP fallback, plus a per-file diff memo (`linediff/myers_bytes.go`, `linediff/memo.go`). |
+| `CommitMessages` / `commitwalk.ReachableSet` | O(R) commit decodes per (worktree, base hash) | With `shared_commit_state` on, the set is a `repostate.ReachBitset` keyed `{RepoKey, base, cap, ShallowStamp, GraphEpoch}`: one build per (repo, base), O(delta) when base advances from a complete set (6,352 bytes at 50,000 commits; three worktrees cold `CommitMessages`: DecodeCount 7,521 flag-off vs 2,515 shared; `plan.md` "Epic 2.2/2.3 status"). Message lists and first lines are hash-keyed memos. Flag off keeps the per-worktree map: O(W·R). A cold 50,000-commit build over a primed graph measured 0.33 ms (`BenchmarkReachScratch50000`). |
 | Scanner total | Σ over W worktrees of the costs above × event rate | The biggest multiplier is the event rate. Filtering and debouncing `.git` events (`watcher.go`) cuts the miss count for every row at once. |
 
 ## Flags
@@ -79,7 +79,7 @@ any flag default (`plan.md` Story 5.1.1).
 
 - Profile before and after. Quote `-benchmem` numbers, using `b.Run` variants against the old
   implementation, and keep a regression test that fails on the old behaviour (see
-  `gogit_vcs_reader_mergebase_test.go`: decode count scales with distance, not history depth).
+  `commitwalk/mergebase_test.go`: decode count scales with distance, not history depth).
 - Hold `entry.mu` only around go-git object access, never across stat walks or cache stores (see
   `hasUncommittedGoGitPhase`).
 - Singleflight and TTL-cache expensive results (`sfDo`, `*Cache` fields); a cache hit must stay
@@ -107,11 +107,9 @@ Hot files are split so each shared file has one editing story per wave
 | `gogit_vcs_reader.go` | cache lifecycle, open/prune, `AheadBehind`/`CommitMessages` wrappers, `RepoCacheStats` | 1.1.4 -> 1.1.3b -> 5.1.1a -> 5.3.1 |
 | `gogit_vcs_reader_diff.go` | `DiffShortstat` orchestration, memo resolution, `applyDiff` | 3.2.2 -> 3.2.3b -> 4.4.1 rows |
 | `gogit_vcs_reader_diff_classify.go` | `classifyIndex`, staged/unstaged target lists, racy-stat content checks | 3.2.2 -> 3.2.3b -> 4.4.1 rows |
-| `gogit_vcs_reader_diff_lcs.go` | `LinesDiff`, `lcsLength` and byte variants, `maxLCSLines` | 3.2.2 -> 3.2.3b -> 4.4.1 rows |
 | `gogit_vcs_reader_trees.go` | `resolveHeadTreeHashes` | 3.1.1b |
 | `gogit_vcs_reader_dirty.go` | `HasUncommitted`, `hasUncommittedGoGitPhase`, `trackedFile`, `getOrBuildUntrackedMatcher` | 4.2.2b -> 4.3.2b -> 4.2.4b -> 3.3.1b |
 | `gogit_vcs_reader_walkers.go` | untracked/tracked walkers | 0.1.2b -> 4.2.3b -> 4.4.1 rows |
-| `gogit_vcs_reader_mergebase.go` | `parentMemo`, plain-walk `findMergeBase` (paint-down-to-common), `countCommitsTo`, `reachableSet`; the shared walk lives in `repostate/walk.go` | 2.1.3b -> 2.2.1b -> 2.2.2b (2.2.3b superseded) |
 | `aheadbehind.go` | ahead/behind extraction and the shared-memo/graph switch | 1.1.4a -> 2.1.2b -> 2.1.3b -> 2.2.1b -> 2.2.2b (2.2.3b superseded) |
 | `flags.go` | `FlagSpec`/`Flags`, `FlagSpecs` (4 rollback units, `RemoveBy`), `FlagsFromConfig` (the Scanner owns its immutable `Flags`, passed with `WithFlags`) | not tracked in the plan table (added during implementation) |
 | `scanstate.go` | scan-state data model: `RefSnapshot`, scan records, `ScanSignature`, `scanResultCoverage` | not tracked in the plan table (added during implementation) |
@@ -125,14 +123,14 @@ Hot files are split so each shared file has one editing story per wave
 | `untracked_cache.go` | per-directory untracked verdict cache and `walkUntrackedSkip` | not tracked in the plan table (added during implementation) |
 | `hasuncommitted_skip.go` | `HasUncommitted` under `scan_skip` | not tracked in the plan table (added during implementation) |
 | `statpass.go`, `scanner_statpass.go` | single stat pass shared by `HasUncommitted` and `DiffShortstat` | not tracked in the plan table (added during implementation) |
-| `statsig_unix.go`, `statsig_other.go`, `statdir_unix.go`, `statdir_other.go`, `diffmemo_stat_unix.go`, `diffmemo_stat_other.go` | per-OS stat signatures | not tracked in the plan table (added during implementation) |
-| `diffmemo.go`, `diffread.go` | per-file diff memo (`FileDiffMemoKey`) and pooled small-file reads | not tracked in the plan table (added during implementation) |
-| `myers.go`, `myers_bytes.go` | Myers edit counter (`MyersEditCounts[Bytes]`), falls back to `lcsLength*` over its cap | not tracked in the plan table (added during implementation) |
+| `statsig_unix.go`, `statsig_other.go`, `statdir_unix.go`, `statdir_other.go`, `linediff/memo_stat_unix.go`, `linediff/memo_stat_other.go` | per-OS stat signatures | not tracked in the plan table (added during implementation) |
+| `diffread.go` | pooled small-file reads | not tracked in the plan table (added during implementation) |
+| `linediff/` (leaf) | line counting: LCS and Myers (`lcs.go`, `myers.go`, `myers_bytes.go`) and the per-file diff memo (`memo.go`) | 3.2.2 -> 3.2.3b -> 4.4.1 rows |
+| `commitwalk/` (leaf) | `ParentMemo`, `FindMergeBase` (paint-down-to-common), `CountCommitsTo`, `ReachableSet` (`mergebase.go`), the header-only parent reader (`parents*.go`) and walk counters; the shared walk lives in `repostate/walk.go` | 2.1.3b -> 2.2.1b -> 2.2.2b (2.2.3b superseded) |
 | `shadow_verify.go`, `shadow_oracle.go` | sampled parity check against a flags-off oracle reader (default 1/200) | not tracked in the plan table (added during implementation) |
 | `repostate_attach.go` | `RepoState` on the gogitstore extension slot, budget pruning | not tracked in the plan table (added during implementation) |
 | `reach_shared.go` | shared reach set / `CommitMessages` switch | not tracked in the plan table (added during implementation) |
 | `graph_source.go` | `ParentsSource` over the storer (lock chain, ADR-001/009) | not tracked in the plan table (added during implementation) |
-| `commit_parents.go`, `commit_parents_stock.go` | header-only commit parent reader | not tracked in the plan table (added during implementation) |
 | `metrics_repostate.go`, `metrics_duration.go` | `unfinished.repostate.*` series and slow-op histograms | not tracked in the plan table (added during implementation) |
 | `scanner.go` | scan/enqueue/`scanWorktree` | 4.2.4b -> 4.1.1 -> 4.1.2 -> 5.1.1b |
 | `scanner_gitwatch.go` | `gitWatcher` seam, dirty-tracker hooks, `watchRepo`/`unwatchRepo` | 4.3.1 -> 4.3.2b (DirtyGen bump only); 4.3.3 not built (Tier B skipped) |

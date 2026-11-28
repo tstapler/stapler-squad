@@ -7,6 +7,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
 
@@ -14,7 +15,7 @@ import (
 // CommitMessages: a repostate bitset on the shared path, the legacy map off it.
 type reachSet interface{ Contains(plumbing.Hash) bool }
 
-// hashSet adapts the legacy reachableSet map.
+// hashSet adapts the legacy ReachableSet map.
 type hashSet map[plumbing.Hash]bool
 
 func (s hashSet) Contains(h plumbing.Hash) bool { return s[h] }
@@ -33,7 +34,7 @@ func (g *GoGitVCSReader) reachMembership(ctx context.Context, entry *cachedRepo,
 	if rs := g.repoState(entry); rs != nil {
 		if keyer, ok := entry.repo.Storer.(commonDirKeyer); ok {
 			ord, shallow := g.observeShallow(entry, rs)
-			want := repostate.ReachKey{Repo: repostate.RepoKey(keyer.CommonDirKey()), Base: baseHash, Cap: maxReachableSetCommits}
+			want := repostate.ReachKey{Repo: repostate.RepoKey(keyer.CommonDirKey()), Base: baseHash, Cap: commitwalk.MaxReachableSetCommits}
 			src := newGraphSource(entry.repo.Storer, shallow)
 			b, err := rs.Reach(ctx, src, ord, want)
 			src.done()
@@ -80,12 +81,12 @@ func (g *GoGitVCSReader) commitMessagesShared(ctx context.Context, entry *cached
 	ord, shallow := g.observeShallow(entry, rs)
 	src := newGraphSource(entry.repo.Storer, shallow)
 	defer src.done()
-	reach, err := rs.Reach(ctx, src, ord, repostate.ReachKey{Repo: repo, Base: base, Cap: maxReachableSetCommits})
+	reach, err := rs.Reach(ctx, src, ord, repostate.ReachKey{Repo: repo, Base: base, Cap: commitwalk.MaxReachableSetCommits})
 	if err != nil {
 		return nil, sharedHandled(ctx, err), sharedErr(ctx, err)
 	}
 	in := repostate.MessageInputs{Src: src, Ord: ord, Reach: reach, Line: commitFirstLine(entry)}
-	msgs, err = rs.CommitMessages(ctx, in, repostate.MessageKey{Repo: repo, Head: head, Base: base, Max: max, Cap: maxReachableSetCommits})
+	msgs, err = rs.CommitMessages(ctx, in, repostate.MessageKey{Repo: repo, Head: head, Base: base, Max: max, Cap: commitwalk.MaxReachableSetCommits})
 	if err != nil {
 		return nil, sharedHandled(ctx, err), sharedErr(ctx, err)
 	}

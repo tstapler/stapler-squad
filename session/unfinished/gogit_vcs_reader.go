@@ -20,6 +20,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/gogitstore"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 	"golang.org/x/sync/singleflight"
@@ -538,7 +539,7 @@ type GoGitVCSReader struct {
 	// Eliminates packfile-reader lock contention on repeated commit log walks.
 	commitMessagesCache lazyMap[commitMessagesKey, commitMessagesEntry]
 
-	// reachableSetCache caches reachableSet results, one entry per worktreePath,
+	// reachableSetCache caches ReachableSet results, one entry per worktreePath,
 	// validated by the entry's baseHash. Per-worktree scoping prevents a shallow
 	// clone and its full-clone origin (same base hash, different reachable set)
 	// from sharing one set. The set is an expensive O(N) walk, but immutable for
@@ -1107,7 +1108,7 @@ func (g *GoGitVCSReader) CommitMessages(ctx context.Context, worktreePath, base 
 // cachedReachableSet returns the set of all commits reachable from baseHash,
 // reusing the worktree's cached set while its base hash is unchanged.
 // Known limit: a shallow clone deepened in place keeps its truncated set until
-// the base moves or the process restarts (cosmetic, see maxReachableSetCommits).
+// the base moves or the process restarts (cosmetic, see MaxReachableSetCommits).
 // On a cache miss one caller per (worktree, base) acquires entry.mu and runs the
 // walk; concurrent callers with other CommitMessages limits wait for its result.
 // The returned map must not be mutated by callers.
@@ -1122,7 +1123,7 @@ func (g *GoGitVCSReader) cachedReachableSet(entry *cachedRepo, worktreePath stri
 			return set, nil
 		}
 		entry.mu.Lock()
-		set, err := reachableSet(entry.repo, baseHash)
+		set, err := commitwalk.ReachableSet(entry.repo, baseHash)
 		entry.mu.Unlock()
 		if err != nil {
 			return nil, err

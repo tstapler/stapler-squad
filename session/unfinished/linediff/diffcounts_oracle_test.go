@@ -1,10 +1,11 @@
-package unfinished
+package linediff
 
 // Reference edit counts for the diff algorithm swap (Story 0.1.3b). There is
 // no EditCounts type in the package yet, so the oracle returns a test-local
 // struct; later stories (3.2.1/3.2.2) reuse countsOracle and randomLines.
 
 import (
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 	"math/rand"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ func countsOracle(a, b []string) editCounts {
 func randomLines(rng *rand.Rand, maxN, alphabet int, prefix string) []string {
 	out := make([]string, rng.Intn(maxN+1))
 	for i := range out {
-		out[i] = prefix + itoa(rng.Intn(alphabet))
+		out[i] = prefix + testrepo.Itoa(rng.Intn(alphabet))
 	}
 	return out
 }
@@ -51,7 +52,7 @@ func lineSliceCorpus(maxN int) []lineSliceCase {
 	for i := range 150 {
 		r := rand.New(rand.NewSource(int64(7000 + i)))
 		alpha := []int{2, 5, 40, 1000}[i%4]
-		cs = append(cs, lineSliceCase{"random-" + itoa(i), randomLines(r, maxN, alpha, "r"), randomLines(r, maxN, alpha, "r")})
+		cs = append(cs, lineSliceCase{"random-" + testrepo.Itoa(i), randomLines(r, maxN, alpha, "r"), randomLines(r, maxN, alpha, "r")})
 	}
 	return cs
 }
