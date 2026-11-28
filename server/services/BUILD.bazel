@@ -192,6 +192,7 @@ go_test(
         "archived_session_reaper_test.go",
         "artifact_vcs_golden_test.go",
         "autonomy_wiring_test.go",
+        "background_models_golden_test.go",
         "background_models_service_test.go",
         "backlog_engine_enforcement_test.go",
         "backlog_gate_classes_test.go",
