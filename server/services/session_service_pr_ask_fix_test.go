@@ -32,11 +32,15 @@ type askFixFixture struct {
 
 // newAskFixFixture wires a running claude session holding acme/app#11 and #12,
 // a fetcher reporting one failing check, and a token for #12 only.
-func newAskFixFixture(t *testing.T, status domain.Status) *askFixFixture {
+func newAskFixFixture(t *testing.T, status domain.Status, opts ...func(*instance.Instance)) *askFixFixture {
 	t.Helper()
 	fix := setupForkTestFixture(t)
 	inst := &instance.Instance{Title: "ask-fix", UUID: "uuid-ask-fix", Program: "claude", Status: status,
 		CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	// Options run before the first snapshot is published.
+	for _, opt := range opts {
+		opt(inst)
+	}
 	for _, n := range []int{11, 12} {
 		ref, err := domain.NewPRRef("", "acme", "app", n)
 		require.NoError(t, err)

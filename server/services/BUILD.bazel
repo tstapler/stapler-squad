@@ -269,6 +269,8 @@ go_test(
         "gate_test_helpers_test.go",
         "gatestats_rpc_test.go",
         "git_fixture_test.go",
+        "github_golden_test.go",
+        "github_hub_golden_test.go",
         "github_service_merge_method_test.go",
         "github_service_pr_target_test.go",
         "github_service_test.go",
