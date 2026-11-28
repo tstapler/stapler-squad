@@ -38,6 +38,7 @@ go_test(
     name = "workspacerpc_test",
     srcs = [
         "list_branches_test.go",
+        "testmain_test.go",
         "workspace_misc_test.go",
         "workspace_service_test.go",
         "workspace_service_vcs_wiring_test.go",

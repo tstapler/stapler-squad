@@ -357,11 +357,18 @@ func (c *createChar) resolutionFailure() {
 }
 
 func (c *createChar) cancel() {
-	started := make(chan struct{})
+	started, returned, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	// Registered after Shutdown's cleanup, so it opens the gate first if the cancel never arrives.
+	c.t.Cleanup(func() { close(release) })
 	c.svc.githubResolver = func(ctx context.Context, _ string, _ []string) (string, *instance.GitHubRef, error) {
 		close(started)
-		<-ctx.Done()
-		return "", nil, ctx.Err()
+		defer close(returned)
+		select {
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		case <-release:
+			return "", nil, errors.New("released by test cleanup")
+		}
 	}
 	_, err := c.create(&sessionv1.CreateSessionRequest{Title: "cancelme", Path: "https://github.com/acme/widgets", Program: c.agent})
 	require.NoError(c.t, err)
@@ -374,6 +381,11 @@ func (c *createChar) cancel() {
 	require.NoError(c.t, err)
 	c.line("cancelme: %s", svctest.CanonicalProto(c.t, got.Msg))
 	c.recordRegistration("cancelme", "cancelme")
+	select {
+	case <-returned:
+	case <-time.After(pipelineEventuallyTimeout):
+		c.t.Fatal("cancel did not stop the resolver")
+	}
 	c.svc.waitForPendingCleanup()
 	c.takePhases()
 }

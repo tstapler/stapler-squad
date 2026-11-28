@@ -1658,7 +1658,7 @@ linters:
       # Same intentional LoadInstances uses as session_service.go above, moved
       # verbatim into these files by the session_service_*.go file-size split
       # (2026-10) — not newly introduced.
-      - path: "server/services/session_service_(crud|lifecycle)\\.go"
+      - path: "server/services/session_service_lifecycle\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       # BatchCreateSessions' title pre-check, moved verbatim from session_service_crud.go.

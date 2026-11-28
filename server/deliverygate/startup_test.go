@@ -30,6 +30,7 @@ func TestStartup_ShouldUseNarrowServiceDepsAndNeverCallBuildDependencies_WhenHid
 		"../services/*/hidden_*_test.go",
 		"../services/session_service_diagnose_test.go",
 		"../services/*/session_service_diagnose_test.go",
+		"../services/sessioncreate/spawn_test.go",
 		"../slack_gate_test.go",
 		"../gatestats_listener_test.go",
 	}

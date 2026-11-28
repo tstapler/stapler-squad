@@ -261,6 +261,7 @@ go_test(
         "sendkeys_guard_test.go",
         "session_archive_stop_test.go",
         "session_create_characterization_test.go",
+        "session_create_remote_hooks_test.go",
         "session_create_wiring_test.go",
         "session_creation_helpers_test.go",
         "session_creation_pipeline_test.go",
