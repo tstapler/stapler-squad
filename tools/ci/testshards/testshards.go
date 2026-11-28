@@ -24,7 +24,7 @@ type shard struct {
 
 var shards = []shard{
 	// Fork real tmux servers at high fan-out, so they run in their own go test invocation.
-	{name: "tmux", patterns: []string{"session", "session/mux", "session/tmux"}},
+	{name: "tmux", patterns: []string{"session", "session/mux", "session/sshtransport", "session/tmux"}},
 	// Runs after "tmux" in the same job, which has the spare budget.
 	{name: "session-slice", patterns: []string{"session/artifacts/...", "session/backlog/...", "session/unfinished/..."}},
 	{name: "rest"},

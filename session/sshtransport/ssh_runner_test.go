@@ -1,4 +1,4 @@
-package tmux
+package sshtransport
 
 import (
 	"context"

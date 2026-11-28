@@ -24,9 +24,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tagpoller"
-	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // GitHubResolver turns a GitHub URL into a local clone.
@@ -66,7 +66,7 @@ type Deps struct {
 
 	DriverClient      func() autonomous.HeadlessPoolClient
 	Autonomy          func() *autonomysvc.AutonomousOrchestrationService
-	SSHClientPool     func() *tmux.SSHClientPool
+	SSHClientPool     func() *sshtransport.SSHClientPool
 	GitBackend        func() backend.Backend
 	GitHubResolver    func() GitHubResolver
 	ResolutionTimeout func() time.Duration

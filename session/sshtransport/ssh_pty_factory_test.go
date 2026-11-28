@@ -1,4 +1,4 @@
-package tmux
+package sshtransport
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestSSHPtyFactory_StartPty_ReadWriteResizeClose is Task 4.4.1b's unit test:
@@ -83,5 +85,5 @@ func TestSSHPtyFactory_StartPty_ReadWriteResizeClose(t *testing.T) {
 // SSHPtyFactory satisfies RemotePtyFactory (session/tmux/pty.go) -- the
 // interface session.Instance.GetPTYSession (Task 4.4.1d) is written against.
 func TestSSHPtyFactory_StartPty_RemotePtyFactoryInterface(t *testing.T) {
-	var _ RemotePtyFactory = (*SSHPtyFactory)(nil)
+	var _ tmux.RemotePtyFactory = (*SSHPtyFactory)(nil)
 }

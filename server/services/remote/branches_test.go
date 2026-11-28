@@ -11,7 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/sshremote"
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 )
 
 func TestHostWithPort_DefaultPortFoldsAway(t *testing.T) {
@@ -143,7 +143,7 @@ func TestBuildRemoteHealthProber_BuildsProberForRemote(t *testing.T) {
 	keyring.MockInit()
 	prober, err := BuildRemoteHealthProber(context.Background(),
 		&config.RemoteConfig{Name: "r", Host: "127.0.0.1", User: "u", IdentityRef: "r"},
-		tmux.NewSSHClientPool(), knownHosts, keyStore, noopPublisher{})
+		sshtransport.NewSSHClientPool(), knownHosts, keyStore, noopPublisher{})
 	require.NoError(t, err)
 	require.NotNil(t, prober)
 }

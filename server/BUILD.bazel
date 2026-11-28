@@ -205,6 +205,7 @@ go_library(
         "//session/search",
         "//session/sessionpr",
         "//session/sshremote",
+        "//session/sshtransport",
         "//session/stagecfg",
         "//session/steertext",
         "//session/streamhub",

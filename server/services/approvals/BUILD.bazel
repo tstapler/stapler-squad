@@ -114,7 +114,7 @@ go_test(
         "//session/headless",
         "//session/instance",
         "//session/sshremote",
-        "//session/tmux",
+        "//session/sshtransport",
         "//testutil",
         "//testutil/socket",
         "//testutil/wait",

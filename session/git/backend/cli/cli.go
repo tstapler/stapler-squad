@@ -139,7 +139,7 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 }
 
 // remoteGitArgv prefixes git with `env RequiredGitEnv...`. An SSH runner cannot carry environment
-// (session.Setenv needs sshd AcceptEnv, off by default; see tmux.SSHRunner.Start), so the contract
+// (session.Setenv needs sshd AcceptEnv, off by default; see sshtransport.SSHRunner.Start), so the contract
 // is met on the command line. Local runs get the env from the local runner instead, where it is
 // scoped to git alone.
 func remoteGitArgv(args []string) (string, []string) {

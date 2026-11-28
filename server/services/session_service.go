@@ -84,12 +84,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/sweeper"
 	"github.com/tstapler/stapler-squad/session/tagpoller"
-	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // Compile-time interface check: SessionService must implement the full ConnectRPC handler.
@@ -450,10 +450,10 @@ type SessionService struct {
 	// (e.g. an eventBus subscriber) gets scheduled to read it.
 	creationPhaseHook func(msg string)
 
-	// testSSHClientPool, when non-nil, is shared by every tmux.SSHRunner and
+	// testSSHClientPool, when non-nil, is shared by every sshtransport.SSHRunner and
 	// sshremote.RemoteApprovalRelay this service constructs for a remote
-	// session, in place of the process-wide tmux.DefaultSSHClientPool().
-	// tmux.SSHClientPool keys pooled *ssh.Client connections by remote NAME
+	// session, in place of the process-wide sshtransport.DefaultSSHClientPool().
+	// sshtransport.SSHClientPool keys pooled *ssh.Client connections by remote NAME
 	// alone, not by dialed address (see SSHTarget's doc comment) -- so tests
 	// across this package that all name their fixture remote "test-remote"
 	// but spin up a fresh in-process sshd on a new ephemeral port each time
@@ -463,7 +463,7 @@ type SessionService struct {
 	// packet in response to channel open" failure. Set automatically by
 	// NewSessionServiceWithSearchEngine under config.IsTestMode(), same
 	// service-wide test-hook rationale as testTmuxServerSocket above.
-	testSSHClientPool *tmux.SSHClientPool
+	testSSHClientPool *sshtransport.SSHClientPool
 
 	// remoteKeyStore and remoteKnownHosts back CreateSession's remote-target
 	// mode-specific block (ssh-remote-workspaces Phase 4, Epic 4.2): resolving
@@ -984,7 +984,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 
 	if config.IsTestMode() {
 		svc.testTmuxServerSocket = fmt.Sprintf("test_server_services_%d_%d", os.Getpid(), atomic.AddUint64(&testTmuxServerSocketCounter, 1))
-		svc.testSSHClientPool = tmux.NewSSHClientPool()
+		svc.testSSHClientPool = sshtransport.NewSSHClientPool()
 	}
 
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
@@ -1206,14 +1206,14 @@ func (s *SessionService) GetInstanceStore() session.InstanceStore {
 // sshClientPool returns the SSHClientPool every remote-session SSHRunner/
 // RemoteApprovalRelay this service constructs must share -- s.testSSHClientPool
 // under test (see its doc comment), otherwise the process-wide production
-// default. Never construct a tmux.SSHRunner or sshremote.RemoteApprovalRelay
-// for a remote session by calling tmux.DefaultSSHClientPool() directly; use
+// default. Never construct a sshtransport.SSHRunner or sshremote.RemoteApprovalRelay
+// for a remote session by calling sshtransport.DefaultSSHClientPool() directly; use
 // this instead so tests stay isolated from each other and from production.
-func (s *SessionService) sshClientPool() *tmux.SSHClientPool {
+func (s *SessionService) sshClientPool() *sshtransport.SSHClientPool {
 	if s.testSSHClientPool != nil {
 		return s.testSSHClientPool
 	}
-	return tmux.DefaultSSHClientPool()
+	return sshtransport.DefaultSSHClientPool()
 }
 
 // maybeAutoMigrateToEnt checks whether state.json exists in the config directory and the

@@ -11,7 +11,7 @@ package services
 // `git branch`/`git worktree add`/`tmux ...` invocations, and there is no
 // meaningful way to verify CreateSession's orchestration of them without a
 // real shell and real git/tmux binaries on the other end. This mirrors
-// session/git/remote_worktree_test.go and session/tmux/ssh_test_server_test.go's
+// session/git/remote_worktree_test.go and session/sshtransport/ssh_test_server_test.go's
 // own real-exec test servers -- duplicated here (not imported) since _test.go
 // files aren't importable across package boundaries, same as
 // remote/remote_service_test.go's startRemoteTestSSHServer already documents.
@@ -63,7 +63,7 @@ type remoteSessionTestSSHServer struct {
 // realExecSessionSSHHandler runs s.RawCommand() through a real shell, wiring
 // stdin/stdout/stderr directly to the SSH session -- mirrors
 // session/git/ssh_test_server_test.go's testGitSSHHandler and
-// session/tmux/ssh_test_server_test.go's realExecSSHHandler.
+// session/sshtransport/ssh_test_server_test.go's realExecSSHHandler.
 func realExecSessionSSHHandler(s gliderssh.Session) {
 	raw := s.RawCommand()
 	if raw == "" {
@@ -118,7 +118,7 @@ func startTmuxFailingTestSSHServer(t *testing.T) *remoteSessionTestSSHServer {
 // carry more commands, closely simulating a connection that dies partway
 // through a multi-command sequence. Used for Task 4.2.1f's "connection drops
 // during compensating cleanup" case: unlike startMaxSessionsTestServer
-// (session/tmux/ssh_test_server_test.go), which limits CONCURRENT open
+// (session/sshtransport/ssh_test_server_test.go), which limits CONCURRENT open
 // channels and releases the budget as each closes, this counter is
 // cumulative and never released -- SSHRunner opens and closes one channel
 // per command, so a concurrent-limit of any size would never actually reject

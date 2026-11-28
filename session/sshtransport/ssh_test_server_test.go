@@ -1,4 +1,4 @@
-package tmux
+package sshtransport
 
 import (
 	"crypto/ed25519"
@@ -222,7 +222,7 @@ func testSSHHandler(s gliderssh.Session) {
 // startRealExecTestSSHServer starts a testSSHServer whose Handler actually
 // executes each exec request's raw command line via the host's real shell
 // (realExecSSHHandler), rather than testSSHHandler's small closed set of
-// builtin verbs (echo/cat/sleep/false). tmux_remote_test.go's integration
+// builtin verbs (echo/cat/sleep/false). remote_session_test.go's integration
 // test needs this: SSHRunner sends real "tmux has-session"/"tmux
 // new-session -A"/"tmux list-sessions" invocations (wrapped in "env -u TMUX
 // TERM=..." by wrapRemoteCommand) and the test must prove the

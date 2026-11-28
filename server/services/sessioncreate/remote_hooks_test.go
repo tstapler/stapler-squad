@@ -18,7 +18,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/sshremote"
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 )
 
 type unusedPermissionHandler struct{}
@@ -34,7 +34,7 @@ func relayLoops() int {
 
 // loopbackRemote is an execution target whose SSH server runs in this process
 // and answers every command with handler. It never leaves loopback.
-func loopbackRemote(t *testing.T, handler gliderssh.Handler) (instance.RemoteExecutionTarget, *tmux.SSHClientPool) {
+func loopbackRemote(t *testing.T, handler gliderssh.Handler) (instance.RemoteExecutionTarget, *sshtransport.SSHClientPool) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -47,10 +47,10 @@ func loopbackRemote(t *testing.T, handler gliderssh.Handler) (instance.RemoteExe
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 
-	pool := tmux.NewSSHClientPool()
-	runner := tmux.NewSSHRunner(tmux.SSHTarget{Name: t.Name(), Addr: ln.Addr().String()},
+	pool := sshtransport.NewSSHClientPool()
+	runner := sshtransport.NewSSHRunner(sshtransport.SSHTarget{Name: t.Name(), Addr: ln.Addr().String()},
 		ssh.ClientConfig{User: "u", Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(signer.PublicKey())},
-		tmux.WithSSHClientPool(pool))
+		sshtransport.WithSSHClientPool(pool))
 	require.NoError(t, runner.Dial(context.Background()))
 	return instance.NewRemoteExecutionTarget(instance.RemoteTarget{Name: t.Name()}, runner), pool
 }
@@ -63,7 +63,7 @@ func TestSetupRemoteApprovalHooks_ShouldStopTheRelay_When_HookInjectionFails(t *
 		_ = s.Exit(1)
 	})
 	f := newFixture(t)
-	f.deps.SSHClientPool = func() *tmux.SSHClientPool { return pool }
+	f.deps.SSHClientPool = func() *sshtransport.SSHClientPool { return pool }
 	f.deps.PermissionHandler = func() sshremote.PermissionRequestHandler { return unusedPermissionHandler{} }
 	inst, err := instance.NewInstance(instance.InstanceOptions{Title: "relay-stop", Path: t.TempDir(), ExecutionTarget: target})
 	require.NoError(t, err)

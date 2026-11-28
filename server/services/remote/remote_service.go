@@ -14,7 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session/sshremote"
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 )
 
 // Compile-time check: RemoteService must implement the generated handler.
@@ -62,7 +62,7 @@ func NewRemoteService(knownHosts *sshremote.KnownHostsStore, keyStore *sshremote
 
 // +api: remote:test-connection
 // TestRemoteConnection attempts a fresh dial of the named remote via
-// tmux.DialFresh, using s.knownHosts.HostKeyCallback() as the connection's
+// sshtransport.DialFresh, using s.knownHosts.HostKeyCallback() as the connection's
 // trust check. It deliberately never uses the shared SSHClientPool: a pooled
 // hit skips HostKeyCallback, which would mask a rotated or MITM'd host key
 // behind a live session's connection. An unknown host key is mapped to the structured
@@ -83,19 +83,19 @@ func (s *RemoteService) TestRemoteConnection(
 		return nil, err
 	}
 
-	sshTarget := tmux.SSHTarget{Name: target.name, Addr: target.addr}
+	sshTarget := sshtransport.SSHTarget{Name: target.name, Addr: target.addr}
 	clientConfig := ssh.ClientConfig{
 		User:            target.user,
 		Auth:            ResolveIdentityAuthMethods(ctx, s.keyStore, target.identityRef),
 		HostKeyCallback: s.knownHosts.HostKeyCallback(),
 	}
 
-	client, err := tmux.DialFresh(ctx, sshTarget, clientConfig)
+	client, err := sshtransport.DialFresh(ctx, sshTarget, clientConfig)
 	if err == nil {
 		_ = client.Close()
 	}
 	if err != nil {
-		var unknownErr *tmux.ErrUnknownHostKey
+		var unknownErr *sshtransport.ErrUnknownHostKey
 		if errors.As(err, &unknownErr) {
 			return connect.NewResponse(&sessionv1.TestRemoteConnectionResponse{
 				HostKeyUnknown: true,
@@ -185,7 +185,7 @@ func (s *RemoteService) resolveRemoteTarget(remoteName string, draft *sessionv1.
 // it, a stale or forged fingerprint string would be enough to make Trust
 // pin an attacker's key.
 //
-// The probe deliberately does NOT go through tmux.SSHRunner/the shared
+// The probe deliberately does NOT go through sshtransport.SSHRunner/the shared
 // connection pool: an always-accept HostKeyCallback must never risk getting
 // pooled under the remote's name, where a later, properly trust-checked
 // TestRemoteConnection call could reuse it via the pool's "already have a
@@ -484,7 +484,7 @@ func hostKeyAwareErrorMessage(host string, err error) string {
 // presented host key, accepting unconditionally -- it makes no trust
 // decision of its own (that's KnownHostsStore.Verify's job) and is used only
 // to re-verify a fingerprint the caller claims to have already been shown.
-// It never uses tmux.SSHRunner or the shared connection pool (see
+// It never uses sshtransport.SSHRunner or the shared connection pool (see
 // TrustRemoteHostKey's doc comment for why). Auth is intentionally omitted:
 // the host-key callback always fires before authentication is attempted, so
 // no credentials are needed to capture the key, and the probe connection is
@@ -498,7 +498,7 @@ func probeHostKey(ctx context.Context, addr, user string) (ssh.PublicKey, error)
 			captured = key
 			return nil
 		},
-		Timeout: tmux.DialTimeout,
+		Timeout: sshtransport.DialTimeout,
 	}
 
 	type dialResult struct {
@@ -520,7 +520,7 @@ func probeHostKey(ctx context.Context, addr, user string) (ssh.PublicKey, error)
 	case <-ctx.Done():
 		// captured may still be nil here -- the goroutine above keeps running
 		// in the background until ssh.Dial's own Timeout gives up, mirroring
-		// session/tmux/ssh_runner.go's documented newSession gap (ctx expiry
+		// session/sshtransport/ssh_runner.go's documented newSession gap (ctx expiry
 		// can't force-abort an in-flight dial without a second layer of
 		// plumbing this one-off probe doesn't need).
 		return nil, ctx.Err()
@@ -528,7 +528,7 @@ func probeHostKey(ctx context.Context, addr, user string) (ssh.PublicKey, error)
 }
 
 // BuildRemoteHealthProber constructs a sshremote.RemoteHealthProber for
-// remote, wiring its liveness-check tmux.SSHRunner the exact same way
+// remote, wiring its liveness-check sshtransport.SSHRunner the exact same way
 // TestRemoteConnection (above) and SessionService.CreateSession's
 // remote-target block (session_service.go) already build one: RemoteAddr
 // for the dialable address and ResolveIdentityAuthMethods for the stored
@@ -536,7 +536,7 @@ func probeHostKey(ctx context.Context, addr, user string) (ssh.PublicKey, error)
 // SessionService).
 //
 // pool MUST be the same SSHClientPool a session's own SSHRunner/
-// RemoteApprovalRelay for this remote shares (tmux.DefaultSSHClientPool()
+// RemoteApprovalRelay for this remote shares (sshtransport.DefaultSSHClientPool()
 // in production) -- passing an isolated pool here would defeat
 // RemoteHealthProber's whole point of reusing the connection instead of
 // opening a dedicated one (see its doc comment). Exported for server.go's
@@ -545,17 +545,17 @@ func probeHostKey(ctx context.Context, addr, user string) (ssh.PublicKey, error)
 func BuildRemoteHealthProber(
 	ctx context.Context,
 	remote *config.RemoteConfig,
-	pool *tmux.SSHClientPool,
+	pool *sshtransport.SSHClientPool,
 	knownHosts *sshremote.KnownHostsStore,
 	keyStore *sshremote.KeyStore,
 	publisher sshremote.HealthEventPublisher,
 ) (*sshremote.RemoteHealthProber, error) {
-	target := tmux.SSHTarget{Name: remote.Name, Addr: RemoteAddr(remote.Host)}
+	target := sshtransport.SSHTarget{Name: remote.Name, Addr: RemoteAddr(remote.Host)}
 	clientConfig := ssh.ClientConfig{
 		User:            remote.User,
 		Auth:            ResolveIdentityAuthMethods(ctx, keyStore, remote.IdentityRef),
 		HostKeyCallback: knownHosts.HostKeyCallback(),
 	}
-	runner := tmux.NewSSHRunner(target, clientConfig, tmux.WithSSHClientPool(pool))
+	runner := sshtransport.NewSSHRunner(target, clientConfig, sshtransport.WithSSHClientPool(pool))
 	return sshremote.NewRemoteHealthProber(pool, runner, remote.Name, publisher)
 }

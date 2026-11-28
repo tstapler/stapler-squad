@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -1300,7 +1301,7 @@ func (i *Instance) IsRemote() bool {
 // tmux.PtySession: *os.File has Read/Write/Close, and localPTYSession below
 // adds Resize via pty.Setsize). For a remote instance (IsRemote()) it opens
 // a fresh SSH-backed PTY attached to the SAME remote tmux session via
-// tmux.SSHPtyFactory (RequestPty + "tmux ... attach-session ..."), so a
+// sshtransport.SSHPtyFactory (RequestPty + "tmux ... attach-session ..."), so a
 // remote session's raw-PTY consumers see byte-identical behavior to a local
 // one, differing only in transport underneath -- matching Story 4.4.1's
 // acceptance criteria for streamViaControlMode, applied here to this
@@ -1322,9 +1323,9 @@ func (i *Instance) GetPTYSession(ctx context.Context, cols, rows int) (tmux.PtyS
 	if !ok {
 		return nil, fmt.Errorf("session: IsRemote() true but ExecutionTarget is %T, not RemoteExecutionTarget", i.executionTarget())
 	}
-	sshRunner, ok := remote.Runner().(*tmux.SSHRunner)
+	sshRunner, ok := remote.Runner().(*sshtransport.SSHRunner)
 	if !ok {
-		return nil, fmt.Errorf("session: remote target's CommandRunner is %T, not *tmux.SSHRunner", remote.Runner())
+		return nil, fmt.Errorf("session: remote target's CommandRunner is %T, not *sshtransport.SSHRunner", remote.Runner())
 	}
 	tmuxSession := i.GetTmuxSession()
 	if tmuxSession == nil {
@@ -1332,13 +1333,13 @@ func (i *Instance) GetPTYSession(ctx context.Context, cols, rows int) (tmux.PtyS
 	}
 
 	// Declared as the tmux.RemotePtyFactory interface (not the concrete
-	// *tmux.SSHPtyFactory NewSSHPtyFactory returns) so this call site is
+	// *sshtransport.SSHPtyFactory NewSSHPtyFactory returns) so this call site is
 	// actually written against the interface, matching how PtyFactory
 	// itself is consumed elsewhere in this codebase (TmuxSession's
 	// ptyFactory field is PtyFactory-typed despite Pty{} being its only real
 	// implementation) -- see RemotePtyFactory's doc comment in
 	// session/tmux/pty.go for why the interface exists at all.
-	var factory tmux.RemotePtyFactory = tmux.NewSSHPtyFactory(sshRunner)
+	var factory tmux.RemotePtyFactory = sshtransport.NewSSHPtyFactory(sshRunner)
 
 	// WrapRemoteCommand applies the same $TMUX-unset/$TERM-forced treatment
 	// startRemoteControlMode applies to the remote "tmux -C attach-session"

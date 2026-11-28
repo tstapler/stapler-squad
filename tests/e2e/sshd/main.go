@@ -2,7 +2,7 @@
 // tests/e2e/remote-workspaces.spec.ts (ssh-remote-workspaces Phase 6 Epic 6.3, Story 6.3.1).
 //
 // Playwright specs run in Node and cannot reach into this repo's existing Go-only test SSH
-// server helpers (session/tmux/ssh_test_server_test.go, session/git/ssh_test_server_test.go) --
+// server helpers (session/sshtransport/ssh_test_server_test.go, session/git/ssh_test_server_test.go) --
 // those are t.Cleanup-scoped to a single `go test` process. This binary is the standalone
 // equivalent, spawned and torn down by remote-workspaces.spec.ts's own test.beforeAll/afterAll
 // (tests/e2e/helpers/test-sshd.ts) -- NOT by global-setup.ts/global-teardown.ts, deliberately:
@@ -13,7 +13,7 @@
 // own independent TOFU state.
 //
 // It reuses this repo's existing gliderlabs/ssh dependency and mirrors
-// ssh_test_server_test.go's realExecSSHHandler pattern: every exec request runs a REAL local
+// session/sshtransport/ssh_test_server_test.go's realExecSSHHandler pattern: every exec request runs a REAL local
 // shell command via `sh -c`. That's what makes this a genuine SSH round-trip target rather
 // than a canned fake -- TestRemoteConnection/TrustRemoteHostKey/GenerateRemoteIdentity dial it
 // for real, and a session created "against" it drives real git/tmux commands over a real SSH
@@ -108,7 +108,7 @@ func main() {
 }
 
 // execHandler runs every exec request's raw command line via the host's real shell, mirroring
-// session/tmux/ssh_test_server_test.go's realExecSSHHandler.
+// session/sshtransport/ssh_test_server_test.go's realExecSSHHandler.
 func execHandler(s gliderssh.Session) {
 	raw := s.RawCommand()
 	if raw == "" {

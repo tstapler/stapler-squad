@@ -48,7 +48,7 @@ import (
 // window-change notifications via pty.Setsize. realExecSessionSSHHandler
 // itself never does this (CreateSession's own remote commands -- git,
 // SSHRunner.Run/Start -- never request a pty, per
-// session/tmux/tmux_remote_test.go's TestNewSessionA_AgainstExistingSession_
+// session/sshtransport/remote_session_test.go's TestNewSessionA_AgainstExistingSession_
 // FailsOverNonPTYChannel), so a real "tmux attach-session" (no -C) run
 // against a plain-piped, non-tty stdin/stdout would fail termios/isatty
 // checks and never forward keystrokes into the pane -- exactly the gap this
@@ -274,7 +274,7 @@ func TestStreamTerminal_RemoteSession_InputReachesRemotePTY(t *testing.T) {
 // ends the goroutine); recovery is the client noticing its stream ended and
 // calling StreamTerminal again. This test proves the piece that's actually
 // new/remote-specific: a FRESH StreamTerminal call after the SSH connection
-// dies redials through SSHClientPool (session/tmux/ssh_pool.go's
+// dies redials through SSHClientPool (session/sshtransport/ssh_pool.go's
 // GetOrDial/evictIfCurrent) and reaches the SAME still-running remote tmux
 // session again, rather than getting permanently stuck handing back a dead
 // connection.
@@ -368,7 +368,7 @@ func TestStreamTerminal_RemoteSession_RecoversAfterConnectionKilledMidStream(t *
 	cancel1()
 
 	// Wait for the pool's own internal Client.Wait() watcher
-	// (session/tmux/ssh_pool.go's register/evictIfCurrent) to actually
+	// (session/sshtransport/ssh_pool.go's register/evictIfCurrent) to actually
 	// evict deadClient BEFORE attempting reconnection. Skipping this and
 	// racing a reconnect attempt against the not-yet-evicted entry is not
 	// merely flaky: SSHRunner.newSession's own doc comment records that a

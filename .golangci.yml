@@ -257,6 +257,19 @@ linters:
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/instance
             - github.com/tstapler/stapler-squad/session/tmux
+        # session/sshtransport is the SSH implementation of session/tmux's CommandRunner and
+        # RemotePtyFactory seams: it imports only that package, never session, github or server.
+        isolate_sshtransport:
+          list-mode: strict
+          files:
+            - "**/session/sshtransport/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/creack/pty
+            - golang.org/x/crypto/ssh
+            - golang.org/x/sync/singleflight
+            - github.com/tstapler/stapler-squad/session/tmux$
         # session/shellstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_shellstore:
@@ -1168,6 +1181,7 @@ linters:
             - github.com/tstapler/stapler-squad/session/sshremote$
             - github.com/tstapler/stapler-squad/session/summaries$
             - github.com/tstapler/stapler-squad/session/tagpoller$
+            - github.com/tstapler/stapler-squad/session/sshtransport$
             - github.com/tstapler/stapler-squad/session/tmux$
             - github.com/tstapler/stapler-squad/telemetry$
         # server/services/workspacerpc serves the VCS and workspace RPCs; it never imports the services hub.

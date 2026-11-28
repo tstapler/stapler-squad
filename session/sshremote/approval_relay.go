@@ -21,7 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 )
 
 // remoteApprovalSocketNamePrefix/Suffix bracket the per-session disambiguator
@@ -213,12 +213,12 @@ type PermissionRequestHandler interface {
 // RemoteApprovalRelay never dials the SSH connection pool itself -- it only
 // subscribes (via pool.Subscribe) to whichever *ssh.Client is CURRENTLY
 // pooled for remoteName. Some other component (terminal streaming, per
-// Phase 4/session/tmux.SSHRunner) is responsible for establishing and
+// Phase 4/session/sshtransport.SSHRunner) is responsible for establishing and
 // redialing that connection; decoupling the relay from dial config/
 // credentials entirely means it has nothing more to configure than "which
 // pooled connection" and "which remote-side socket."
 type RemoteApprovalRelay struct {
-	pool            *tmux.SSHClientPool
+	pool            *sshtransport.SSHClientPool
 	handler         PermissionRequestHandler
 	remoteName      string
 	socketPath      string
@@ -310,8 +310,8 @@ func withBearerTokenTTL(ttl time.Duration) RemoteApprovalRelayOption {
 // can't.
 type RemoteApprovalRelayTarget struct {
 	// RemoteName is the SSHClientPool key this relay's channel is dialed
-	// under (session/tmux.SSHClientPool). Must match the same name the
-	// session's own tmux.SSHRunner/tmux.SSHTarget was constructed with, so
+	// under (session/sshtransport.SSHClientPool). Must match the same name the
+	// session's own sshtransport.SSHRunner/sshtransport.SSHTarget was constructed with, so
 	// this relay shares the SAME pooled *ssh.Client the terminal stream
 	// uses (ADR-003) rather than dialing an unrelated connection.
 	RemoteName string
@@ -353,7 +353,7 @@ type RemoteApprovalRelayTarget struct {
 // -- callers wiring hook injection (Epic 5.2) read it back via BearerToken
 // to embed in the generated hook command.
 func NewRemoteApprovalRelay(
-	pool *tmux.SSHClientPool,
+	pool *sshtransport.SSHClientPool,
 	handler PermissionRequestHandler,
 	target RemoteApprovalRelayTarget,
 	opts ...RemoteApprovalRelayOption,
@@ -654,7 +654,7 @@ func (r *RemoteApprovalRelay) handleConnection(conn net.Conn) {
 // against this package's own test server -- so, following the
 // force-close-on-timeout half of this repo's established goroutine-race
 // pattern for blocking calls with no native cancellation support
-// (session/tmux/ssh_pool.go's dialSSHContext takes the same approach; note
+// (session/sshtransport/ssh_pool.go's dialSSHContext takes the same approach; note
 // session/sshremote/keystore.go's raceKeyringOp deliberately does NOT
 // force-abort, since a keychain call has no connection to close -- the two
 // precedents differ in that respect, only dialSSHContext's shape applies

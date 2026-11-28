@@ -1,0 +1,113 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "sshtransport",
+    srcs = [
+        "ssh_pool.go",
+        "ssh_runner.go",
+        "ssh_runner_backoff.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/sshtransport",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/tmux",
+        "@com_github_creack_pty//:pty",
+        "@org_golang_x_crypto//ssh",
+        "@org_golang_x_crypto//ssh/knownhosts",
+        "@org_golang_x_sync//singleflight",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sshtransport",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "sshtransport_test",
+    srcs = [
+        "default_pool_test.go",
+        "remote_control_mode_test.go",
+        "remote_session_test.go",
+        "ssh_git_env_test.go",
+        "ssh_pool_test.go",
+        "ssh_pty_factory_test.go",
+        "ssh_runner_backoff_test.go",
+        "ssh_runner_test.go",
+        "ssh_test_server_test.go",
+        "testmain_test.go",
+    ],
+    embed = [":sshtransport"],
+    deps = [
+        "//executor/safeexec",
+        "//session/git/backend",
+        "//session/git/backend/cli",
+        "//session/tmux",
+        "//testutil/wait",
+        "@com_github_creack_pty//:pty",
+        "@com_github_gliderlabs_ssh//:ssh",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_crypto//ssh",
+        "@org_golang_x_crypto//ssh/knownhosts",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:android": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:js": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:osx": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//testutil/tmuxreap",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

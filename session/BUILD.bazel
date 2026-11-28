@@ -452,6 +452,7 @@ go_test(
         "//session/shellstore:go_sources",
         "//session/slowops:go_sources",
         "//session/sshremote:go_sources",
+        "//session/sshtransport:go_sources",
         "//session/stagecfg:go_sources",
         "//session/steertext:go_sources",
         "//session/streamhub:go_sources",

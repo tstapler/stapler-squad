@@ -179,7 +179,7 @@ func TestVerify_And_Trust_HandleHostWithoutExplicitPort(t *testing.T) {
 		t.Fatalf("Verify after Trust: expected nil, got %v", err)
 	}
 	// A "host:port" form (matching what a real SSH dial's HostKeyCallback
-	// receives, per session/tmux.SSHTarget.Addr) must resolve to the same
+	// receives, per session/sshtransport.SSHTarget.Addr) must resolve to the same
 	// trust decision as the bare form.
 	if err := store.Verify("prod.example.com:22", key); err != nil {
 		t.Fatalf("Verify(\"host:22\") after Trust(\"host\"): expected nil, got %v", err)
@@ -188,7 +188,7 @@ func TestVerify_And_Trust_HandleHostWithoutExplicitPort(t *testing.T) {
 
 func TestHostKeyCallback_ReturnsRawKnownHostsError_NotPreTranslated(t *testing.T) {
 	// HostKeyCallback is documented to hand back the RAW *knownhosts.KeyError
-	// (not ErrUnknownHostKey) so tmux.NewSSHRunner's own wrapHostKeyCallback
+	// (not ErrUnknownHostKey) so sshtransport.NewSSHRunner's own wrapHostKeyCallback
 	// remains the single translation point for the real-dial path.
 	store := newTestKnownHostsStore(t)
 	key := newTestHostKey(t)
@@ -226,7 +226,7 @@ func TestHostKeyCallback_ReturnsNil_When_HostPreviouslyTrusted(t *testing.T) {
 
 // TestIsHostKeyMismatch_ClassifiesBothCallPathsIdentically pins the exact
 // bug a prior remote_service.go regression hit: HostKeyCallback() (the
-// tmux.SSHRunner dial path) and Verify() (the direct-call path) surface a
+// sshtransport.SSHRunner dial path) and Verify() (the direct-call path) surface a
 // mismatch as two DIFFERENT concrete error shapes -- the raw
 // *knownhosts.KeyError versus *ErrHostKeyMismatch -- so a caller checking
 // errors.As against only one of them (as server/services/remote/remote_service.go

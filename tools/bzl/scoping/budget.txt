@@ -4,6 +4,8 @@
 session files=47 loc=9451 imports=50
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
+session/sshtransport files=3 loc=1153 imports=1
+session/tmux files=32 loc=9053 imports=8
 session/procbackend files=9 loc=2214 imports=10
 session/historyadapters files=10 loc=1863 imports=6
 session/webhookstore files=4 loc=583 imports=5
@@ -46,7 +48,7 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=35 loc=8803 imports=97
+server/services files=35 loc=8803 imports=98
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
@@ -147,7 +149,7 @@ server/services/hookinstall files=1 loc=236 imports=4
 server/services/artifactrpc files=3 loc=653 imports=9
 server/services/vcsstatus files=4 loc=853 imports=6
 server/services/sessionstream files=10 loc=1557 imports=19
-server/services/sessioncreate files=16 loc=3266 imports=32
+server/services/sessioncreate files=16 loc=3267 imports=33
 server/services/workspacerpc files=1 loc=569 imports=14
 server/services/workflowrpc files=3 loc=1100 imports=14
 server/services/reviewqueuerpc files=1 loc=392 imports=10

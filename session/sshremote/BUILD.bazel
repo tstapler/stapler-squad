@@ -15,7 +15,7 @@ go_library(
     deps = [
         "//config",
         "//log",
-        "//session/tmux",
+        "//session/sshtransport",
         "@com_github_zalando_go_keyring//:go-keyring",
         "@org_golang_x_crypto//ssh",
         "@org_golang_x_crypto//ssh/knownhosts",
@@ -40,7 +40,7 @@ go_test(
     embed = [":sshremote"],
     deps = [
         "//config",
-        "//session/tmux",
+        "//session/sshtransport",
         "//testutil/socket",
         "//testutil/wait",
         "@com_github_gliderlabs_ssh//:ssh",

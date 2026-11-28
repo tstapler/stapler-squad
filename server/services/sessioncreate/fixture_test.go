@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tagpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -79,7 +80,7 @@ func newFixture(t *testing.T) *fixture {
 
 		DriverClient:      func() autonomous.HeadlessPoolClient { return nil },
 		Autonomy:          func() *autonomysvc.AutonomousOrchestrationService { return nil },
-		SSHClientPool:     tmux.NewSSHClientPool,
+		SSHClientPool:     sshtransport.NewSSHClientPool,
 		GitBackend:        func() backend.Backend { return nil },
 		GitHubResolver:    func() GitHubResolver { return instance.ResolveGitHubInputCtxWithHosts },
 		ResolutionTimeout: func() time.Duration { return time.Minute },

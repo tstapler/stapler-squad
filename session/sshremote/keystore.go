@@ -32,7 +32,7 @@ const keyPrefix = "ssh-key:"
 // indefinitely on a D-Bus unlock prompt that never appears. Credential
 // reads/writes are not long-running operations, so 5s is generous while
 // still bounding CreateSession's worst case. Mirrors
-// session/tmux/ssh_runner.go's DialTimeout-class budgeting.
+// session/sshtransport/ssh_runner.go's DialTimeout-class budgeting.
 const defaultIdentityTimeout = 5 * time.Second
 
 // keyringMu guards every call into the keyring package. Mirrors
@@ -158,7 +158,7 @@ func NewKeyStore(opts ...KeyStoreOption) *KeyStore {
 
 // raceKeyringOp runs op in a goroutine and races it against a ctx bounded to
 // ks.timeout, returning a wrapped deadline error if op hasn't finished in
-// time. Mirrors session/tmux/ssh_runner.go's newSession/Run ctx-race
+// time. Mirrors session/sshtransport/ssh_runner.go's newSession/Run ctx-race
 // technique exactly, including its documented gap: op cannot be force-
 // aborted mid-flight (go-keyring exposes no cancellation), so on timeout the
 // background goroutine keeps running until the real (or simulated) keyring

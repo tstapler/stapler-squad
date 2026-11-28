@@ -17,11 +17,12 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // newTestSSHClientConfig builds an ssh.ClientConfig trusting exactly hostKey,
-// mirroring session/tmux/ssh_runner_test.go's newTestClientConfig -- the
+// mirroring session/sshtransport/ssh_runner_test.go's newTestClientConfig -- the
 // "fixed-key-shaped HostKeyCallback" pattern the plan names as acceptable
 // test plumbing ahead of Phase 3's real KnownHostsStore.
 func newTestSSHClientConfig(t *testing.T, hostKey gossh.PublicKey) gossh.ClientConfig {
@@ -33,15 +34,15 @@ func newTestSSHClientConfig(t *testing.T, hostKey gossh.PublicKey) gossh.ClientC
 	}
 }
 
-// newTestSSHRunner builds a tmux.SSHRunner against srv, backed by a fresh,
+// newTestSSHRunner builds a sshtransport.SSHRunner against srv, backed by a fresh,
 // per-test SSHClientPool so tests never share pooled connections.
-func newTestSSHRunner(t *testing.T, srv *testSSHServer) *tmux.SSHRunner {
+func newTestSSHRunner(t *testing.T, srv *testSSHServer) *sshtransport.SSHRunner {
 	t.Helper()
 	cfg := newTestSSHClientConfig(t, srv.HostKey)
-	return tmux.NewSSHRunner(
-		tmux.SSHTarget{Name: t.Name(), Addr: srv.Addr},
+	return sshtransport.NewSSHRunner(
+		sshtransport.SSHTarget{Name: t.Name(), Addr: srv.Addr},
 		cfg,
-		tmux.WithSSHClientPool(tmux.NewSSHClientPool()),
+		sshtransport.WithSSHClientPool(sshtransport.NewSSHClientPool()),
 	)
 }
 

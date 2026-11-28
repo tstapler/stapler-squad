@@ -19,7 +19,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/sshremote"
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 )
 
 // startRemoteTestSSHServer starts a minimal in-process SSH server on an
@@ -69,8 +69,8 @@ func newRemoteTestKey(t *testing.T) ssh.PublicKey {
 
 // uniqueRemoteName returns a remote name scoped to t, so that tests dialing
 // through TestRemoteConnection/TrustRemoteHostKey never collide on
-// tmux.SSHTarget.Name -- the key tmux's process-wide default SSH client
-// pool (session/tmux/ssh_runner.go's defaultSSHClientPool) shares
+// sshtransport.SSHTarget.Name -- the key tmux's process-wide default SSH client
+// pool (session/sshtransport/ssh_runner.go's defaultSSHClientPool) shares
 // connections by. That pool never tears a client down on its last Release
 // (by design, so a live connection outlives any one caller); a dead
 // connection is only evicted asynchronously once its background
@@ -206,7 +206,7 @@ func TestTrustRemoteHostKey_RejectsMismatchedFingerprint(t *testing.T) {
 // TestTestRemoteConnection_PoolHit_DoesNotSkipHostKeyCallback_When_NameReused
 // guards the original CI flake (backlog item 09e91e3e): a client pooled under
 // the same remote name against a DIFFERENT server must not mask the real
-// target's untrusted host key. TestRemoteConnection dials via tmux.DialFresh,
+// target's untrusted host key. TestRemoteConnection dials via sshtransport.DialFresh,
 // bypassing the name-keyed pool, so the real dial to addrB always runs.
 func TestTestRemoteConnection_PoolHit_DoesNotSkipHostKeyCallback_When_NameReused(t *testing.T) {
 	remoteName := uniqueRemoteName(t)
@@ -222,8 +222,8 @@ func TestTestRemoteConnection_PoolHit_DoesNotSkipHostKeyCallback_When_NameReused
 	require.NoError(t, err)
 	signer, err := ssh.NewSignerFromSigner(priv)
 	require.NoError(t, err)
-	pool := tmux.DefaultSSHClientPool()
-	staleClient, err := pool.GetOrDial(context.Background(), tmux.SSHTarget{Name: remoteName, Addr: addrA}, &ssh.ClientConfig{
+	pool := sshtransport.DefaultSSHClientPool()
+	staleClient, err := pool.GetOrDial(context.Background(), sshtransport.SSHTarget{Name: remoteName, Addr: addrA}, &ssh.ClientConfig{
 		User:            "testuser",
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
@@ -722,12 +722,12 @@ func TestTestRemoteConnection_PoolHit_DoesNotMaskRotatedHostKey(t *testing.T) {
 	require.NoError(t, knownHosts.Trust(addr, oldKey))
 
 	// Stand-in for an active session: pool a live connection under the name.
-	pool := tmux.DefaultSSHClientPool()
+	pool := sshtransport.DefaultSSHClientPool()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	signer, err := ssh.NewSignerFromSigner(priv)
 	require.NoError(t, err)
-	pooled, err := pool.GetOrDial(context.Background(), tmux.SSHTarget{Name: remoteName, Addr: addr}, &ssh.ClientConfig{
+	pooled, err := pool.GetOrDial(context.Background(), sshtransport.SSHTarget{Name: remoteName, Addr: addr}, &ssh.ClientConfig{
 		User:            "testuser",
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: knownHosts.HostKeyCallback(),

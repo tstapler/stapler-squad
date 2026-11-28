@@ -1,4 +1,6 @@
-package tmux
+// Package sshtransport is the SSH implementation of session/tmux's CommandRunner and
+// RemotePtyFactory seams: the pooled client registry, the runner and its reconnect backoff.
+package sshtransport
 
 import (
 	"context"
@@ -13,27 +15,16 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// Per-operation-class timeout budgets, per research/pitfalls.md §4. These
-// bound SSHRunner's own dial step internally (DialTimeout); the remaining
-// two are named constants for Epic 2.3's call sites (session/tmux/tmux.go,
-// session/git/worktree_git.go) to build their per-RPC ctx from when they
-// migrate onto SSHRunner -- SSHRunner.Run/Start themselves race every
-// blocking SSH call against whatever ctx the caller supplies rather than
-// imposing a second, redundant timeout of their own (see Run/Start's doc
-// comments).
-const (
-	// DialTimeout bounds a single SSH dial-and-handshake attempt (TCP
-	// connect + SSH handshake, including host-key verification).
-	DialTimeout = 10 * time.Second
-	// ExistenceCheckTimeout bounds low-latency, existence-check-class
-	// remote commands (e.g. "tmux has-session").
-	ExistenceCheckTimeout = 3 * time.Second
-	// LongRunningCommandTimeout bounds longer remote operations (e.g. "git
-	// worktree add" against a fresh clone).
-	LongRunningCommandTimeout = 60 * time.Second
-)
+// DialTimeout bounds a single SSH dial-and-handshake attempt (TCP connect +
+// SSH handshake, including host-key verification). SSHRunner.Run/Start race
+// every other blocking SSH call against the caller's ctx and impose no
+// second timeout of their own; session/tmux's ExistenceCheckTimeout and
+// LongRunningCommandTimeout are the budgets callers build that ctx from.
+const DialTimeout = 10 * time.Second
 
 // HostKeyFingerprint returns the SSH host key fingerprint (SHA256, OpenSSH's
 // default presentation format, e.g. "SHA256:abcd...") for key, suitable for
@@ -157,7 +148,7 @@ func DefaultSSHClientPool() *SSHClientPool {
 
 // SSHRunner implements CommandRunner over a persistent, pooled *ssh.Client:
 // Run and Start execute remote commands as new SSH channels on the shared
-// connection for Target.Name (session/tmux/ssh_pool.go), rather than
+// connection for Target.Name (session/sshtransport/ssh_pool.go), rather than
 // dialing a fresh TCP+SSH connection per call. It never uses
 // ssh.InsecureIgnoreHostKey() -- callers supply a pre-built ssh.ClientConfig
 // (Phase 3 constructs this from IdentityRef-resolved signer +
@@ -211,7 +202,7 @@ func NewSSHRunner(target SSHTarget, config ssh.ClientConfig, opts ...SSHRunnerOp
 	return r
 }
 
-var _ CommandRunner = (*SSHRunner)(nil)
+var _ tmux.CommandRunner = (*SSHRunner)(nil)
 
 // DialFresh performs one SSH dial-and-handshake against target, bypassing
 // SSHClientPool entirely so config.HostKeyCallback always runs against the
@@ -349,7 +340,7 @@ func (r *SSHRunner) newSession(ctx context.Context, client *ssh.Client) (*ssh.Se
 // active caller -- the connection-layer cascade failure the pool exists to
 // prevent, reintroduced one layer up at the channel layer. Dead-connection
 // detection has exactly one source of truth: the pool's own Client.Wait()
-// background watcher (session/tmux/ssh_pool.go), which is unaffected by
+// background watcher (session/sshtransport/ssh_pool.go), which is unaffected by
 // (and doesn't need help from) a single failed channel-open.
 func (r *SSHRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	client, err := r.client(ctx)
@@ -502,7 +493,7 @@ func NewSSHPtyFactory(runner *SSHRunner) *SSHPtyFactory {
 	return &SSHPtyFactory{runner: runner}
 }
 
-var _ RemotePtyFactory = (*SSHPtyFactory)(nil)
+var _ tmux.RemotePtyFactory = (*SSHPtyFactory)(nil)
 
 // StartPty implements RemotePtyFactory. Mirrors SSHRunner.Run/Start's own
 // dial/session/release bookkeeping (see those methods' doc comments for why
@@ -514,7 +505,7 @@ var _ RemotePtyFactory = (*SSHPtyFactory)(nil)
 // PtyFactory.StartWithSize's "size set before the child is forked" contract
 // so a remote tmux attach-session never briefly sees a 0x0 terminal and
 // self-disconnects.
-func (f *SSHPtyFactory) StartPty(ctx context.Context, ws *pty.Winsize, dir, name string, args ...string) (PtySession, error) {
+func (f *SSHPtyFactory) StartPty(ctx context.Context, ws *pty.Winsize, dir, name string, args ...string) (tmux.PtySession, error) {
 	client, err := f.runner.client(ctx)
 	if err != nil {
 		return nil, err

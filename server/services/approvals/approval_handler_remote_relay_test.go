@@ -39,7 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/session/sshremote"
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	testutil "github.com/tstapler/stapler-squad/testutil/socket"
 )
 
@@ -216,8 +216,8 @@ type remoteRelayWirePayload struct {
 // isolation.
 func TestApprovalHandler_SatisfiesRelayHandlerEndToEnd(t *testing.T) {
 	srv := startRemoteRelayTestServer(t)
-	pool := tmux.NewSSHClientPool()
-	target := tmux.SSHTarget{Name: "approval-e2e-remote", Addr: srv.Addr}
+	pool := sshtransport.NewSSHClientPool()
+	target := sshtransport.SSHTarget{Name: "approval-e2e-remote", Addr: srv.Addr}
 	cfg := remoteRelayTestClientConfig(t, srv.HostKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -346,8 +346,8 @@ func TestRemoteApprovalHookCommand_RealShellDeliversToRelay(t *testing.T) {
 	}
 
 	srv := startRemoteRelayTestServer(t)
-	pool := tmux.NewSSHClientPool()
-	target := tmux.SSHTarget{Name: "hook-command-e2e-remote", Addr: srv.Addr}
+	pool := sshtransport.NewSSHClientPool()
+	target := sshtransport.SSHTarget{Name: "hook-command-e2e-remote", Addr: srv.Addr}
 	cfg := remoteRelayTestClientConfig(t, srv.HostKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -428,8 +428,8 @@ func TestRemoteApprovalHookCommand_SurvivesSlowHumanDecision(t *testing.T) {
 	}
 
 	srv := startRemoteRelayTestServer(t)
-	pool := tmux.NewSSHClientPool()
-	target := tmux.SSHTarget{Name: "hook-command-timing-remote", Addr: srv.Addr}
+	pool := sshtransport.NewSSHClientPool()
+	target := sshtransport.SSHTarget{Name: "hook-command-timing-remote", Addr: srv.Addr}
 	cfg := remoteRelayTestClientConfig(t, srv.HostKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

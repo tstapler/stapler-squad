@@ -15,7 +15,7 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 )
 
 // knownHostsFileName is the file KnownHostsStore reads/writes under the
@@ -26,20 +26,20 @@ import (
 // project_plans/ssh-remote-workspaces/implementation/plan.md.
 const knownHostsFileName = "ssh_known_hosts"
 
-// ErrUnknownHostKey is re-exported from session/tmux so callers of Verify
+// ErrUnknownHostKey is re-exported from session/sshtransport so callers of Verify
 // (and RemoteService, which maps it to a structured RPC response) only ever
 // need to errors.As against one type, whether the error came from this
-// store's Verify directly or, transitively, from a *tmux.SSHRunner dialed
+// store's Verify directly or, transitively, from a *sshtransport.SSHRunner dialed
 // with HostKeyCallback(). There's no import-cycle risk re-using it: tmux
 // never imports sshremote (Phase 3's wiring layer, not yet written, is
 // expected to import both from a third package rather than have tmux depend
 // on this one -- see NewSSHRunner's doc comment).
-type ErrUnknownHostKey = tmux.ErrUnknownHostKey
+type ErrUnknownHostKey = sshtransport.ErrUnknownHostKey
 
-// HostKeyFingerprint is re-exported from session/tmux for the same reason:
+// HostKeyFingerprint is re-exported from session/sshtransport for the same reason:
 // one fingerprint-computation implementation (ssh.FingerprintSHA256, OpenSSH's
 // default "SHA256:..." display format), not two that could drift.
-var HostKeyFingerprint = tmux.HostKeyFingerprint
+var HostKeyFingerprint = sshtransport.HostKeyFingerprint
 
 // ErrHostKeyMismatch is returned by Verify when host was previously trusted
 // under a DIFFERENT key than the one presented now -- knownhosts' own
@@ -179,7 +179,7 @@ func (s *KnownHostsStore) checkHostKey(host string, key ssh.PublicKey) error {
 //
 // Verify uses this internally to decide between ErrUnknownHostKey and
 // ErrHostKeyMismatch. It's exported so callers on the HostKeyCallback()/
-// tmux.SSHRunner dial path -- which, by HostKeyCallback's own design,
+// sshtransport.SSHRunner dial path -- which, by HostKeyCallback's own design,
 // surfaces the raw *knownhosts.KeyError rather than ErrHostKeyMismatch, see
 // its doc comment -- can classify a dial failure identically, without a
 // second, independently-maintained copy of this check. (A prior version of
@@ -227,9 +227,9 @@ func (s *KnownHostsStore) Verify(host string, key ssh.PublicKey) error {
 
 // HostKeyCallback returns an ssh.HostKeyCallback suitable for
 // ssh.ClientConfig.HostKeyCallback (and, in particular, for
-// tmux.NewSSHRunner's config argument). It returns the RAW knownhosts error
+// sshtransport.NewSSHRunner's config argument). It returns the RAW knownhosts error
 // on failure -- deliberately NOT pre-translated into ErrUnknownHostKey/
-// ErrHostKeyMismatch -- so tmux.NewSSHRunner's own wrapHostKeyCallback (which
+// ErrHostKeyMismatch -- so sshtransport.NewSSHRunner's own wrapHostKeyCallback (which
 // every SSHRunner already wraps its configured callback in) is the single
 // place that performs that translation for the real-dial path, exactly
 // mirroring what Verify does for the direct-call path above.
