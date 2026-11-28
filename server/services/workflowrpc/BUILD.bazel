@@ -1,0 +1,77 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "workflowrpc",
+    srcs = [
+        "workflow_attachments.go",
+        "workflow_service.go",
+        "workflow_service_events.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/workflowrpc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//server/services/fsops",
+        "//server/services/internal/streammetrics",
+        "//server/workflows",
+        "//session",
+        "//session/domain",
+        "//session/instance",
+        "//session/stagecfg",
+        "//session/workflowengine",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:session",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":workflowrpc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "workflowrpc_test",
+    srcs = [
+        "testmain_test.go",
+        "workflow_attachments_test.go",
+        "workflow_golden_test.go",
+        "workflow_service_events_test.go",
+        "workflow_service_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":workflowrpc"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//server/services/internal/svctest",
+        "//server/services/webhooktrigger",
+        "//session",
+        "//session/domain",
+        "//session/instance",
+        "//session/queue",
+        "//session/stagecfg",
+        "//testutil/wait",
+        "//tools/bzl/ent",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

@@ -10,8 +10,8 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/wakerpc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -20,9 +20,9 @@ import (
 // registerWakeTriggerService builds the operator-facing wake service and
 // registers its RPC handler. The dispatcher joins it later (startWakes calls
 // SetBackend), so listing and cancelling work while the kill switch is off.
-func registerWakeTriggerService(srv *Server, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService) *services.WakeTriggerService {
+func registerWakeTriggerService(srv *Server, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService) *wakerpc.WakeTriggerService {
 	titles := sessionTitles{svc: deps.SessionService, storage: deps.Storage}
-	svcDeps := services.WakeTriggerDeps{
+	svcDeps := wakerpc.WakeTriggerDeps{
 		Store: deps.Storage, Guidance: guidanceSvc, Titles: titles.Title,
 		Enabled: func() bool { return wakeDispatcherEnabled(config.LoadConfig()) },
 	}
@@ -37,7 +37,7 @@ func registerWakeTriggerService(srv *Server, deps *ServerDependencies, guidanceS
 	if deps.SessionService != nil {
 		svcDeps.Owners = wakeOwners{svc: deps.SessionService, storage: deps.Storage}
 	}
-	svc := services.NewWakeTriggerService(svcDeps)
+	svc := wakerpc.NewWakeTriggerService(svcDeps)
 	path, handler := sessionv1connect.NewWakeTriggerServiceHandler(svc, ConnectOptions(deps.ErrorRegistry)...)
 	apiPath := "/api" + path
 	srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))

@@ -23,7 +23,7 @@ import (
 )
 
 // Serial: HOME and the state directory are process environment.
-func TestNewServerWithDeps_should_WireCaptureTapHostAndDiagnosticPoller(t *testing.T) {
+func TestNewServerWithDeps_should_WireCaptureTapHostAndDiagnosticPorts(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	envtest.NewIsolatedStateDir(t)
 	core, err := BuildCoreDeps()
@@ -53,6 +53,10 @@ func TestNewServerWithDeps_should_WireCaptureTapHostAndDiagnosticPoller(t *testi
 	// Without capturetap.WithRequestHost the handler sees no Host and refuses.
 	tap := post("/api/session.v1.SessionService/GetCaptureTap", "{}")
 	assert.Equal(t, http.StatusOK, tap.Code, tap.Body.String())
+
+	// An unknown item reaches storage only when a spawner is wired; nothing is spawned.
+	dispatch := post("/api/session.v1.DiagnosticService/DispatchDiagnose", `{"itemId":"00000000-0000-0000-0000-000000000001"}`)
+	assert.Contains(t, dispatch.Body.String(), `"code":"not_found"`, "the diagnostic service must be given the session spawner")
 
 	ctx := context.Background()
 	item, err := deps.Storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "wired", Status: string(domain.BacklogStatusReview)})

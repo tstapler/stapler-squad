@@ -20,6 +20,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/capturetap"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -95,22 +96,36 @@ func TestInstallHooks_should_ExportRulesFromStorage_When_AntigravityHookInstalls
 	assert.Contains(t, string(raw), "command(wired-program)")
 }
 
-func TestCreateDebugSnapshot_should_ReportUptimeFromServerStart(t *testing.T) {
-	t.Parallel()
+// Not parallel: it moves ServerStartTime and the state directory is process environment.
+func TestCreateDebugSnapshot_should_ReportServerStartAndPendingApprovals(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	prev := ServerStartTime
+	t.Cleanup(func() { ServerStartTime = prev })
+	const age = 48 * time.Hour
+	ServerStartTime = time.Now().Add(-age)
 	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
+	require.NoError(t, svc.GetApprovalStore().Create(&approvalkit.PendingApproval{
+		ID: "wired-approval", SessionID: "wired-session", ToolName: "Bash", ExpiresAt: time.Now().Add(time.Hour),
+	}))
 
 	resp, err := svc.CreateDebugSnapshot(context.Background(), connect.NewRequest(&sessionv1.CreateDebugSnapshotRequest{}))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.Remove(resp.Msg.FilePath) })
 	raw, err := os.ReadFile(resp.Msg.FilePath)
 	require.NoError(t, err)
 	var snap struct {
 		Server struct {
 			Uptime int64 `json:"uptime_seconds"`
 		} `json:"server"`
+		Approvals struct {
+			Pending []struct {
+				ID string `json:"id"`
+			} `json:"pending"`
+		} `json:"approvals"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &snap))
-	assert.LessOrEqual(t, snap.Server.Uptime, int64(time.Since(ServerStartTime).Seconds())+1)
+	assert.InDelta(t, age.Seconds(), snap.Server.Uptime, time.Hour.Seconds(), "uptime must count from ServerStartTime")
+	require.Len(t, snap.Approvals.Pending, 1, "the snapshot must read the service's approval store")
+	assert.Equal(t, "wired-approval", snap.Approvals.Pending[0].ID)
 }
 
 // These two keep working as nil pointers on every path a test can run on this

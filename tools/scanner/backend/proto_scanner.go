@@ -449,7 +449,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ListGuidanceRequests":           "guidance-request:list",
 	"ListAllPendingGuidanceRequests": "guidance-request:list-all-pending",
 	// WakeTriggerService (wake_trigger.proto): must match the "// +api:
-	// wake-trigger:*" markers in server/services/wake_trigger_service.go.
+	// wake-trigger:*" markers in server/services/wakerpc/wake_trigger_service.go.
 	"ListWakeTriggers":       "wake-trigger:list",
 	"CancelWakeTrigger":      "wake-trigger:cancel",
 	"CreateOperatorReminder": "wake-trigger:remind",

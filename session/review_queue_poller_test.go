@@ -661,7 +661,7 @@ func TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls(t *testing
 	}
 
 	// Simulate the user clicking "Skip". The real skip handler
-	// (server/services/review_queue_service.go's AcknowledgeSession) calls exactly this
+	// (server/services/reviewqueuerpc/review_queue_service.go's AcknowledgeSession) calls exactly this
 	// method on the live instance — reuse it rather than reinventing the acknowledgment
 	// mechanism by poking timestamp fields directly.
 	inst.MarkAcknowledged()

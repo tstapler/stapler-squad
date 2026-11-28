@@ -1270,7 +1270,7 @@ FILES_VIEWER_RACE_BUDGET_PERCENT ?= 10
 FILES_VIEWER_JSCPD_THRESHOLD ?= 0.14
 FILES_VIEWER_JSCPD_MIN_HEADROOM ?= 0.02
 # Fixed list of test-name prefixes owned by the files viewer; extend as stories land.
-FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions|TestAnalyze|FuzzAnalyze|TestAnalysisCache|TestReadRange|TestFileOps|TestCapabilities|TestSessionServiceWriteFile|TestSessionService_ShouldServePathCompletions|TestWorkspaceService_ShouldEvictVcsStatusCache|TestNewGatedSessionService_ShouldInjectRegistryIntoFileService|TestRangeLimiter|TestFileService_SetFlagRegistry|TestListPathCompletions|TestNewFileService|TestNewFileOps)
+FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions|TestAnalyze|FuzzAnalyze|TestAnalysisCache|TestReadRange|TestFileOps|TestCapabilities|TestSessionServiceWriteFile|TestSessionService_ShouldServePathCompletions|TestWorkspaceService_ShouldEvictVcsStatusCache|TestNewGatedSessionService_ShouldInjectRegistryIntoFileService|TestRangeLimiter|TestFileService_SetFlagRegistry|TestListPathCompletions|TestNewFileService|TestNewFileOps|TestListWorktrees|TestSplitPathPrefix|TestWorktreeEntries|TestExpandTilde|TestDirCache)
 
 .PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
 
@@ -1326,7 +1326,7 @@ pre-commit: format vet test test-race lint vet-architecture ## Pre-commit valida
 # Hard-coded on purpose; the recipe fails when a listed file is missing (a move out of server/services must update this list).
 ACTOR_FIELD_GUARD_FILES := \
 	server/services/session_service.go \
-	server/services/workflow_service.go \
+	server/services/workflowrpc/workflow_service.go \
 	session/prpoller/pr_status_poller.go \
 	session/review_queue_poller.go \
 	session/autonomous/autonomous_driver.go \

@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/reviewqueuerpc"
 	"github.com/tstapler/stapler-squad/server/services/rules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
@@ -172,7 +173,7 @@ func (s *SessionService) GetReviewQueueInstance() *queue.ReviewQueue {
 
 // SetReactiveQueueManager sets the ReactiveQueueManager (dependency injection).
 // This must be called before WatchReviewQueue is used.
-func (s *SessionService) SetReactiveQueueManager(mgr ReactiveQueueManager) {
+func (s *SessionService) SetReactiveQueueManager(mgr reviewqueuerpc.ReactiveQueueManager) {
 	s.reviewQueueSvc.SetReactiveQueueManager(mgr)
 }
 
