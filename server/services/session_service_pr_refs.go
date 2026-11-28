@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -34,7 +35,7 @@ type prRefsSeams struct {
 	// detail reads fresh PR state for ask-to-fix; nil means the GraphQL fetcher.
 	detail github.PRDetailFetcher
 	// tokens resolves the owning account's token; nil means the user PR cache.
-	tokens PRTokenResolver
+	tokens prs.PRTokenResolver
 	// itemCleaner re-runs the (gated) terminal-item cleanup after an item-scoped
 	// detach releases a hold. Nil leaves the 60 s sweep to do it.
 	itemCleaner backlog.WorktreeCleaner
@@ -77,17 +78,6 @@ func (s *SessionService) livePRInstance(id string) (*instance.Instance, error) {
 	return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", id))
 }
 
-func prRefFromProto(p *sessionv1.PullRequestRef) (domain.PRRef, error) {
-	if p == nil || p.GetNumber() <= 0 {
-		return domain.PRRef{}, connect.NewError(connect.CodeInvalidArgument, errors.New("a pull request is required"))
-	}
-	ref, err := domain.NewPRRef(p.GetHost(), p.GetOwner(), p.GetRepo(), int(p.GetNumber()))
-	if err != nil {
-		return domain.PRRef{}, connect.NewError(connect.CodeInvalidArgument, err)
-	}
-	return ref, nil
-}
-
 func prSetError(err error) error {
 	switch {
 	case errors.Is(err, instance.ErrPRNotAttached):
@@ -128,7 +118,7 @@ func (s *SessionService) PinSessionPullRequest(
 			}
 		}
 	} else {
-		ref, err := prRefFromProto(req.Msg.GetPr())
+		ref, err := prs.PRRefFromProto(req.Msg.GetPr())
 		if err != nil {
 			return nil, err
 		}
@@ -150,7 +140,7 @@ func (s *SessionService) DetachSessionPullRequest(
 	if err != nil {
 		return nil, err
 	}
-	ref, err := prRefFromProto(req.Msg.GetPr())
+	ref, err := prs.PRRefFromProto(req.Msg.GetPr())
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +185,7 @@ func (s *SessionService) AttachSessionPullRequest(
 	}
 	info, err := s.prRefs.lookupPR(ctx, repoRef, parsed.PRNumber)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, classifyGitHubRateLimitError(fmt.Errorf("could not find %s on GitHub: %w", ref, err)))
+		return nil, connect.NewError(connect.CodeNotFound, prs.ClassifyGitHubRateLimitError(fmt.Errorf("could not find %s on GitHub: %w", ref, err)))
 	}
 	if err := inst.AttachPRManual(ctx, ref, prInitialFromInfo(info)); err != nil {
 		return nil, prSetError(err)
@@ -257,7 +247,7 @@ func listPRFilter(p *sessionv1.PullRequestRef) (ref domain.PRRef, set bool, err 
 	if p == nil {
 		return domain.PRRef{}, false, nil
 	}
-	ref, err = prRefFromProto(p)
+	ref, err = prs.PRRefFromProto(p)
 	return ref, err == nil, err
 }
 
@@ -271,34 +261,9 @@ func instanceHasPR(inst *instance.Instance, ref domain.PRRef) bool {
 	return false
 }
 
-// resolveTargetPR is the one place a PR action's selector becomes a PR. An unset
-// selector means the session's active PR; a set one must belong to the session.
-// The returned ref is never the zero ref: a session with no PR gets
-// FailedPrecondition "no pull request", never a call for number 0.
-func resolveTargetPR(inst *instance.Instance, sel *sessionv1.PullRequestRef) (*domain.PRRef, error) {
-	var requested *domain.PRRef
-	if sel != nil {
-		ref, err := prRefFromProto(sel)
-		if err != nil {
-			return nil, err
-		}
-		requested = &ref
-	}
-	resolved, err := inst.ResolveTargetPR(requested)
-	switch {
-	case errors.Is(err, instance.ErrNoPullRequest):
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no pull request"))
-	case errors.Is(err, instance.ErrPRNotAttached):
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-	case err != nil:
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-	return &resolved, nil
-}
-
 // SetPRAskToFix installs the fresh-PR reader and token source behind
 // AskSessionToFixPullRequest; nil arguments keep the production defaults.
-func (s *SessionService) SetPRAskToFix(f github.PRDetailFetcher, t PRTokenResolver) {
+func (s *SessionService) SetPRAskToFix(f github.PRDetailFetcher, t prs.PRTokenResolver) {
 	s.prRefs.detail, s.prRefs.tokens = f, t
 }
 
@@ -309,7 +274,7 @@ func (s prRefsSeams) detailFetcher() github.PRDetailFetcher {
 	return github.GraphQLPRDetailFetcher{}
 }
 
-func (s *SessionService) askFixTokens() PRTokenResolver {
+func (s *SessionService) askFixTokens() prs.PRTokenResolver {
 	if s.prRefs.tokens != nil {
 		return s.prRefs.tokens
 	}
@@ -339,12 +304,12 @@ func (s *SessionService) AskSessionToFixPullRequest(
 	if err != nil {
 		return nil, err
 	}
-	target, err := resolveTargetPR(inst, req.Msg.GetPr())
+	target, err := prs.ResolveTargetPR(inst, req.Msg.GetPr())
 	if err != nil {
 		return nil, err
 	}
 	out := &sessionv1.AskSessionToFixPullRequestResponse{Pr: prs.PRRefToProto(*target)}
-	ctx, cancel := context.WithTimeout(ctx, nudgeRPCTimeout)
+	ctx, cancel := context.WithTimeout(ctx, prs.NudgeRPCTimeout)
 	defer cancel()
 	stop, err := s.askFixDeliver(ctx, req.Msg.GetId(), *target, out)
 	if err != nil {
@@ -367,20 +332,20 @@ func (s *SessionService) askFixDeliver(ctx context.Context, id string, target do
 	if prompt == "" {
 		return stop, err
 	}
-	if err := ctxDoneError(ctx); err != nil {
+	if err := prs.CtxDoneError(ctx); err != nil {
 		return nil, err
 	}
 	key, _ := github.NewPRKey(target.Host(), target.Owner(), target.Repo(), target.Number()) // validated by askFixPrompt
-	steer, steerErr := s.SteerInstanceGuarded(ctx, live, NudgeSignature(key, reasons), prompt)
-	no, detail, ok := nudgeFromSteer(steer)
+	steer, steerErr := s.SteerInstanceGuarded(ctx, live, prs.NudgeSignature(key, reasons), prompt)
+	no, detail, ok := prs.NudgeFromSteer(steer)
 	if !ok {
 		log.Warn("ask_to_fix_steer_failed", "session", live.Snapshot().Title, "pr", target.String(), "outcome", steer.String(), "err", fmt.Sprint(steerErr))
-		if steer == SteerFailed {
-			return nil, steerFailedError(ctx, steerErr)
+		if steer == access.SteerFailed {
+			return nil, prs.SteerFailedError(ctx, steerErr)
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected steer outcome %s", steer))
 	}
-	log.Info("ask_to_fix_outcome", "session", live.Snapshot().Title, "pr", target.String(), "outcome", no.String(), "reasons", nudgeReasonNames(reasons))
+	log.Info("ask_to_fix_outcome", "session", live.Snapshot().Title, "pr", target.String(), "outcome", no.String(), "reasons", prs.NudgeReasonNames(reasons))
 	out.Reasons = reasons
 	return &askFixStop{outcome: no, detail: detail}, nil
 }
@@ -390,15 +355,15 @@ func (s *SessionService) askFixDeliver(ctx context.Context, id string, target do
 func (s *SessionService) askFixTarget(id string) (*instance.Instance, *askFixStop, error) {
 	live := s.FindLiveInstance(id)
 	if live == nil {
-		return nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nudgeNotTrackedDetail}, nil
+		return nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, prs.NudgeNotTrackedDetail}, nil
 	}
 	snap := live.Snapshot()
 	switch {
 	case snap.Hidden:
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("this session is a background session and is read-only, so nothing was sent"))
 	case snap.Status.IsSuspended():
-		return nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, nudgePausedDetail}, nil
-	case !CanSteer(snap.Program):
+		return nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, prs.NudgePausedDetail}, nil
+	case !prs.CanSteer(snap.Program):
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("this session's program does not support requests"))
 	}
 	return live, nil, nil
@@ -417,22 +382,22 @@ func (s *SessionService) askFixPrompt(ctx context.Context, ref domain.PRRef) (st
 	}
 	token, _, ok := tokens.TokenForPR(key)
 	if !ok {
-		return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nudgeNoAccountDetail}, nil
+		return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, prs.NudgeNoAccountDetail}, nil
 	}
-	fetchCtx, cancel := context.WithTimeout(ctx, nudgeFetchTimeout)
+	fetchCtx, cancel := context.WithTimeout(ctx, prs.NudgeFetchTimeout)
 	defer cancel()
 	detail, fetchErr := s.prRefs.detailFetcher().FetchPRNudgeDetail(fetchCtx, key, token)
 	if fetchErr != nil {
-		kind, cerr := classifyNudgeFetchError(fetchCtx, fetchErr, func() string { return nudgeRateLimitMessage(nil) })
-		if kind == nudgeFetchNotFound {
-			return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nudgePRNotFoundDetail}, nil
+		kind, cerr := prs.ClassifyNudgeFetchError(fetchCtx, fetchErr, func() string { return prs.NudgeRateLimitMessage(nil) })
+		if kind == prs.NudgeFetchNotFound {
+			return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, prs.NudgePRNotFoundDetail}, nil
 		}
 		log.Warn("ask_to_fix_fetch_failed", "pr", ref.String(), "kind", string(kind), "err", fetchErr)
 		return "", nil, nil, cerr
 	}
 	prompt, reasons := prs.BuildPRNudgePrompt(detail)
 	if prompt == "" || len(reasons) == 0 {
-		return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOTHING_TO_FIX, nudgeNothingToFixDetail}, nil
+		return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOTHING_TO_FIX, prs.NudgeNothingToFixDetail}, nil
 	}
 	return prompt, reasons, nil, nil
 }

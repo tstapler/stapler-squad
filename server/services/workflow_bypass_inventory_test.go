@@ -178,10 +178,23 @@ var bypassInventory = []bypassSite{
 	gated("session/backlog_sync.go", "SyncLoop.transitionBackward", 1, "GatedTransition as sync_loop_backward"),
 }
 
-// walkModuleFuncs parses every non-test Go file under root (skipping web-app,
-// tools/lint, gen and dot or vendor directories) and calls visit for each
-// function declaration with a body, passing its module-relative file path.
+// walkModuleFuncs calls visit for each function declaration with a body in the
+// files walkModuleFiles parses.
 func walkModuleFuncs(t *testing.T, root string, visit func(rel string, fd *ast.FuncDecl)) {
+	t.Helper()
+	walkModuleFiles(t, root, func(rel string, f *ast.File) {
+		for _, decl := range f.Decls {
+			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Body != nil {
+				visit(rel, fd)
+			}
+		}
+	})
+}
+
+// walkModuleFiles parses every non-test Go file under root (skipping web-app,
+// tools/lint, gen and dot or vendor directories) and calls visit with its
+// module-relative path.
+func walkModuleFiles(t *testing.T, root string, visit func(rel string, f *ast.File)) {
 	t.Helper()
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -208,11 +221,7 @@ func walkModuleFuncs(t *testing.T, root string, visit func(rel string, fd *ast.F
 		if perr != nil {
 			return fmt.Errorf("parse %s: %w", rel, perr)
 		}
-		for _, decl := range f.Decls {
-			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Body != nil {
-				visit(rel, fd)
-			}
-		}
+		visit(rel, f)
 		return nil
 	})
 	require.NoError(t, err)

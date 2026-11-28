@@ -21,6 +21,7 @@ The script is an upper bound for jobs whose skip comes from `needs:` or a `detec
 | PR touching Go files | `goreleaser-check.yml` | config check + CGO_ENABLED=0 build smoke in one job |
 | PR touching `server/mcp/**`, `server/services/**` | `mcp-integration.yml` | one job, two sequential suites |
 | PR touching web build paths | `ux-analysis.yml` | Axe + Lighthouse |
+| PR touching `Makefile`, `make/**`, Go modules, `proto/**`, ent schema or the embedded tmux; weekly cron; manual | `fallback-canary.yml` | two parallel Bazel-free jobs: `make-only` (`make ready`, timeout 120 min) and `make-e2e` (`make build` from a clean checkout plus e2e shard 1 of 5, timeout 60 min). Split because back to back they reached the 120 min timeout; costs one extra check on matching PRs |
 | PR labelled `run-benchmarks` | `benchmark.yml` | also runs on every push to main; a failing main run opens an issue |
 | PR labelled `record-video` | `e2e-video.yml` | non-gating feature videos |
 | Push to main only | `main-ci.yml` | full-suite coverage gate (`test-tmux`, `test-rest`, `test`; packages split by `tools/ci/testshards`), 5-platform build matrix |

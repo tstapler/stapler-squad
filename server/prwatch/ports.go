@@ -53,7 +53,7 @@ func (k Kind) Class() KindClass {
 	return ClassHumanFeedback
 }
 
-// Outcome mirrors services.SteerOutcome.
+// Outcome mirrors access.SteerOutcome.
 type Outcome string
 
 const (

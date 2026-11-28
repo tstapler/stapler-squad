@@ -1,9 +1,6 @@
 package backlogsvc
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -45,29 +42,5 @@ func TestTransitionBacklogItemStatus_should_NotRecordManualNudge_When_ActorIsAge
 
 			assert.Empty(t, nudgeRows(t, storage, item.ID))
 		})
-	}
-}
-
-// Only human-driven RPC handlers may record a manual nudge; PR-fix, wake and
-// every other automated steer must stay off this list.
-func TestManualNudgeRecorders_should_BeCalledOnlyFromHumanDrivenHandlers(t *testing.T) {
-	t.Parallel()
-	allowed := map[string]bool{
-		"terminal_service.go":          true, // WriteToSession RPC
-		"session_service_lifecycle.go": true, // RestartSession RPC
-		"github_user_nudge.go":         true, // "Ask to fix" NudgeSessionForPR RPC
-		"backlog_service_lifecycle.go": true, // TransitionBacklogItemStatus, user actor only
-	}
-	files, err := filepath.Glob("*.go")
-	require.NoError(t, err)
-	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") {
-			continue
-		}
-		b, err := os.ReadFile(f)
-		require.NoError(t, err)
-		if strings.Contains(string(b), ".RecordManualNudgeFor") {
-			assert.Truef(t, allowed[f], "%s records manual nudges but is not a human-driven handler", f)
-		}
 	}
 }

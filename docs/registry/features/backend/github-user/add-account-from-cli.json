@@ -5,8 +5,8 @@
   "method": "AddGitHubAccountFromCLI",
   "protoFile": "proto/session/v1/github_user.proto",
   "markerFound": true,
-  "handlerFile": "server/services/github_user_service.go",
+  "handlerFile": "server/services/githubrpc/github_user_service.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-08-05T12:17:53.750983246-07:00"
+  "lastModified": "2026-11-27T20:42:29.516143693-08:00"
 }

@@ -8,7 +8,7 @@ import (
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/prs"
 )
 
@@ -19,7 +19,7 @@ import (
 // prwatchSessionSteerer is the SessionService subset the steer adapter uses.
 type prwatchSessionSteerer interface {
 	IsHiddenSession(sessionUUID string) bool
-	SteerSessionGuarded(ctx context.Context, sessionUUID, sig, msg string) (services.SteerOutcome, error)
+	SteerSessionGuarded(ctx context.Context, sessionUUID, sig, msg string) (access.SteerOutcome, error)
 }
 
 // prwatchSteerer implements prwatch.Steerer. It checks IsHiddenSession, then
@@ -67,23 +67,23 @@ func prwatchKindToServices(k prwatch.Kind) (prs.PRWatchKind, error) {
 	return prs.PRWatchKindUnspecified, fmt.Errorf("prwatch: unknown kind %q", k)
 }
 
-func prwatchOutcome(o services.SteerOutcome) prwatch.Outcome {
+func prwatchOutcome(o access.SteerOutcome) prwatch.Outcome {
 	switch o {
-	case services.SteerDelivered:
+	case access.SteerDelivered:
 		return prwatch.OutcomeDelivered
-	case services.SteerGuardBusy:
+	case access.SteerGuardBusy:
 		return prwatch.OutcomeGuardBusy
-	case services.SteerDuplicate:
+	case access.SteerDuplicate:
 		return prwatch.OutcomeDuplicate
-	case services.SteerCoolingDown:
+	case access.SteerCoolingDown:
 		return prwatch.OutcomeCoolingDown
-	case services.SteerBusy:
+	case access.SteerBusy:
 		return prwatch.OutcomeBusy
-	case services.SteerNoStatusSource:
+	case access.SteerNoStatusSource:
 		return prwatch.OutcomeNoStatusSource
-	case services.SteerNotTracked:
+	case access.SteerNotTracked:
 		return prwatch.OutcomeNotTracked
-	case services.SteerFailed:
+	case access.SteerFailed:
 		return prwatch.OutcomeFailed
 	}
 	return prwatch.OutcomeUnspecified

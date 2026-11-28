@@ -29,17 +29,11 @@ type TerminalService struct {
 	// guards is the live hidden_session_readonly_guards value; nil means on.
 	guards access.GuardsFlag
 	// nudges records user-originated writes as manual-nudge flow markers; nil is a no-op.
-	nudges NudgeRecorder
-}
-
-// NudgeRecorder records a user-originated intervention on a session. Only
-// human-driven RPC handlers may call it; automated steers never do.
-type NudgeRecorder interface {
-	RecordManualNudgeForSession(ctx context.Context, sessionUUID, value string)
+	nudges access.NudgeRecorder
 }
 
 // SetNudgeRecorder injects the manual-nudge recorder.
-func (ts *TerminalService) SetNudgeRecorder(n NudgeRecorder) {
+func (ts *TerminalService) SetNudgeRecorder(n access.NudgeRecorder) {
 	ts.nudges = n
 }
 

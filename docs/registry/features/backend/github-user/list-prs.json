@@ -5,8 +5,8 @@
   "method": "ListUserPRs",
   "protoFile": "proto/session/v1/github_user.proto",
   "markerFound": true,
-  "handlerFile": "server/services/github_user_service.go",
+  "handlerFile": "server/services/githubrpc/github_user_service.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-06-29T15:52:12.946168548-07:00"
+  "lastModified": "2026-11-27T20:42:29.516143693-08:00"
 }

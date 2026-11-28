@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
+	"github.com/tstapler/stapler-squad/server/services/githubrpc"
 	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/unfinishedwork"
@@ -110,7 +111,7 @@ func buildUnfinishedWork(svc *ServiceDeps, cfg *config.Config) unfinishedWiring 
 }
 
 // buildGitHubUserService builds the user PR cache and its service.
-func buildGitHubUserService(svc *ServiceDeps, cfg *config.Config, unfinishedScanner *unfinished.Scanner) (*githubpkg.UserPRCache, *services.GitHubUserService) {
+func buildGitHubUserService(svc *ServiceDeps, cfg *config.Config, unfinishedScanner *unfinished.Scanner) (*githubpkg.UserPRCache, *githubrpc.GitHubUserService) {
 	storage, sessionService := svc.Storage, svc.SessionService
 	// UserPRCache fetches all open PRs authored by the authenticated GitHub user.
 	userPRCache := githubpkg.NewUserPRCacheWithConfig(userPRCacheConfigFromEnv())
@@ -119,7 +120,7 @@ func buildGitHubUserService(svc *ServiceDeps, cfg *config.Config, unfinishedScan
 	userPRCache.SetAnnotationSource(func() ([]githubpkg.PRAnnotationSession, []githubpkg.PRAnnotationWorktree) {
 		return buildPRAnnotations(svc.PRStatusPoller, unfinishedScanner)
 	})
-	githubUserSvc := services.NewGitHubUserService(userPRCache, cfg.GetGitHubEnterpriseHosts())
+	githubUserSvc := githubrpc.NewGitHubUserService(userPRCache, cfg.GetGitHubEnterpriseHosts())
 	githubUserSvc.SetPRNudger(sessionService)
 	if storage != nil {
 		githubUserSvc.SetNudgeRecorder(storage)

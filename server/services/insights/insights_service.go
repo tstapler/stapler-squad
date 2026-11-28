@@ -646,7 +646,12 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 	done := streammetrics.TrackOpenStream("WatchInsights")
 	defer done()
 
-	// 1. Send initial state.
+	// 1. Subscribe before reading or sending state, so changes in between queue on
+	// the 64-entry channel; the store drops notifications once it is full.
+	ch := s.store.Subscribe()
+	defer s.store.Unsubscribe(ch)
+
+	// 2. Send initial state.
 	allParsed := !s.store.IsLoading()
 	initialEvent := &sessionv1.InsightsEvent{
 		EventType: "parse_complete",
@@ -658,10 +663,6 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 	if err := sender.Send(initialEvent); err != nil {
 		return fmt.Errorf("send initial event: %w", err)
 	}
-
-	// 2. Subscribe to TokenStore changes.
-	ch := s.store.Subscribe()
-	defer s.store.Unsubscribe(ch)
 
 	// 3. Forward events until context is cancelled.
 	for {

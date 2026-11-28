@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
@@ -53,13 +54,13 @@ func TestSteerInstanceGuarded_ShouldReturnSteerBusyWithoutFailureCooldown_WhenTh
 
 	out, err := fix.svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerBusy, out)
+	assert.Equal(t, access.SteerBusy, out)
 	assert.Empty(t, pm.writes())
 
 	held.Release()
 	out, err = fix.svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 	require.NoError(t, err)
-	assert.Equal(t, SteerDelivered, out, "no failure cooldown was recorded for the busy attempt")
+	assert.Equal(t, access.SteerDelivered, out, "no failure cooldown was recorded for the busy attempt")
 }
 
 func writeToSessionReq(id string) *connect.Request[sessionv1.WriteToSessionRequest] {

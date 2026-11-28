@@ -546,14 +546,12 @@ func (s *SessionService) SlackNotifierForTest() *notify.SlackNotifier {
 }
 
 // SetJulesConfigDependencies rewires julesConfigSvc onto the real Jules
-// keychain/source-registry/poller dependencies once server/dependencies.go
-// has constructed them (Task 2.4.4a). keys and sources are nil when Jules
-// is disabled or its key is unresolvable at startup — julesConfigSvc stays
-// nil-safe for both (UpdateJulesConfig's api_key path and TestJulesConnection
-// then return CodeUnavailable rather than panicking). poller is nil unless
-// the poller was actually started.
+// dependencies (Task 2.4.4a). keys and sources are nil when Jules is disabled or
+// its key is unresolvable, and poller is nil unless started; UpdateJulesConfig's
+// api_key path and TestJulesConnection then return CodeUnavailable.
 func (s *SessionService) SetJulesConfigDependencies(keys julesrpc.JulesKeyManager, sources julesrpc.JulesSourceResolver, poller julesrpc.JulesAuthReconnectReporter) {
 	s.julesConfigSvc = julesrpc.NewJulesConfigService(keys, sources, poller)
+	s.julesConfigSvc.SetUsageCounter(s.julesUsage)
 }
 
 // SetJulesKeyringTokenSource rewires credChain's JulesCredentialSource onto
@@ -569,12 +567,10 @@ func (s *SessionService) SetJulesKeyringTokenSource(tokens credkit.JulesKeyringT
 	}
 }
 
-// SetJulesUsageCounter wires the process-wide *JulesUsageCounter (Task
-// 4.1.1a) onto julesConfigSvc so GetJulesConfig's response carries a live
-// usage snapshot. Constructed unconditionally in server/dependencies.go
-// (cheap, no I/O) regardless of whether Jules itself is enabled, so this
-// should be called once at startup alongside SetJulesConfigDependencies.
+// SetJulesUsageCounter wires the process-wide usage counter (Task 4.1.1a) that
+// GetJulesConfig reports; order against SetJulesConfigDependencies is free.
 func (s *SessionService) SetJulesUsageCounter(usage julesrpc.JulesUsageSnapshotter) {
+	s.julesUsage = usage
 	s.julesConfigSvc.SetUsageCounter(usage)
 }
 

@@ -1,4 +1,4 @@
-package services
+package githubrpc
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/access"
-	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
@@ -37,7 +37,7 @@ type fakeNudger struct {
 	insts    []*instance.Instance
 	finds    int
 	steers   []steerCall
-	outcome  SteerOutcome
+	outcome  access.SteerOutcome
 	err      error
 	guard    *access.SessionNudgeGuard
 	inWrite  chan struct{} // closed on first write entry when non-nil
@@ -60,17 +60,17 @@ func (f *fakeNudger) FindLiveInstance(id string) *instance.Instance {
 
 func (f *fakeNudger) InstanceReadyForSteer(*instance.Instance) bool { return !f.notIdle }
 
-func (f *fakeNudger) SteerInstanceGuarded(_ context.Context, inst *instance.Instance, sig, msg string) (SteerOutcome, error) {
+func (f *fakeNudger) SteerInstanceGuarded(_ context.Context, inst *instance.Instance, sig, msg string) (access.SteerOutcome, error) {
 	release := func(bool) {}
 	if f.guard != nil {
 		rel, g := f.guard.TryBegin(inst.GetStableID(), sig)
 		switch g {
 		case access.GuardBusy:
-			return SteerGuardBusy, nil
+			return access.SteerGuardBusy, nil
 		case access.GuardDuplicate:
-			return SteerDuplicate, nil
+			return access.SteerDuplicate, nil
 		case access.GuardCoolingDown:
-			return SteerCoolingDown, nil
+			return access.SteerCoolingDown, nil
 		}
 		release = rel
 	}
@@ -89,13 +89,13 @@ func (f *fakeNudger) SteerInstanceGuarded(_ context.Context, inst *instance.Inst
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.outcome != SteerDelivered || f.err != nil {
+	if f.outcome != access.SteerDelivered || f.err != nil {
 		release(false)
 		return f.outcome, f.err
 	}
 	f.steers = append(f.steers, steerCall{inst: inst, sig: sig, msg: msg})
 	release(true)
-	return SteerDelivered, nil
+	return access.SteerDelivered, nil
 }
 
 func (f *fakeNudger) steerCount() int {
@@ -272,7 +272,7 @@ func newNudgeFixture(t *testing.T) *nudgeFixture {
 	t.Helper()
 	inst := &instance.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
 	f := &nudgeFixture{
-		nudger:  &fakeNudger{insts: []*instance.Instance{inst}, outcome: SteerDelivered},
+		nudger:  &fakeNudger{insts: []*instance.Instance{inst}, outcome: access.SteerDelivered},
 		fetcher: &fakeFetcher{detail: failingLintDetail(t, "github.com", "acme", "api", 42)},
 		prs: &fakePRs{
 			prs: []githubpkg.UserPR{linkedPR("github.com", "acme", "api", 42, "alice",
@@ -421,16 +421,16 @@ func TestNudgeSessionForPR_should_ReturnPausedWithDistinctCopyForPausedVsNotTrac
 func TestNudgeSessionForPR_should_MapBusyPausedUntrackedAndNoControllerToDistinctDetail_When_GateFalse(t *testing.T) {
 	tests := []struct {
 		name    string
-		outcome SteerOutcome
+		outcome access.SteerOutcome
 		want    sessionv1.NudgeOutcome
 		detail  string
 	}{
-		{"queued command or non-idle", SteerBusy, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "Session is busy. Try again when it is idle."},
-		{"another delivery in flight", SteerGuardBusy, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "Session is busy. Try again when it is idle."},
-		{"no controller", SteerNoStatusSource, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "Session isn't being monitored, so it can't safely take a request. Open it to restart it."},
-		{"not tracked at steer time", SteerNotTracked, sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, "Session is not running or was deleted. Open its page to restart it."},
-		{"last write failed, cooling down", SteerCoolingDown, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "The last request to this session failed. Try again in a few seconds."},
-		{"duplicate", SteerDuplicate, sessionv1.NudgeOutcome_NUDGE_OUTCOME_DUPLICATE, "Already requested recently."},
+		{"queued command or non-idle", access.SteerBusy, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "Session is busy. Try again when it is idle."},
+		{"another delivery in flight", access.SteerGuardBusy, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "Session is busy. Try again when it is idle."},
+		{"no controller", access.SteerNoStatusSource, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "Session isn't being monitored, so it can't safely take a request. Open it to restart it."},
+		{"not tracked at steer time", access.SteerNotTracked, sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, "Session is not running or was deleted. Open its page to restart it."},
+		{"last write failed, cooling down", access.SteerCoolingDown, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, "The last request to this session failed. Try again in a few seconds."},
+		{"duplicate", access.SteerDuplicate, sessionv1.NudgeOutcome_NUDGE_OUTCOME_DUPLICATE, "Already requested recently."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -446,41 +446,6 @@ func TestNudgeSessionForPR_should_MapBusyPausedUntrackedAndNoControllerToDistinc
 			assert.Empty(t, f.prs.recorded, "only a delivery is recorded for follow-up")
 		})
 	}
-}
-
-// Real SessionService as PRNudger: the handler reports exactly what the shared
-// readiness gate (the one auto-steer uses) decides.
-func TestNudgeSessionForPR_should_ReturnDistinctNoControllerBusyDetailAndNotGenericBusyCopy_When_NoStatusSource(t *testing.T) {
-	fix := setupForkTestFixture(t)
-	inst := &instance.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
-	svctest.AddInstanceToPoller(fix.poller, inst)
-	writes := 0
-	fix.svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { writes++; return nil }
-	fix.svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error { return nil }
-	fix.svc.guardedSteer.guard.SetClock(newFakeNudgeClock().Now)
-
-	f := newNudgeFixture(t)
-	f.svc.SetPRNudger(fix.svc)
-
-	gates := []struct {
-		ready  notReadyReason
-		detail string
-	}{
-		{notReadyNoStatusSource, nudgeNoControllerDetail},
-		{notReadyBusy, nudgeBusyDetail},
-	}
-	details := make([]string, 0, len(gates))
-	for _, g := range gates {
-		g := g
-		fix.svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return g.ready }
-		resp, err := f.call("fix-ci")
-		require.NoError(t, err)
-		assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, resp.Outcome)
-		assert.Equal(t, g.detail, resp.Detail)
-		details = append(details, resp.Detail)
-	}
-	assert.NotEqual(t, details[0], details[1], "the no-controller copy must differ from generic busy")
-	assert.Zero(t, writes)
 }
 
 func TestNudgeSessionForPR_should_ReturnNothingToFixWithZeroSteers_When_FreshDetailGreenOrMergedClosedDraft(t *testing.T) {
@@ -564,33 +529,6 @@ func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSess
 	assert.Equal(t, "github.com/acme/api#42|FAILING_CHECKS", f.nudger.steers[0].sig)
 }
 
-func TestNudgeSessionForPR_should_ReturnFailedPreconditionWithZeroWrites_When_PaneOwnershipMismatch(t *testing.T) {
-	fix := setupForkTestFixture(t)
-	inst := &instance.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
-	svctest.AddInstanceToPoller(fix.poller, inst)
-	writes := 0
-	verifyErr := errors.New("pane ownership mismatch")
-	fix.svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return notReadyNone }
-	fix.svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error { return verifyErr }
-	fix.svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { writes++; return nil }
-	clk := newFakeNudgeClock()
-	fix.svc.guardedSteer.guard.SetClock(clk.Now)
-	f := newNudgeFixture(t)
-	f.svc.SetPRNudger(fix.svc)
-
-	_, err := f.call("fix-ci")
-	requireCode(t, err, connect.CodeFailedPrecondition)
-	assert.Zero(t, writes)
-
-	// Identity fixed; the failure cooldown is 10s, so a retry after it delivers once.
-	verifyErr = nil
-	clk.Advance(11 * time.Second)
-	resp, err := f.call("fix-ci")
-	require.NoError(t, err)
-	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_DELIVERED, resp.Outcome)
-	assert.Equal(t, 1, writes)
-}
-
 func TestNudgeSessionForPR_should_ReturnFailedPrecondition_When_ProgramUnsupported(t *testing.T) {
 	f := newNudgeFixture(t)
 	f.inst.Program = "aider --model x"
@@ -604,7 +542,7 @@ func TestNudgeSessionForPR_should_ReturnFailedPrecondition_When_ProgramUnsupport
 
 func TestNudgeSessionForPR_should_ReturnInternalWithoutDelivered_When_WriteFails(t *testing.T) {
 	f := newNudgeFixture(t)
-	f.nudger.outcome = SteerFailed
+	f.nudger.outcome = access.SteerFailed
 	f.nudger.err = errors.New("tmux write failed")
 
 	_, err := f.call("fix-ci")
@@ -619,7 +557,7 @@ func TestNudgeSessionForPR_should_ReturnInternalWithoutDelivered_When_WriteFails
 
 func TestNudgeSessionForPR_should_ReturnInternalAndLogErr_When_OutcomeUnspecified(t *testing.T) {
 	f := newNudgeFixture(t)
-	f.nudger.outcome = SteerUnspecified
+	f.nudger.outcome = access.SteerUnspecified
 
 	_, err := f.call("fix-ci")
 
@@ -669,7 +607,7 @@ func TestNudgeSessionForPR_should_ReturnDeadlineErrorWithZeroSteersAndNoRealSlee
 	}()
 
 	<-f.fetcher.started
-	f.clock.Advance(nudgeFetchTimeout)
+	f.clock.Advance(prs.NudgeFetchTimeout)
 
 	requireCode(t, <-errCh, connect.CodeDeadlineExceeded)
 	assert.Zero(t, f.nudger.steerCount())
@@ -771,7 +709,7 @@ func TestCanSteer_should_AcceptOnlyAgentsWithAStatusSource_When_ProgramGiven(t *
 		"pi": true, "/usr/bin/pi": true,
 		"aider": false, "pipenv": false, "claude-squad": false, "bash": false,
 	} {
-		assert.Equal(t, want, CanSteer(program), strings.TrimSpace(program))
+		assert.Equal(t, want, prs.CanSteer(program), strings.TrimSpace(program))
 	}
 }
 
@@ -800,7 +738,7 @@ func TestNudgeSessionForPR_should_ReturnDeadlineExceededNotInternal_When_SteerFa
 	f := newNudgeFixture(t)
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	f.nudger.outcome, f.nudger.err = SteerFailed, context.DeadlineExceeded
+	f.nudger.outcome, f.nudger.err = access.SteerFailed, context.DeadlineExceeded
 
 	_, err := f.svc.NudgeSessionForPR(ctx, nudgeReq("", "acme", "api", 42, "fix-ci"))
 
@@ -850,7 +788,7 @@ func TestNudgeSessionForPR_should_RecordManualNudge_When_SteerDelivered(t *testi
 }
 
 func TestNudgeSessionForPR_should_NotRecordManualNudge_When_SteerNotDelivered(t *testing.T) {
-	for _, outcome := range []SteerOutcome{SteerDuplicate, SteerCoolingDown, SteerGuardBusy, SteerBusy} {
+	for _, outcome := range []access.SteerOutcome{access.SteerDuplicate, access.SteerCoolingDown, access.SteerGuardBusy, access.SteerBusy} {
 		t.Run(outcome.String(), func(t *testing.T) {
 			f := newNudgeFixture(t)
 			f.nudger.outcome = outcome

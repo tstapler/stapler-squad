@@ -1,7 +1,7 @@
 import { formatRelativeTime } from "@/lib/utils/datetime";
 
 /**
- * The two buckets `server/services/github_service.go`'s
+ * The two buckets `server/services/prs/github_ratelimit.go`'s
  * `classifyGitHubRateLimitError` sorts a GitHub rate-limit error into before
  * it reaches the frontend as an Error/ConnectError message.
  */

@@ -3,6 +3,7 @@ package insights
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -651,22 +652,71 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
 
-	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 10*time.Second, 10*time.Millisecond)
 
-	// walkAndEnqueue's deferred cleanup fires exactly one notify() even for
-	// an empty historyDir (store.go's defer runs before the historyDir==""
-	// early return check) — a real, unbounded race against Subscribe() above.
-	// Snapshotting the count immediately before triggering the real file
-	// change, and gating completion on the file having actually been parsed
-	// (not just "some update event exists"), ties the assertion to the
-	// causal chain this test claims to exercise rather than either notify.
-	before := len(sender.Sent())
-	store.OnHistoryFileChanged("../../../session/tokens/testdata/valid_session.jsonl")
+	store.OnHistoryFileChanged(validSessionFixture)
+	requireUpdateEvent(t, sender.Sent)
 
+	svctest.RequireCleanReturn(t, runCancel, done)
+}
+
+const validSessionFixture = "../../../session/tokens/testdata/valid_session.jsonl"
+
+// requireUpdateEvent waits for the parsed fixture's "update" event. The initial
+// walk's "parse_complete" can arrive before or after it, so position in the
+// stream (last event, count) says nothing.
+func requireUpdateEvent(t *testing.T, sent func() []*sessionv1.InsightsEvent) {
+	t.Helper()
 	wait.RequireEventually(t, func() bool {
-		return len(sender.Sent()) > before && store.GetByUUID("valid_session") != nil
-	}, 2*time.Second, 10*time.Millisecond)
-	assert.Equal(t, "update", sender.Sent()[len(sender.Sent())-1].EventType)
+		return slices.ContainsFunc(sent(), func(e *sessionv1.InsightsEvent) bool {
+			return e.EventType == "update" && e.Session.GetConversationId() == "valid_session"
+		})
+	}, 10*time.Second, 10*time.Millisecond)
+}
+
+// firstSendHook runs onFirst inside the first Send, i.e. while watchInsights is
+// still delivering its initial event.
+type firstSendHook struct {
+	svctest.FakeInsightsEventSender
+	once    sync.Once
+	onFirst func()
+}
+
+func (h *firstSendHook) Send(e *sessionv1.InsightsEvent) error {
+	h.once.Do(h.onFirst)
+	return h.FakeInsightsEventSender.Send(e)
+}
+
+func TestWatchInsights_should_forwardUpdateEvent_When_StoreNotifiesDuringInitialSend(t *testing.T) {
+	t.Parallel()
+	store := tokens.NewTokenStore("")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store.Start(ctx)
+	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil, nil)
+
+	probe := store.Subscribe()
+	t.Cleanup(func() { store.Unsubscribe(probe) })
+	sender := &firstSendHook{onFirst: func() {
+		store.OnHistoryFileChanged(validSessionFixture)
+		timeout := time.After(10 * time.Second)
+		for {
+			select {
+			case r := <-probe:
+				if r != nil { // nil is the initial walk completing
+					return
+				}
+			case <-timeout:
+				t.Error("store never notified for the fixture")
+				return
+			}
+		}
+	}}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	t.Cleanup(runCancel)
+	done := runWatchInsights(runCtx, svc, sender)
+
+	requireUpdateEvent(t, sender.Sent)
 
 	svctest.RequireCleanReturn(t, runCancel, done)
 }
@@ -782,7 +832,7 @@ func TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore(t
 
 func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *testing.T) {
 	t.Parallel()
-	store := tokens.NewTokenStore("")
+	store := &subscriptionRecorder{TokenStore: tokens.NewTokenStore("")}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	store.Start(ctx)
@@ -796,6 +846,25 @@ func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *tes
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
 
 	svctest.RequireCleanReturn(t, runCancel, done)
+	// Safe to read: the watch goroutine has returned.
+	require.NotNil(t, store.subscribed)
+	assert.Equal(t, store.subscribed, store.unsubscribed)
+}
+
+// subscriptionRecorder records the channel watchInsights subscribes and releases.
+type subscriptionRecorder struct {
+	*tokens.TokenStore
+	subscribed, unsubscribed <-chan *tokens.ParseResult
+}
+
+func (r *subscriptionRecorder) Subscribe() <-chan *tokens.ParseResult {
+	r.subscribed = r.TokenStore.Subscribe()
+	return r.subscribed
+}
+
+func (r *subscriptionRecorder) Unsubscribe(ch <-chan *tokens.ParseResult) {
+	r.unsubscribed = ch
+	r.TokenStore.Unsubscribe(ch)
 }
 
 // --------------------------------------------------------------------------

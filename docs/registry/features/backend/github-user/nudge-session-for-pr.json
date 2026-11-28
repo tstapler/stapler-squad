@@ -5,7 +5,7 @@
   "method": "NudgeSessionForPR",
   "protoFile": "proto/session/v1/github_user.proto",
   "markerFound": true,
-  "handlerFile": "server/services/github_user_nudge.go",
+  "handlerFile": "server/services/githubrpc/github_user_nudge.go",
   "tested": true,
   "testIds": [
     "TestNudgeSessionForPR_should_DeliverOnceToResolvedInstance_When_IdleLinkedSessionAndFailingCheck",
@@ -32,5 +32,5 @@
     "TestNudgeSessionForPR_should_ReturnDeadlineExceededWithoutWriting_When_DeadlineLapsesDuringFetch",
     "TestNudgeSessionForPR_should_ReturnDeadlineExceededNotInternal_When_SteerFailsAfterDeadline"
   ],
-  "lastModified": "2026-10-07T12:58:21.182757326-07:00"
+  "lastModified": "2026-11-27T20:42:29.516143693-08:00"
 }

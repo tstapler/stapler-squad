@@ -1,14 +1,14 @@
-package services
+package githubrpc
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"connectrpc.com/connect"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -18,38 +18,15 @@ import (
 	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
-const (
-	// nudgeFetchTimeout bounds the fresh GitHub read; nudgeRPCTimeout bounds the whole call.
-	nudgeFetchTimeout = 5 * time.Second
-	nudgeRPCTimeout   = 8 * time.Second
-
-	nudgeBusyDetail          = "Session is busy. Try again when it is idle."
-	nudgeNoControllerDetail  = "Session isn't being monitored, so it can't safely take a request. Open it to restart it."
-	nudgePausedDetail        = "Session paused. Open it to resume"
-	nudgeNotTrackedDetail    = "Session is not running or was deleted. Open its page to restart it."
-	nudgeCoolingDownDetail   = "The last request to this session failed. Try again in a few seconds."
-	nudgeNoAccountDetail     = "The GitHub account for this PR is no longer connected."
-	nudgeNothingToFixDetail  = "Nothing to fix right now."
-	nudgeNotLinkedDetail     = "Session is not linked to this PR."
-	nudgePRNotFoundDetail    = "PR not found."
-	nudgeRateLimitedFallback = "GitHub rate limit reached; try again shortly"
-)
+const nudgeNotLinkedDetail = "Session is not linked to this PR."
 
 // PRNudger is the slice of SessionService the nudge handler needs. It is
 // consumer-side so tests substitute a fake with no tmux.
 type PRNudger interface {
 	FindLiveInstance(id string) *instance.Instance
-	SteerInstanceGuarded(ctx context.Context, inst *instance.Instance, sig, msg string) (SteerOutcome, error)
+	SteerInstanceGuarded(ctx context.Context, inst *instance.Instance, sig, msg string) (access.SteerOutcome, error)
 	// InstanceReadyForSteer is the idle gate SteerInstanceGuarded applies.
 	InstanceReadyForSteer(inst *instance.Instance) bool
-}
-
-var _ PRNudger = (*SessionService)(nil)
-
-// PRTokenResolver returns the token and login of the account that owns a PR.
-// There is deliberately no cross-account fallback. Implemented by UserPRCache.
-type PRTokenResolver interface {
-	TokenForPR(key githubpkg.PRKey) (token, login string, ok bool)
 }
 
 // PRSnapshotSource lists the polled open PRs. Implemented by UserPRCache.
@@ -81,11 +58,11 @@ func (realNudgeClock) WithTimeout(ctx context.Context, d time.Duration) (context
 type nudgeDeps struct {
 	nudger   PRNudger
 	fetcher  githubpkg.PRDetailFetcher
-	tokens   PRTokenResolver
+	tokens   prs.PRTokenResolver
 	snapshot PRSnapshotSource
 	tracker  PRNudgeTracker
 	// nudges records a delivered user nudge as a manual-nudge flow marker; nil is a no-op.
-	nudges NudgeRecorder
+	nudges access.NudgeRecorder
 	clock  nudgeClock
 	logf   func(msg string, args ...any)
 	// rateLimitResume reports when GitHub access resumes; nil uses the process-wide limiter.
@@ -96,13 +73,16 @@ type nudgeDeps struct {
 func (s *GitHubUserService) SetPRNudger(n PRNudger) { s.nudge.nudger = n }
 
 // SetNudgeRecorder sets the manual-nudge flow-marker recorder.
-func (s *GitHubUserService) SetNudgeRecorder(n NudgeRecorder) { s.nudge.nudges = n }
+func (s *GitHubUserService) SetNudgeRecorder(n access.NudgeRecorder) { s.nudge.nudges = n }
 
 // SetPRDetailFetcher sets the fresh-PR-state reader.
 func (s *GitHubUserService) SetPRDetailFetcher(f githubpkg.PRDetailFetcher) { s.nudge.fetcher = f }
 
+// SetPRSnapshotSource overrides the polled-PR reader; the default is the PR cache.
+func (s *GitHubUserService) SetPRSnapshotSource(p PRSnapshotSource) { s.nudge.snapshot = p }
+
 // SetPRTokenResolver overrides token lookup; the default is the PR cache.
-func (s *GitHubUserService) SetPRTokenResolver(r PRTokenResolver) { s.nudge.tokens = r }
+func (s *GitHubUserService) SetPRTokenResolver(r prs.PRTokenResolver) { s.nudge.tokens = r }
 
 func (s *GitHubUserService) nudgeClock() nudgeClock {
 	if s.nudge.clock != nil {
@@ -128,7 +108,7 @@ func (s *GitHubUserService) nudgeWarnf(msg string, args ...any) {
 	log.Warn(msg, args...)
 }
 
-func (s *GitHubUserService) tokenResolver() PRTokenResolver {
+func (s *GitHubUserService) tokenResolver() prs.PRTokenResolver {
 	if s.nudge.tokens != nil {
 		return s.nudge.tokens
 	}
@@ -169,22 +149,6 @@ func parsePRKey(k *sessionv1.PRKey) (githubpkg.PRKey, error) {
 		return githubpkg.PRKey{}, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid pr: %w", err))
 	}
 	return key, nil
-}
-
-// CanSteer reports whether program is an agent whose idleness the shared
-// readiness gate can confirm (Claude Code and pi have a status source). Other
-// programs cannot be written to safely and the nudge refuses them.
-func CanSteer(program string) bool {
-	if program == "" {
-		return true
-	}
-	for _, tok := range strings.Fields(program) {
-		switch filepath.Base(tok) {
-		case "claude", "pi":
-			return true
-		}
-	}
-	return false
 }
 
 // nudgeCall carries what the exit log line reports.
@@ -259,12 +223,12 @@ func (s *GitHubUserService) runNudge(ctx context.Context, call *nudgeCall, req *
 	call.pr, call.host, call.key = key.String(), key.Host(), key
 	call.attention = s.attentionSeconds(key, call.startedAt)
 
-	ctx, cancel := s.nudgeClock().WithTimeout(ctx, nudgeRPCTimeout)
+	ctx, cancel := s.nudgeClock().WithTimeout(ctx, prs.NudgeRPCTimeout)
 	defer cancel()
 
 	pr, ok := s.findPR(key)
 	if !ok {
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nil, "", nudgePRNotFoundDetail), nil
+		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nil, "", prs.NudgePRNotFoundDetail), nil
 	}
 	if !linkedStrictly(pr, req.GetSessionId()) {
 		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_SESSION_NOT_LINKED, nil, "", nudgeNotLinkedDetail), nil
@@ -275,7 +239,7 @@ func (s *GitHubUserService) runNudge(ctx context.Context, call *nudgeCall, req *
 		return early, err
 	}
 
-	if err := ctxDoneError(ctx); err != nil {
+	if err := prs.CtxDoneError(ctx); err != nil {
 		return nil, err
 	}
 	prompt, reasons, early, err := s.freshPrompt(ctx, call)
@@ -285,7 +249,7 @@ func (s *GitHubUserService) runNudge(ctx context.Context, call *nudgeCall, req *
 	call.reasons = reasons
 	call.promptBytes = len(prompt)
 	// The deadline may have lapsed during the GitHub read; do not write after it.
-	if err := ctxDoneError(ctx); err != nil {
+	if err := prs.CtxDoneError(ctx); err != nil {
 		return nil, err
 	}
 	return s.deliver(ctx, call, inst, prompt)
@@ -296,7 +260,7 @@ func (s *GitHubUserService) runNudge(ctx context.Context, call *nudgeCall, req *
 func (s *GitHubUserService) resolveSession(call *nudgeCall, sessionID string) (inst *instance.Instance, early *sessionv1.NudgeSessionForPRResponse, err error) {
 	inst = s.nudge.nudger.FindLiveInstance(sessionID)
 	if inst == nil {
-		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nil, "", nudgeNotTrackedDetail), nil
+		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nil, "", prs.NudgeNotTrackedDetail), nil
 	}
 	snap := inst.Snapshot()
 	if snap.Title != sessionID {
@@ -310,9 +274,9 @@ func (s *GitHubUserService) resolveSession(call *nudgeCall, sessionID string) (i
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("this session is a background session and is read-only, so nothing was sent"))
 	}
 	if snap.Status.IsSuspended() {
-		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, nil, call.sessionID, nudgePausedDetail), nil
+		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, nil, call.sessionID, prs.NudgePausedDetail), nil
 	}
-	if !CanSteer(snap.Program) {
+	if !prs.CanSteer(snap.Program) {
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("this session's program does not support requests from Up Next"))
 	}
 	return inst, nil, nil
@@ -323,11 +287,11 @@ func (s *GitHubUserService) resolveSession(call *nudgeCall, sessionID string) (i
 func (s *GitHubUserService) freshPrompt(ctx context.Context, call *nudgeCall) (prompt string, reasons []sessionv1.NudgeReason, early *sessionv1.NudgeSessionForPRResponse, err error) {
 	token, login, ok := s.tokenResolver().TokenForPR(call.key)
 	if !ok {
-		return "", nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nil, call.sessionID, nudgeNoAccountDetail), nil
+		return "", nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nil, call.sessionID, prs.NudgeNoAccountDetail), nil
 	}
 	call.account = login
 
-	fetchCtx, cancel := s.nudgeClock().WithTimeout(ctx, nudgeFetchTimeout)
+	fetchCtx, cancel := s.nudgeClock().WithTimeout(ctx, prs.NudgeFetchTimeout)
 	defer cancel()
 	detail, fetchErr := s.nudge.fetcher.FetchPRNudgeDetail(fetchCtx, call.key, token)
 	if fetchErr != nil {
@@ -336,82 +300,34 @@ func (s *GitHubUserService) freshPrompt(ctx context.Context, call *nudgeCall) (p
 	}
 	prompt, reasons = prs.BuildPRNudgePrompt(detail)
 	if prompt == "" || len(reasons) == 0 {
-		return "", nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOTHING_TO_FIX, nil, call.sessionID, nudgeNothingToFixDetail), nil
+		return "", nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOTHING_TO_FIX, nil, call.sessionID, prs.NudgeNothingToFixDetail), nil
 	}
 	return prompt, reasons, nil, nil
 }
 
 func (s *GitHubUserService) fetchFailure(fetchCtx context.Context, call *nudgeCall, err error) (*sessionv1.NudgeSessionForPRResponse, error) {
-	kind, cerr := classifyNudgeFetchError(fetchCtx, err, s.rateLimitMessage)
-	if kind == nudgeFetchNotFound {
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nil, call.sessionID, nudgePRNotFoundDetail), nil
+	kind, cerr := prs.ClassifyNudgeFetchError(fetchCtx, err, s.rateLimitMessage)
+	if kind == prs.NudgeFetchNotFound {
+		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nil, call.sessionID, prs.NudgePRNotFoundDetail), nil
 	}
 	s.nudgeWarnf("nudge_fetch_failed", "pr", call.pr, "session_id", call.sessionID, "kind", string(kind), "err", err.Error())
 	return nil, cerr
 }
 
-type nudgeFetchKind string
-
-const (
-	nudgeFetchNotFound    nudgeFetchKind = "not_found"
-	nudgeFetchRateLimited nudgeFetchKind = "rate_limited"
-	nudgeFetchTimeoutKind nudgeFetchKind = "timeout"
-	nudgeFetchOther       nudgeFetchKind = "other"
-)
-
-// classifyNudgeFetchError maps a failed fresh-PR read to its kind and Connect
-// error (nil for not_found, which callers answer with a typed outcome).
-func classifyNudgeFetchError(fetchCtx context.Context, err error, rateLimitMessage func() string) (nudgeFetchKind, error) {
-	switch {
-	case errors.Is(err, githubpkg.ErrRateLimited):
-		return nudgeFetchRateLimited, connect.NewError(connect.CodeResourceExhausted, errors.New(rateLimitMessage()))
-	case errors.Is(err, githubpkg.ErrGitHubRefNotFound):
-		return nudgeFetchNotFound, nil
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(context.Cause(fetchCtx), context.DeadlineExceeded):
-		return nudgeFetchTimeoutKind, connect.NewError(connect.CodeDeadlineExceeded, errors.New("GitHub did not answer in time; try again"))
-	default:
-		return nudgeFetchOther, connect.NewError(connect.CodeUnavailable, errors.New("could not read the PR from GitHub; try again"))
-	}
-}
-
-// ctxDoneError maps an expired or cancelled ctx to the matching Connect code,
-// so a lapsed deadline is never reported as an internal error.
-func ctxDoneError(ctx context.Context) error {
-	switch err := ctx.Err(); {
-	case err == nil:
-		return nil
-	case errors.Is(err, context.DeadlineExceeded):
-		return connect.NewError(connect.CodeDeadlineExceeded, errors.New("the request timed out before it was sent; try again"))
-	default:
-		return connect.NewError(connect.CodeCanceled, errors.New("the request was cancelled before it was sent"))
-	}
-}
-
 func (s *GitHubUserService) rateLimitMessage() string {
-	return nudgeRateLimitMessage(s.nudge.rateLimitResume)
-}
-
-// nudgeRateLimitMessage words the rate-limit error; a nil resume reads the default limiter.
-func nudgeRateLimitMessage(resume func() (bool, time.Time)) string {
-	if resume == nil {
-		resume = githubpkg.DefaultRateLimiter.IsLimited
-	}
-	if limited, at := resume(); limited && !at.IsZero() {
-		return "GitHub rate limited until " + at.UTC().Format(time.RFC3339)
-	}
-	return nudgeRateLimitedFallback
+	return prs.NudgeRateLimitMessage(s.nudge.rateLimitResume)
 }
 
 // deliver writes the prompt through the guarded steer and maps every
 // SteerOutcome to a typed response or Connect error.
 func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *instance.Instance, prompt string) (*sessionv1.NudgeSessionForPRResponse, error) {
 	key, reasons := call.key, call.reasons
-	if err := ctxDoneError(ctx); err != nil {
+	if err := prs.CtxDoneError(ctx); err != nil {
 		return nil, err
 	}
-	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, NudgeSignature(key, reasons), prompt)
-	if no, detail, ok := nudgeFromSteer(outcome); ok {
-		if outcome == SteerDelivered {
+	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, prs.NudgeSignature(key, reasons), prompt)
+	if no, detail, ok := prs.NudgeFromSteer(outcome); ok {
+		if outcome == access.SteerDelivered {
 			if s.nudge.nudges != nil {
 				s.nudge.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), markerstore.ManualNudgeWrite)
 			}
@@ -421,45 +337,13 @@ func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *
 		}
 		return nudgeResponse(no, reasons, call.sessionID, detail), nil
 	}
-	if outcome == SteerFailed {
+	if outcome == access.SteerFailed {
 		s.nudgeWarnf("nudge_steer_failed", "pr", call.pr, "session_id", call.sessionID, "err", fmt.Sprint(err))
-		return nil, steerFailedError(ctx, err)
+		return nil, prs.SteerFailedError(ctx, err)
 	}
 	// SteerUnspecified is never treated as delivered.
 	s.nudgeWarnf("nudge_steer_unexpected", "pr", call.pr, "session_id", call.sessionID, "outcome", outcome.String(), "err", fmt.Sprint(err))
 	return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected steer outcome %s", outcome))
-}
-
-// nudgeFromSteer maps a not-failed SteerOutcome to its typed nudge outcome and
-// detail; ok is false for SteerFailed and anything unknown.
-func nudgeFromSteer(outcome SteerOutcome) (no sessionv1.NudgeOutcome, detail string, ok bool) {
-	switch outcome {
-	case SteerDelivered:
-		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_DELIVERED, "Request sent to the session.", true
-	case SteerDuplicate:
-		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_DUPLICATE, "Already requested recently.", true
-	case SteerCoolingDown:
-		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, nudgeCoolingDownDetail, true
-	case SteerGuardBusy, SteerBusy:
-		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, nudgeBusyDetail, true
-	case SteerNoStatusSource:
-		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, nudgeNoControllerDetail, true
-	case SteerNotTracked:
-		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nudgeNotTrackedDetail, true
-	}
-	return 0, "", false
-}
-
-// steerFailedError is the Connect error for a SteerFailed outcome: a lapsed
-// context first, then a pane that could not be verified, else internal.
-func steerFailedError(ctx context.Context, err error) error {
-	if ctxErr := ctxDoneError(ctx); ctxErr != nil {
-		return ctxErr
-	}
-	if errors.Is(err, ErrSteerPaneOwnership) {
-		return connect.NewError(connect.CodeFailedPrecondition, errors.New("the session's terminal could not be verified, so nothing was sent"))
-	}
-	return connect.NewError(connect.CodeInternal, errors.New("could not deliver the request to the session"))
 }
 
 // findPR matches by the full key (host, owner, repo, number); the cache's
@@ -486,25 +370,6 @@ func linkedStrictly(pr githubpkg.UserPR, sessionID string) bool {
 		}
 	}
 	return false
-}
-
-// nudgeSignature keys the duplicate window by PR and canonical reason set, the
-// same key PR-fix auto-steer derives for the same PR, so the two paths dedupe
-// each other without conflating two PRs linked to one session.
-func NudgeSignature(pr githubpkg.PRKey, reasons []sessionv1.NudgeReason) string {
-	names := make([]string, 0, len(reasons))
-	for _, r := range reasons {
-		names = append(names, strings.TrimPrefix(r.String(), "NUDGE_REASON_"))
-	}
-	return access.GuardSignature(pr.Key(), access.ReasonSetSignature(names...))
-}
-
-func nudgeReasonNames(reasons []sessionv1.NudgeReason) string {
-	names := make([]string, 0, len(reasons))
-	for _, r := range reasons {
-		names = append(names, strings.TrimPrefix(r.String(), "NUDGE_REASON_"))
-	}
-	return strings.Join(names, ",")
 }
 
 func nudgeReasonKinds(reasons []sessionv1.NudgeReason) []githubpkg.NudgeReasonKind {
@@ -539,7 +404,7 @@ func (s *GitHubUserService) logNudgeExit(call *nudgeCall, resp *sessionv1.NudgeS
 	}
 	args = append(args,
 		"outcome", outcome,
-		"reasons", nudgeReasonNames(call.reasons),
+		"reasons", prs.NudgeReasonNames(call.reasons),
 		"latency_ms", s.nudgeClock().Now().Sub(call.startedAt).Milliseconds(),
 		"prompt_bytes", call.promptBytes,
 		"session_live", call.live)
@@ -561,7 +426,7 @@ func (s *GitHubUserService) linkedSessionSteerReady(sessionID string) bool {
 		return false
 	}
 	snap := inst.Snapshot()
-	if snap.Title != sessionID || snap.Status.IsSuspended() || !CanSteer(snap.Program) {
+	if snap.Title != sessionID || snap.Status.IsSuspended() || !prs.CanSteer(snap.Program) {
 		return false
 	}
 	return s.nudge.nudger.InstanceReadyForSteer(inst)
