@@ -832,7 +832,7 @@ func TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore(t
 
 func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *testing.T) {
 	t.Parallel()
-	store := tokens.NewTokenStore("")
+	store := &subscriptionRecorder{TokenStore: tokens.NewTokenStore("")}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	store.Start(ctx)
@@ -846,6 +846,25 @@ func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *tes
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
 
 	svctest.RequireCleanReturn(t, runCancel, done)
+	// Safe to read: the watch goroutine has returned.
+	require.NotNil(t, store.subscribed)
+	assert.Equal(t, store.subscribed, store.unsubscribed)
+}
+
+// subscriptionRecorder records the channel watchInsights subscribes and releases.
+type subscriptionRecorder struct {
+	*tokens.TokenStore
+	subscribed, unsubscribed <-chan *tokens.ParseResult
+}
+
+func (r *subscriptionRecorder) Subscribe() <-chan *tokens.ParseResult {
+	r.subscribed = r.TokenStore.Subscribe()
+	return r.subscribed
+}
+
+func (r *subscriptionRecorder) Unsubscribe(ch <-chan *tokens.ParseResult) {
+	r.unsubscribed = ch
+	r.TokenStore.Unsubscribe(ch)
 }
 
 // --------------------------------------------------------------------------

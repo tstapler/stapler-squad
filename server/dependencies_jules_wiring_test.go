@@ -1,29 +1,23 @@
 package server
 
 import (
+	"reflect"
 	"testing"
 
-	connect "connectrpc.com/connect"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
-	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/session"
 )
 
-type staleJulesUsage struct{}
-
-func (staleJulesUsage) Snapshot() julesrpc.JulesUsageSnapshot {
-	return julesrpc.JulesUsageSnapshot{SessionDispatched: 7}
-}
-
-// buildJules must install its own live counter, observed here as replacing a sentinel.
-func TestBuildJules_should_InstallItsUsageCounter_When_JulesIsDisabled(t *testing.T) {
+func newBuildJulesDeps(t *testing.T) *ServiceDeps {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	envtest.NewIsolatedStateDir(t)
 	storage, err := session.NewStorageWithRepository(session.NewTestEntRepository(t))
@@ -32,13 +26,59 @@ func TestBuildJules_should_InstallItsUsageCounter_When_JulesIsDisabled(t *testin
 	t.Cleanup(bus.Close)
 	svc := services.NewSessionService(storage, bus)
 	t.Cleanup(svc.Shutdown)
-	svc.SetJulesUsageCounter(staleJulesUsage{})
+	return &ServiceDeps{CoreDeps: &CoreDeps{Storage: storage, SessionService: svc}}
+}
 
-	buildJules(&ServiceDeps{CoreDeps: &CoreDeps{Storage: storage, SessionService: svc}}, &config.Config{}, nil)
+// privateField reads an unexported field, so the wiring can be checked without
+// adding production accessors.
+func privateField(t *testing.T, v reflect.Value, name string) reflect.Value {
+	t.Helper()
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		require.False(t, v.IsNil(), "nil value holding field %s", name)
+		v = v.Elem()
+	}
+	f := v.FieldByName(name)
+	require.True(t, f.IsValid(), "%s has no field %s", v.Type(), name)
+	return f
+}
 
-	// Drop the OS-keychain key source so GetJulesConfig never reads the real keychain.
-	svc.SetJulesConfigDependencies(nil, nil, nil)
-	resp, err := svc.GetJulesConfig(t.Context(), connect.NewRequest(&sessionv1.GetJulesConfigRequest{}))
-	require.NoError(t, err)
-	assert.Zero(t, resp.Msg.Config.Usage.SessionDispatched)
+// counterAddress requires the usage field to hold a real counter and returns its identity.
+func counterAddress(t *testing.T, usage reflect.Value) uintptr {
+	t.Helper()
+	require.False(t, usage.IsNil(), "no usage counter installed")
+	require.Equal(t, reflect.TypeOf(&julesrpc.JulesUsageCounter{}), usage.Elem().Type())
+	require.False(t, usage.Elem().IsNil(), "nil usage counter installed")
+	return usage.Elem().Pointer()
+}
+
+// configServiceCounter is the counter GetJulesConfig reports from.
+func configServiceCounter(t *testing.T, svc *services.SessionService) uintptr {
+	t.Helper()
+	configSvc := privateField(t, reflect.ValueOf(svc), "julesConfigSvc")
+	return counterAddress(t, privateField(t, configSvc, "usage"))
+}
+
+func TestBuildJules_should_ReportFromARealUsageCounter_When_JulesIsDisabled(t *testing.T) {
+	deps := newBuildJulesDeps(t)
+
+	buildJules(deps, &config.Config{}, nil)
+
+	configServiceCounter(t, deps.SessionService)
+}
+
+func TestBuildJules_should_ShareOneUsageCounter_When_JulesIsEnabled(t *testing.T) {
+	deps := newBuildJulesDeps(t)
+	keyring.MockInit()
+	require.NoError(t, keyring.Set("stapler-squad-jules", "api-key", "test-key"))
+	cfg := &config.Config{}
+	cfg.Jules.Enabled = true
+	backlog := &backlogsvc.BacklogService{}
+
+	poller := buildJules(deps, cfg, backlog)
+
+	require.NotNil(t, poller, "enabled with a resolvable key must build the poller")
+	reported := configServiceCounter(t, deps.SessionService)
+	dispatcher := privateField(t, reflect.ValueOf(backlog), "julesDispatcher")
+	require.Equal(t, reported, counterAddress(t, privateField(t, dispatcher, "usage")), "dispatcher counts elsewhere")
+	require.Equal(t, reported, counterAddress(t, privateField(t, reflect.ValueOf(poller), "usage")), "poller counts elsewhere")
 }

@@ -35,6 +35,7 @@ func (probeLimitsClient) ModelContextWindow(string) int { return 0 }
 
 // Start polls every registered client at once, so the probe observes it without a ticker.
 func TestSessionService_should_StartCapacityMonitor_When_LifecycleContextSet(t *testing.T) {
+	t.Parallel()
 	svc := newProviderWiringService(t)
 	probe := probeLimitsClient{queried: make(chan struct{}, 1)}
 	svc.capacityMonitor.RegisterClient("probe", probe)
@@ -49,6 +50,7 @@ func TestSessionService_should_StartCapacityMonitor_When_LifecycleContextSet(t *
 }
 
 func TestSessionService_should_KeepJulesUsageCounter_When_ConfigDependenciesSetAfterIt(t *testing.T) {
+	t.Parallel()
 	svc := newProviderWiringService(t)
 	usage := julesrpc.NewJulesUsageCounter()
 	usage.IncSessionDispatched()

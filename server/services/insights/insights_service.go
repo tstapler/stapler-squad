@@ -646,8 +646,8 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 	done := streammetrics.TrackOpenStream("WatchInsights")
 	defer done()
 
-	// 1. Subscribe before reading or sending state, so a change (or the walk
-	// completing) in between is buffered rather than lost.
+	// 1. Subscribe before reading or sending state, so changes in between queue on
+	// the 64-entry channel; the store drops notifications once it is full.
 	ch := s.store.Subscribe()
 	defer s.store.Unsubscribe(ch)
 
