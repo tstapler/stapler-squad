@@ -4,14 +4,16 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5/storage"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 // lockstep-only attribution (plan Story 0.0.1, third AC): cold decode count and
 // allocs/op on a 2,500-commit linear history, old committed walk vs lockstep.
 func TestFindMergeBase_ShouldDecodeFewerThanLegacyStack_WhenCold2500Linear(t *testing.T) {
-	spec, head, base := linearForkSpec(2500, shortFork, 5)
+	spec, head, base := testrepo.LinearForkSpec(2500, shortFork, 5)
 	cs := &countingStorer{}
-	d := buildDAG(t, spec, func(s storage.Storer) storage.Storer { cs.Storer = s; return cs })
+	d := testrepo.BuildDAG(t, spec, func(s storage.Storer) storage.Storer { cs.Storer = s; return cs })
 	h, b := d.Hashes[head], d.Hashes[base]
 
 	legacy := func() {
@@ -23,13 +25,13 @@ func TestFindMergeBase_ShouldDecodeFewerThanLegacyStack_WhenCold2500Linear(t *te
 		_, _ = legacyStackCountCommitsTo(d.Repo, b, mb)
 	}
 	lockstep := func() {
-		pm := newParentMemo(d.Repo)
-		mb, err := findMergeBase(pm, h, b)
+		pm := commitwalk.NewParentMemo(d.Repo)
+		mb, err := commitwalk.FindMergeBase(pm, h, b)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, _ = countCommitsTo(pm, h, mb)
-		_, _ = countCommitsTo(pm, b, mb)
+		_, _ = commitwalk.CountCommitsTo(pm, h, mb)
+		_, _ = commitwalk.CountCommitsTo(pm, b, mb)
 	}
 
 	decodes := func(f func()) int64 {

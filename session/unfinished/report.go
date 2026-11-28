@@ -2,6 +2,7 @@ package unfinished
 
 import (
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
 
@@ -77,8 +78,8 @@ func BuildReport(s *Scanner) Report {
 		GraphFullFallbacks:  in.graph.GraphFull,
 		GraphFullRebuilds:   in.graph.FullRebuild,
 		RedundancyUnproven: map[string]int64{
-			redundancyOutcomeNames[redundancyBound]:      in.redundancy[redundancyBound],
-			redundancyOutcomeNames[redundancyPrunedMiss]: in.redundancy[redundancyPrunedMiss],
+			commitwalk.RedundancyOutcomeNames[commitwalk.RedundancyBound]:      in.redundancy[commitwalk.RedundancyBound],
+			commitwalk.RedundancyOutcomeNames[commitwalk.RedundancyPrunedMiss]: in.redundancy[commitwalk.RedundancyPrunedMiss],
 		},
 		GraphExtension: map[string]any{
 			"count": in.graphExt.Count, "over_100ms": in.graphExt.SlowOver100ms,

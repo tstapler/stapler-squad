@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/unfinished/linediff"
 )
 
 // DiffShortstat orchestration, memo resolution and per-file diff application.
@@ -131,9 +132,9 @@ func (g *GoGitVCSReader) diffShortstatUncachedPass(worktreePath string, pass *st
 	// unchanged since a prior diff are answered from the memo and cost neither
 	// a blob read nor a file read.
 	var d DiffStat
-	var memo *fileDiffMemo
+	var memo *linediff.FileDiffMemo
 	if g.effectiveFlags().DiffCounter {
-		memo = diffMemoInstance()
+		memo = linediff.DiffMemoInstance()
 	}
 	pending := make([]pendingTarget, 0, len(stagedTargets)+len(unstagedTargets))
 	for _, ts := range [][]changeTarget{stagedTargets, unstagedTargets} {
@@ -188,18 +189,18 @@ type changeTarget struct {
 // whether key is valid for storing the result afterwards.
 type pendingTarget struct {
 	changeTarget
-	key   FileDiffMemoKey
+	key   linediff.FileDiffMemoKey
 	keyed bool
 }
 
 // resolveMemoHits adds memo-answered targets straight to d and appends the
 // rest to pending. A nil memo (diff_counter off) passes everything through.
-func (g *GoGitVCSReader) resolveMemoHits(memo *fileDiffMemo, root string, targets []changeTarget, pending []pendingTarget, d *DiffStat) []pendingTarget {
+func (g *GoGitVCSReader) resolveMemoHits(memo *linediff.FileDiffMemo, root string, targets []changeTarget, pending []pendingTarget, d *DiffStat) []pendingTarget {
 	for _, t := range targets {
 		p := pendingTarget{changeTarget: t}
 		if memo != nil && !t.isDeleted {
-			if key, ok := memo.keyFor(filepath.Join(root, t.name), t.headHash); ok {
-				if c, hit := memo.lookup(key); hit {
+			if key, ok := memo.KeyFor(filepath.Join(root, t.name), t.headHash); ok {
+				if c, hit := memo.Lookup(key); hit {
 					d.Files++
 					d.Insertions += c.Insertions
 					d.Deletions += c.Deletions
@@ -275,16 +276,16 @@ func readBlobExact(repo *git.Repository, h plumbing.Hash) ([]byte, bool) {
 
 // applyDiff folds one pending target's line counts into d, storing the result
 // in the memo when the target is keyed.
-func (g *GoGitVCSReader) applyDiff(d *DiffStat, t pendingTarget, blobMap map[plumbing.Hash][]byte, memo *fileDiffMemo, root string) {
+func (g *GoGitVCSReader) applyDiff(d *DiffStat, t pendingTarget, blobMap map[plumbing.Hash][]byte, memo *linediff.FileDiffMemo, root string) {
 	d.Files++
 	headData := blobMap[t.headHash] // nil for zero hash or skipped blobs
 	if t.isDeleted {
-		d.Deletions += countBytesLines(headData)
+		d.Deletions += linediff.CountBytesLines(headData)
 		return
 	}
 	bp, ok := readSmallFilePooled(filepath.Join(root, t.name))
 	if !ok {
-		d.Deletions += countBytesLines(headData)
+		d.Deletions += linediff.CountBytesLines(headData)
 		return
 	}
 	defer releaseFileBuf(bp)
@@ -293,22 +294,22 @@ func (g *GoGitVCSReader) applyDiff(d *DiffStat, t pendingTarget, blobMap map[plu
 	// instead of an exact diff, so this is discoverable without reading code.
 	// A file has at most len(bytes) lines, so the byte-length test skips the
 	// newline counts for every file that cannot reach the cap.
-	if len(headData) > maxLCSLines || len(wtData) > maxLCSLines {
-		if oldLines, newLines := countBytesLines(headData), countBytesLines(wtData); oldLines > maxLCSLines || newLines > maxLCSLines {
-			log.DebugLog().Printf("[GoGitVCSReader] LCS cap hit for %s (old=%d new=%d lines, cap=%d): reporting a fully-replaced approximation instead of an exact line diff", t.name, oldLines, newLines, maxLCSLines)
+	if len(headData) > linediff.MaxLCSLines || len(wtData) > linediff.MaxLCSLines {
+		if oldLines, newLines := linediff.CountBytesLines(headData), linediff.CountBytesLines(wtData); oldLines > linediff.MaxLCSLines || newLines > linediff.MaxLCSLines {
+			log.DebugLog().Printf("[GoGitVCSReader] LCS cap hit for %s (old=%d new=%d lines, cap=%d): reporting a fully-replaced approximation instead of an exact line diff", t.name, oldLines, newLines, linediff.MaxLCSLines)
 		}
 	}
 	var ins, del int
 	if memo != nil {
-		memo.diffs.Add(1)
-		ins, del = linesDiffMyers(headData, wtData)
+		memo.CountDiff()
+		ins, del = linediff.LinesDiffMyers(headData, wtData)
 		// A head blob that failed to load would be diffed as empty; never
 		// memoize that, or a transient read error becomes a sticky wrong answer.
 		if _, headLoaded := blobMap[t.headHash]; t.keyed && (headLoaded || t.headHash == (plumbing.Hash{})) {
-			memo.store(t.key, EditCounts{Insertions: ins, Deletions: del})
+			memo.Store(t.key, linediff.EditCounts{Insertions: ins, Deletions: del})
 		}
 	} else {
-		ins, del = linesDiffBytes(headData, wtData)
+		ins, del = linediff.LinesDiffBytes(headData, wtData)
 	}
 	d.Insertions += ins
 	d.Deletions += del

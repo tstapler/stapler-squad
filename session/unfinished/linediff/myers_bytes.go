@@ -1,4 +1,4 @@
-package unfinished
+package linediff
 
 import (
 	"bytes"
@@ -30,7 +30,7 @@ func countEditsBytes(a, b [][]byte, hybrid bool) EditCounts {
 	}
 	d := myersCore(n, m, func(x, y int) bool { return bytes.Equal(a[x], b[y]) }, maxD)
 	if d < 0 {
-		// The caller already enforced maxLCSLines on the untrimmed inputs.
+		// The caller already enforced MaxLCSLines on the untrimmed inputs.
 		lcs := lcsLengthBytes(a, b)
 		return EditCounts{Insertions: m - lcs, Deletions: n - lcs}
 	}
@@ -88,15 +88,15 @@ func releaseLines(p *[][]byte, lines [][]byte) {
 	lineScratch.Put(p)
 }
 
-// linesDiffMyers is linesDiffBytes backed by the hybrid Myers counter. It keeps
-// the maxLCSLines "fully replaced" approximation so results stay identical.
-func linesDiffMyers(old, newData []byte) (insertions, deletions int) {
+// LinesDiffMyers is LinesDiffBytes backed by the hybrid Myers counter. It keeps
+// the MaxLCSLines "fully replaced" approximation so results stay identical.
+func LinesDiffMyers(old, newData []byte) (insertions, deletions int) {
 	pa, pb := lineScratch.Get().(*[][]byte), lineScratch.Get().(*[][]byte)
 	a := splitLinesBytesInto(*pa, old)
 	b := splitLinesBytesInto(*pb, newData)
 	defer releaseLines(pa, a)
 	defer releaseLines(pb, b)
-	if len(a) > maxLCSLines || len(b) > maxLCSLines {
+	if len(a) > MaxLCSLines || len(b) > MaxLCSLines {
 		return len(b), len(a)
 	}
 	c := countEditsBytes(a, b, true)

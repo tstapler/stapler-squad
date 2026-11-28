@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
@@ -26,7 +27,7 @@ func TestAheadBehindFrom_ShouldMatchAheadBehind_WhenParentMemoIsTheSource(t *tes
 	}
 
 	entry.mu.Lock()
-	ahead, behind, err := aheadBehindFrom(newParentMemo(entry.repo), head, base)
+	ahead, behind, err := commitwalk.AheadBehindFrom(commitwalk.NewParentMemo(entry.repo), head, base)
 	entry.mu.Unlock()
 	if err != nil || ahead != cmAhead || behind != cmBehind {
 		t.Fatalf("aheadBehindFrom = (%d, %d, %v), want (%d, %d, nil)", ahead, behind, err, cmAhead, cmBehind)

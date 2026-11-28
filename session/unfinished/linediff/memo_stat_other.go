@@ -1,6 +1,6 @@
 //go:build !unix
 
-package unfinished
+package linediff
 
 // statFileStamp reports ok=false: without ctime and inode the memo cannot rule
 // out a timestamp-preserving rewrite, so it is disabled rather than trusted.

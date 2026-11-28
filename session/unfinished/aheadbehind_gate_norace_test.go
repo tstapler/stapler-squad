@@ -4,6 +4,7 @@ package unfinished
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"testing"
 )
 
@@ -25,7 +26,7 @@ func TestAheadBehindFrom_ShouldAllocZeroAndDecodeZero_WhenGraphPrimedWithCallerS
 	}
 	src := newGraphSource(entry.repo.Storer, false)
 	walk := func() {
-		w := rs.NewWalk(context.Background(), src, 0, mergeBaseBFSLimit)
+		w := rs.NewWalk(context.Background(), src, 0, commitwalk.MergeBaseBFSLimit)
 		ahead, behind, err := aheadBehindWalk(&w, h.Head, h.Base)
 		w.Close()
 		if err != nil || ahead != 3 || behind != 2 {

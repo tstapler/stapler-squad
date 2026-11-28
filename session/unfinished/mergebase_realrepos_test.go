@@ -14,6 +14,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 )
 
 const maxRealPairsPerRepo = 6
@@ -73,7 +74,7 @@ func TestFindMergeBase_ReportRealWorktreeDifferential(t *testing.T) {
 			}
 			pairs++
 			l, lerr := legacyStackFindMergeBase(repo, head.Hash(), tip)
-			k, kerr := findMergeBase(newParentMemo(repo), head.Hash(), tip)
+			k, kerr := commitwalk.FindMergeBase(commitwalk.NewParentMemo(repo), head.Hash(), tip)
 			if lerr != nil || kerr != nil {
 				errs++
 				if (lerr == nil) != (kerr == nil) {

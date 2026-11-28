@@ -16,6 +16,7 @@ import (
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
+	"github.com/tstapler/stapler-squad/session/unfinished/linediff"
 )
 
 // initRepo creates a git repo at path with one commit and returns its path.
@@ -733,7 +734,7 @@ func TestLinesDiff(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ins, del := unfinished.LinesDiff(tc.old, tc.new)
+			ins, del := linediff.LinesDiff(tc.old, tc.new)
 			if ins != tc.wantIns || del != tc.wantDel {
 				t.Errorf("LinesDiff(%q, %q) = ins:%d del:%d, want ins:%d del:%d",
 					tc.old, tc.new, ins, del, tc.wantIns, tc.wantDel)

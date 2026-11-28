@@ -2,6 +2,7 @@ package unfinished
 
 import (
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"runtime"
 )
 
@@ -22,7 +23,7 @@ func (g *GoGitVCSReader) shadowOracle() *GoGitVCSReader {
 	return g.scanSkip.oracle.Load()
 }
 
-// OracleAheadBehind is the plainWalk: refs, then the per-call parentMemo walk,
+// OracleAheadBehind is the plainWalk: refs, then the per-call ParentMemo walk,
 // with no TTL cache, no shared graph and no signature reuse.
 func (g *GoGitVCSReader) OracleAheadBehind(worktreePath, base string) (int, int, error) {
 	o := g.shadowOracle()
@@ -39,7 +40,7 @@ func (g *GoGitVCSReader) OracleAheadBehind(worktreePath, base string) (int, int,
 	if head == baseHash {
 		return 0, 0, nil
 	}
-	return aheadBehindFrom(newParentMemo(entry.repo), head, baseHash)
+	return commitwalk.AheadBehindFrom(commitwalk.NewParentMemo(entry.repo), head, baseHash)
 }
 
 // OracleCommitMessages is the legacy reachable-set walk, uncached.
@@ -54,7 +55,7 @@ func (g *GoGitVCSReader) OracleCommitMessages(worktreePath, base string, limit i
 		return nil, err
 	}
 	entry.mu.Lock()
-	set, err := reachableSet(entry.repo, baseHash)
+	set, err := commitwalk.ReachableSet(entry.repo, baseHash)
 	entry.mu.Unlock()
 	if err != nil {
 		return nil, err

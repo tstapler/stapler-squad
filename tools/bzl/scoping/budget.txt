@@ -33,6 +33,9 @@ session/cmdexec files=4 loc=1418 imports=4
 session/gitwt files=5 loc=913 imports=9
 session/hostclaim files=9 loc=1841 imports=3
 session/ptyio files=6 loc=1254 imports=4
+session/unfinished files=44 loc=8964 imports=16
+session/unfinished/linediff files=6 loc=522 imports=0
+session/unfinished/commitwalk files=6 loc=613 imports=0
 session/ptydiscovery files=1 loc=853 imports=7
 session/importer files=13 loc=2173 imports=10
 session/itemsources files=8 loc=1731 imports=7

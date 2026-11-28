@@ -30,6 +30,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/native"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
@@ -207,7 +208,7 @@ func TestGoGitVCSReader_DiffShortstat_untrackedFilesCapStopsWalk(t *testing.T) {
 // but produces no Insertions/Deletions — preventing OOM from blob reads and LCS.
 //
 // Pre-fix behaviour: both the HEAD blob and the working-tree file would be fully
-// read into memory; linesDiffBytes (LCS) would be run on them.
+// read into memory; LinesDiffBytes (LCS) would be run on them.
 func TestGoGitVCSReader_DiffShortstat_largeModifiedTrackedFile_countedButNotDiffed(t *testing.T) {
 	repo := initRepoInternal(t)
 
@@ -408,7 +409,7 @@ func TestGoGitVCSReader_HasUncommitted_CacheHitReturnsCachedValue(t *testing.T) 
 // verifies the PerfFix-3 optimization: when a cached aheadBehindEntry's TTL
 // has expired but HEAD/base hashes still match the current ones (neither ref
 // moved), AheadBehind must reuse the cached ahead/behind counts rather than
-// re-running findMergeBase + countCommitsTo.
+// re-running FindMergeBase + CountCommitsTo.
 //
 // Detection strategy: after a cold call establishes the real (ahead, behind),
 // the cache entry is overwritten with sentinel counts that don't match
@@ -833,10 +834,10 @@ func TestGoGitVCSReader_HasUncommitted_headTreeCache_invalidatesOnNewCommit(t *t
 	}
 }
 
-// TestReachableSet_CapsAtLimit verifies reachableSet stops walking history
-// once maxReachableSetCommits commits have been visited, rather than walking
-// the full history unboundedly (the same class of bound findMergeBase already
-// applies via mergeBaseBFSLimit).
+// TestReachableSet_CapsAtLimit verifies ReachableSet stops walking history
+// once MaxReachableSetCommits commits have been visited, rather than walking
+// the full history unboundedly (the same class of bound FindMergeBase already
+// applies via MergeBaseBFSLimit).
 func TestReachableSet_CapsAtLimit(t *testing.T) {
 	repo := initRepoInternal(t) // 1 commit already (the initial commit)
 
@@ -859,11 +860,11 @@ func TestReachableSet_CapsAtLimit(t *testing.T) {
 		t.Fatalf("Head: %v", err)
 	}
 
-	origLimit := maxReachableSetCommits
-	maxReachableSetCommits = 3
-	defer func() { maxReachableSetCommits = origLimit }()
+	origLimit := commitwalk.MaxReachableSetCommits
+	commitwalk.MaxReachableSetCommits = 3
+	defer func() { commitwalk.MaxReachableSetCommits = origLimit }()
 
-	set, err := reachableSet(gitRepo, head.Hash())
+	set, err := commitwalk.ReachableSet(gitRepo, head.Hash())
 	if err != nil {
 		t.Fatalf("reachableSet: %v", err)
 	}
@@ -872,10 +873,10 @@ func TestReachableSet_CapsAtLimit(t *testing.T) {
 	}
 }
 
-// TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch verifies countCommitsTo
-// stops walking once mergeBaseBFSLimit commits have been visited, rather than
+// TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch verifies CountCommitsTo
+// stops walking once MergeBaseBFSLimit commits have been visited, rather than
 // decoding every commit back to the branch's root (the same class of bound
-// findMergeBase already applies).
+// FindMergeBase already applies).
 func TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch(t *testing.T) {
 	repo := initRepoInternal(t) // 1 commit already (the initial/stop commit)
 
@@ -910,52 +911,17 @@ func TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch(t *testing.T) {
 	}
 	stop := commits[len(commits)-1] // the initial commit, oldest in history
 
-	origLimit := mergeBaseBFSLimit
-	mergeBaseBFSLimit = 3
-	defer func() { mergeBaseBFSLimit = origLimit }()
+	origLimit := commitwalk.MergeBaseBFSLimit
+	commitwalk.MergeBaseBFSLimit = 3
+	defer func() { commitwalk.MergeBaseBFSLimit = origLimit }()
 
-	n, err := countCommitsTo(newParentMemo(gitRepo), head.Hash(), stop)
+	n, err := commitwalk.CountCommitsTo(commitwalk.NewParentMemo(gitRepo), head.Hash(), stop)
 	if err != nil {
 		t.Fatalf("countCommitsTo: %v", err)
 	}
 	if n != 3 {
 		t.Errorf("countCommitsTo = %d, want 3 (capped by mergeBaseBFSLimit; 5 commits separate head from stop)", n)
 	}
-}
-
-// TestLcsLength_CapsAtMaxLines verifies both lcsLength and lcsLengthBytes
-// skip the O(n*m) DP entirely once either input exceeds maxLCSLines,
-// returning 0 (which callers' len(new)-lcs / len(old)-lcs formulas turn into
-// a bounded "fully replaced" approximation) instead of running the full DP.
-func TestLcsLength_CapsAtMaxLines(t *testing.T) {
-	origLimit := maxLCSLines
-	maxLCSLines = 3
-	defer func() { maxLCSLines = origLimit }()
-
-	t.Run("string lines", func(t *testing.T) {
-		linesA := []string{"a", "b", "c", "d", "e"} // len=5 > cap=3, identical on both sides
-		linesB := []string{"a", "b", "c", "d", "e"}
-		if got := lcsLength(linesA, linesB); got != 0 {
-			t.Errorf("lcsLength = %d, want 0 (over the cap, even though inputs are identical)", got)
-		}
-		// Sanity: at/under the cap, the real DP still runs and computes correctly.
-		small := []string{"a", "b"}
-		if got := lcsLength(small, small); got != 2 {
-			t.Errorf("lcsLength = %d, want 2 for input at/under the cap", got)
-		}
-	})
-
-	t.Run("byte lines", func(t *testing.T) {
-		linesA := [][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d"), []byte("e")}
-		linesB := [][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d"), []byte("e")}
-		if got := lcsLengthBytes(linesA, linesB); got != 0 {
-			t.Errorf("lcsLengthBytes = %d, want 0 (over the cap, even though inputs are identical)", got)
-		}
-		small := [][]byte{[]byte("a"), []byte("b")}
-		if got := lcsLengthBytes(small, small); got != 2 {
-			t.Errorf("lcsLengthBytes = %d, want 2 for input at/under the cap", got)
-		}
-	})
 }
 
 // TestWorktreeGitDir_LinkedWorktree_ResolvesPerWorktreeGitdir verifies that

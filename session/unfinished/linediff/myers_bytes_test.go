@@ -1,6 +1,7 @@
-package unfinished
+package linediff
 
 import (
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 	"strings"
 	"testing"
 )
@@ -31,7 +32,7 @@ func TestMyersBytes_ShouldEqualLcsLengthBytes_WhenSeededPairs(t *testing.T) {
 	}
 	for i := range spikePairs {
 		a, b := spikePair(i)
-		check("pair "+itoa(i), a, b)
+		check("pair "+testrepo.Itoa(i), a, b)
 	}
 	for _, c := range lineSliceCorpus(400) {
 		check(c.name, c.a, c.b)
@@ -42,7 +43,7 @@ func TestHybridMyers_ShouldBoundWorkAndStayExact_WhenLinesAreDisjoint(t *testing
 	const n = 2000
 	a, b := make([]string, n), make([]string, n)
 	for i := range n {
-		a[i], b[i] = "old "+itoa(i), "new "+itoa(i)
+		a[i], b[i] = "old "+testrepo.Itoa(i), "new "+testrepo.Itoa(i)
 	}
 	ab, bb := toLines(a), toLines(b)
 
@@ -80,37 +81,37 @@ func TestLinesDiffMyers_ShouldMatchLinesDiffBytes_WhenContentVaries(t *testing.T
 		{"reorder", "1\n2\n3\n4\n", "4\n3\n2\n1\n"},
 	}
 	for _, c := range cases {
-		wi, wd := linesDiffBytes([]byte(c.old), []byte(c.new))
-		if gi, gd := linesDiffMyers([]byte(c.old), []byte(c.new)); gi != wi || gd != wd {
+		wi, wd := LinesDiffBytes([]byte(c.old), []byte(c.new))
+		if gi, gd := LinesDiffMyers([]byte(c.old), []byte(c.new)); gi != wi || gd != wd {
 			t.Errorf("%s: myers = (%d,%d), legacy = (%d,%d)", c.name, gi, gd, wi, wd)
 		}
 	}
 }
 
 func TestMyersCounter_ShouldReturnFullReplaceApproximation_WhenOver20000Lines(t *testing.T) {
-	big := strings.Repeat("x\n", maxLCSLines+1)
+	big := strings.Repeat("x\n", MaxLCSLines+1)
 	small := strings.Repeat("x\n", 10)
 	for _, c := range []struct {
 		name, old, new string
 		ins, del       int
 	}{
-		{"old-over-cap", big, small, 10, maxLCSLines + 1},
-		{"new-over-cap", small, big, maxLCSLines + 1, 10},
+		{"old-over-cap", big, small, 10, MaxLCSLines + 1},
+		{"new-over-cap", small, big, MaxLCSLines + 1, 10},
 	} {
-		gi, gd := linesDiffMyers([]byte(c.old), []byte(c.new))
-		li, ld := linesDiffBytes([]byte(c.old), []byte(c.new))
+		gi, gd := LinesDiffMyers([]byte(c.old), []byte(c.new))
+		li, ld := LinesDiffBytes([]byte(c.old), []byte(c.new))
 		if gi != c.ins || gd != c.del || li != c.ins || ld != c.del {
 			t.Errorf("%s: myers = (%d,%d), legacy = (%d,%d), want (%d,%d)", c.name, gi, gd, li, ld, c.ins, c.del)
 		}
 	}
 }
 
-func assertBytesPathAllocCeiling(tb gateTB, newIterations int, newImpl func(old, new []byte)) {
+func assertBytesPathAllocCeiling(tb testrepo.GateTB, newIterations int, newImpl func(old, new []byte)) {
 	tb.Helper()
 	a, b := spikeFixture()
 	oldData, newData := []byte(strings.Join(a, "\n")+"\n"), []byte(strings.Join(b, "\n")+"\n")
-	oldBytes, _ := allocDelta(5, func() { linesDiffBytes(oldData, newData) })
-	newBytes, _ := allocDelta(newIterations, func() { newImpl(oldData, newData) })
+	oldBytes, _ := testrepo.AllocDelta(5, func() { LinesDiffBytes(oldData, newData) })
+	newBytes, _ := testrepo.AllocDelta(newIterations, func() { newImpl(oldData, newData) })
 	if newBytes > 0.25*oldBytes {
 		tb.Errorf("G5 (bytes path): B/op = %.0f, ceiling = 25%% of linesDiffBytes %.0f", newBytes, oldBytes)
 	}
@@ -120,16 +121,16 @@ func TestLinesDiffMyers_ShouldUseAtMost25PctBytesOfLinesDiffBytes_When2000Lines1
 	if raceEnabled {
 		t.Skip("allocation counts are not meaningful under -race")
 	}
-	assertBytesPathAllocCeiling(t, 200, func(o, n []byte) { linesDiffMyers(o, n) })
+	assertBytesPathAllocCeiling(t, 200, func(o, n []byte) { LinesDiffMyers(o, n) })
 }
 
 func TestBytesPathGate_ShouldFail_WhenLegacyIsWiredAsNew(t *testing.T) {
 	if raceEnabled {
 		t.Skip("allocation counts are not meaningful under -race")
 	}
-	rec := &failRecorder{}
-	assertBytesPathAllocCeiling(rec, 5, func(o, n []byte) { linesDiffBytes(o, n) })
-	if rec.failures == 0 {
+	rec := &testrepo.FailRecorder{}
+	assertBytesPathAllocCeiling(rec, 5, func(o, n []byte) { LinesDiffBytes(o, n) })
+	if rec.Failures == 0 {
 		t.Error("gate passed with linesDiffBytes wired as the new implementation")
 	}
 }

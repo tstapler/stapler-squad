@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
 
@@ -122,7 +123,7 @@ func (g *GoGitVCSReader) AheadBehindResolved(ctx context.Context, worktreePath, 
 		defer entry.mu.Unlock() // REQUIRED: defer so a panic releases it
 		var res abResult
 		if head != baseHash {
-			ahead, behind, abErr := aheadBehindFrom(newParentMemo(entry.repo), head, baseHash)
+			ahead, behind, abErr := commitwalk.AheadBehindFrom(commitwalk.NewParentMemo(entry.repo), head, baseHash)
 			if abErr != nil {
 				return abResult{}, abErr
 			}

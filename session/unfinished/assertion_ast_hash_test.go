@@ -53,6 +53,7 @@ var assertionHashedFiles = []string{
 // removedAssertionTests allow-lists golden keys that may be absent from the
 // migrated tree (renamed or deleted tests), each with a reason.
 var removedAssertionTests = []struct{ key, reason string }{
+	{".|unfinished|TestLcsLength_CapsAtMaxLines", "moved with the LCS code to linediff/lcs_cap_test.go"},
 	{"gogitstore|gogitstore|TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever", "Task 0.0.3e: tested the native-git subprocess wrapper gitRunErr (fake git binary on PATH); the wrapper is deleted with native git"},
 	{"gogitstore|gogitstore|TestGitRunErrCtx_PreemptedByShorterParentDeadline", "Task 0.0.3e: tested gitRunErrCtx's parent-deadline preemption of a wedged git subprocess; the wrapper is deleted with native git"},
 }

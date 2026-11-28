@@ -30,11 +30,11 @@ func (c *ctimeTicker) ctimeNs() int64 {
 	if err := os.WriteFile(c.probe, nil, 0o644); err != nil {
 		c.t.Fatal(err)
 	}
-	st, ok := statFileStamp(c.probe)
+	st, ok := statPathSig(c.probe)
 	if !ok {
-		c.t.Fatal("probe file is not a regular file")
+		c.t.Fatal("probe file cannot be stat'ed")
 	}
-	return st.CtimeNs
+	return st.ctimeNs
 }
 
 // next returns once any mutation made afterwards gets a ctime later than every

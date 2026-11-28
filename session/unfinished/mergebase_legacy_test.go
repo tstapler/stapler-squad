@@ -1,9 +1,9 @@
 package unfinished
 
-// Test-only oracle: the stack-based mark-then-walk findMergeBase/countCommitsTo
+// Test-only oracle: the stack-based mark-then-walk FindMergeBase/CountCommitsTo
 // exactly as committed at 39fa33a11 (session/unfinished/gogit_vcs_reader.go
 // lines 2190-2278), renamed with a legacyStack prefix. They share the live
-// mergeBaseBFSLimit so differential tests run both walks under the same cap.
+// MergeBaseBFSLimit so differential tests run both walks under the same cap.
 // Do not "fix" these: their quirks are the thing being compared against.
 
 import (
@@ -18,10 +18,12 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 // legacyStackFindMergeBase returns the most-recent common ancestor of h1 and h2 using BFS.
-// It first marks ancestors of h1 (up to mergeBaseBFSLimit), then walks ancestors
+// It first marks ancestors of h1 (up to MergeBaseBFSLimit), then walks ancestors
 // of h2 until it finds one that is already marked. If no merge base is found
 // within the depth limit, a sentinel error is returned.
 func legacyStackFindMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumbing.Hash, error) {
@@ -30,10 +32,10 @@ func legacyStackFindMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumb
 	}
 
 	// Mark ancestors of h1 (bounded).
-	anc := make(map[plumbing.Hash]bool, mergeBaseBFSLimit)
+	anc := make(map[plumbing.Hash]bool, commitwalk.MergeBaseBFSLimit)
 	q := []plumbing.Hash{h1}
 	visited := 0
-	for len(q) > 0 && visited < mergeBaseBFSLimit {
+	for len(q) > 0 && visited < commitwalk.MergeBaseBFSLimit {
 		h := q[len(q)-1]
 		q = q[:len(q)-1]
 		if anc[h] {
@@ -52,10 +54,10 @@ func legacyStackFindMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumb
 	}
 
 	// Walk from h2 breadth-first; first ancestor in anc is the nearest merge base.
-	seen := make(map[plumbing.Hash]bool, mergeBaseBFSLimit)
+	seen := make(map[plumbing.Hash]bool, commitwalk.MergeBaseBFSLimit)
 	q = []plumbing.Hash{h2}
 	visited = 0
-	for len(q) > 0 && visited < mergeBaseBFSLimit {
+	for len(q) > 0 && visited < commitwalk.MergeBaseBFSLimit {
 		h := q[0]
 		q = q[1:]
 		if seen[h] {
@@ -75,21 +77,21 @@ func legacyStackFindMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumb
 		}
 		q = append(q, c.ParentHashes...)
 	}
-	return plumbing.ZeroHash, fmt.Errorf("merge base not found within %d commits", mergeBaseBFSLimit)
+	return plumbing.ZeroHash, fmt.Errorf("merge base not found within %d commits", commitwalk.MergeBaseBFSLimit)
 }
 
 // legacyStackCountCommitsTo counts commits reachable from start that are not reachable from
 // stop (i.e. the number of commits between start and stop exclusive). Bounded at
-// mergeBaseBFSLimit for the same reason findMergeBase is: an unbounded walk on a
+// MergeBaseBFSLimit for the same reason FindMergeBase is: an unbounded walk on a
 // long-lived branch that never merged into base would otherwise decode every
 // commit back to the repo root. When the bound is hit the count is capped rather
-// than exact — callers display it as "mergeBaseBFSLimit+" ahead/behind, which is
+// than exact — callers display it as "MergeBaseBFSLimit+" ahead/behind, which is
 // the correct signal for "diverged a lot" without paying for an exact count.
 func legacyStackCountCommitsTo(repo *git.Repository, start, stop plumbing.Hash) (int, error) {
 	seen := make(map[plumbing.Hash]bool, 32)
 	q := []plumbing.Hash{start}
 	n := 0
-	for len(q) > 0 && n < mergeBaseBFSLimit {
+	for len(q) > 0 && n < commitwalk.MergeBaseBFSLimit {
 		h := q[len(q)-1]
 		q = q[:len(q)-1]
 		if seen[h] || h == stop {
@@ -112,81 +114,85 @@ func legacyStackCountCommitsTo(repo *git.Repository, start, stop plumbing.Hash) 
 
 // ---- tests ----
 
-// walkOutcome is the comparable result of one findMergeBase + ahead/behind run.
+// shortFork is a fork length (and a deliberately tiny walk limit) small enough to
+// keep these tests cheap.
+const shortFork = 3
+
+// walkOutcome is the comparable result of one FindMergeBase + ahead/behind run.
 type walkOutcome struct{ MB, Ahead, Behind string }
 
 func (o walkOutcome) String() string {
 	return "mb=" + o.MB + " ahead=" + o.Ahead + " behind=" + o.Behind
 }
 
-func outcomeFor(d *builtDAG, mb plumbing.Hash, mbErr error, count func(start plumbing.Hash) (int, error), head, base plumbing.Hash) walkOutcome {
+func outcomeFor(d *testrepo.BuiltDAG, mb plumbing.Hash, mbErr error, count func(start plumbing.Hash) (int, error), head, base plumbing.Hash) walkOutcome {
 	if mbErr != nil {
 		if strings.Contains(mbErr.Error(), "merge base not found") {
 			return walkOutcome{"none", "-", "-"}
 		}
 		return walkOutcome{"err", "-", "-"}
 	}
-	o := walkOutcome{MB: d.nodeName(mb), Ahead: "err", Behind: "err"}
+	o := walkOutcome{MB: d.NodeName(mb), Ahead: "err", Behind: "err"}
 	if n, err := count(head); err == nil {
-		o.Ahead = itoa(n)
+		o.Ahead = testrepo.Itoa(n)
 	}
 	if n, err := count(base); err == nil {
-		o.Behind = itoa(n)
+		o.Behind = testrepo.Itoa(n)
 	}
 	return o
 }
 
-func legacyOutcome(d *builtDAG, head, base plumbing.Hash) walkOutcome {
+func legacyOutcome(d *testrepo.BuiltDAG, head, base plumbing.Hash) walkOutcome {
 	mb, err := legacyStackFindMergeBase(d.Repo, head, base)
 	return outcomeFor(d, mb, err, func(s plumbing.Hash) (int, error) { return legacyStackCountCommitsTo(d.Repo, s, mb) }, head, base)
 }
 
-func lockstepOutcome(d *builtDAG, head, base plumbing.Hash) walkOutcome {
-	pm := newParentMemo(d.Repo)
-	mb, err := findMergeBase(pm, head, base)
-	return outcomeFor(d, mb, err, func(s plumbing.Hash) (int, error) { return countCommitsTo(pm, s, mb) }, head, base)
+func lockstepOutcome(d *testrepo.BuiltDAG, head, base plumbing.Hash) walkOutcome {
+	pm := commitwalk.NewParentMemo(d.Repo)
+	mb, err := commitwalk.FindMergeBase(pm, head, base)
+	return outcomeFor(d, mb, err, func(s plumbing.Hash) (int, error) { return commitwalk.CountCommitsTo(pm, s, mb) }, head, base)
 }
 
 func withMergeBaseLimit(t *testing.T, limit int) {
 	t.Helper()
-	orig := mergeBaseBFSLimit
-	mergeBaseBFSLimit = limit
-	t.Cleanup(func() { mergeBaseBFSLimit = orig })
+	orig := commitwalk.MergeBaseBFSLimit
+	commitwalk.MergeBaseBFSLimit = limit
+	t.Cleanup(func() { commitwalk.MergeBaseBFSLimit = orig })
 }
 
 // Sentinel: the copied oracle answers the merge-base cases that the pre-lockstep
-// tests (limits_test.go countCommitsTo cap; mergebase_test.go fork cases) asserted.
+// tests (limits_test.go CountCommitsTo cap; mergebase_test.go fork cases) asserted.
 func TestLegacyStackWalk_ShouldReturnSameAsPreLockstepTests_WhenSentinelCasesRun(t *testing.T) {
 	t.Run("fork point and ahead/behind", func(t *testing.T) {
-		spec, head, base := linearForkSpec(300, 2, 1)
-		d := buildDAG(t, spec, nil)
-		want := walkOutcome{MB: itoa(298), Ahead: "2", Behind: "1"}
+		spec, head, base := testrepo.LinearForkSpec(300, 2, 1)
+		d := testrepo.BuildDAG(t, spec, nil)
+		want := walkOutcome{MB: testrepo.Itoa(298), Ahead: "2", Behind: "1"}
 		if got := legacyOutcome(d, d.Hashes[head], d.Hashes[base]); got != want {
 			t.Errorf("legacy = %v, want %v", got, want)
 		}
 	})
 	t.Run("fast-forward and identical", func(t *testing.T) {
-		spec, head, base := linearForkSpec(20, 3, 0)
-		d := buildDAG(t, spec, nil)
+		spec, head, base := testrepo.LinearForkSpec(20, 3, 0)
+		d := testrepo.BuildDAG(t, spec, nil)
 		for _, c := range []struct{ a, b, want int }{{head, base, base}, {base, head, base}, {head, head, head}} {
 			mb, err := legacyStackFindMergeBase(d.Repo, d.Hashes[c.a], d.Hashes[c.b])
 			if err != nil || mb != d.Hashes[c.want] {
-				t.Errorf("legacy(%d,%d) = %s err=%v, want node %d", c.a, c.b, d.nodeName(mb), err, c.want)
+				t.Errorf("legacy(%d,%d) = %s err=%v, want node %d", c.a, c.b, d.NodeName(mb), err, c.want)
 			}
 		}
 	})
 	t.Run("not found within limit", func(t *testing.T) {
 		withMergeBaseLimit(t, shortFork)
-		spec, head, base := linearForkSpec(12, 4, 6)
-		d := buildDAG(t, spec, nil)
+		spec, head, base := testrepo.LinearForkSpec(12, 4, 6)
+		d := testrepo.BuildDAG(t, spec, nil)
 		if _, err := legacyStackFindMergeBase(d.Repo, d.Hashes[head], d.Hashes[base]); err == nil {
 			t.Error("expected an error when the merge base is beyond mergeBaseBFSLimit")
 		}
 	})
 	t.Run("countCommitsTo capped at the bound", func(t *testing.T) {
 		withMergeBaseLimit(t, 3)
-		spec, head, _ := linearForkSpec(6, 0, 0) // 6 commits, stop = oldest
-		d := buildDAG(t, spec, nil)
+		spec, head, _ := testrepo.LinearForkSpec(6, 0, 0) // 6 commits, stop = oldest
+		d := testrepo.BuildDAG(t, spec, nil)
 		n, err := legacyStackCountCommitsTo(d.Repo, d.Hashes[head], d.Hashes[0])
 		if err != nil || n != 3 {
 			t.Errorf("legacyStackCountCommitsTo = %d err=%v, want 3", n, err)
@@ -194,7 +200,7 @@ func TestLegacyStackWalk_ShouldReturnSameAsPreLockstepTests_WhenSentinelCasesRun
 	})
 }
 
-func requireSameOutcome(t *testing.T, name string, d *builtDAG, a, b int) {
+func requireSameOutcome(t *testing.T, name string, d *testrepo.BuiltDAG, a, b int) {
 	t.Helper()
 	l, k := legacyOutcome(d, d.Hashes[a], d.Hashes[b]), lockstepOutcome(d, d.Hashes[a], d.Hashes[b])
 	if l != k {
@@ -209,15 +215,15 @@ func TestFindMergeBase_ShouldEqualLegacyStack_WhenLinearOrSingleMergeDAG(t *test
 	const perKind = 300
 	for i := range perKind {
 		rng := rand.New(rand.NewSource(int64(1000 + i)))
-		spec, head, base := randomLinearFork(rng)
-		d := buildDAG(t, spec, nil)
+		spec, head, base := testrepo.RandomLinearFork(rng)
+		d := testrepo.BuildDAG(t, spec, nil)
 		requireSameOutcome(t, "linear", d, head, base)
 		requireSameOutcome(t, "linear", d, base, head)
 	}
 	for i := range perKind {
 		rng := rand.New(rand.NewSource(int64(5000 + i)))
-		spec, h, b := randomTree(rng)
-		d := buildDAG(t, spec, nil)
+		spec, h, b := testrepo.RandomTree(rng)
+		d := testrepo.BuildDAG(t, spec, nil)
 		requireSameOutcome(t, "tree", d, h, b)
 		requireSameOutcome(t, "tree", d, b, h)
 		for range 3 {
@@ -233,29 +239,29 @@ const mergeBaseGoldenPath = "testdata/mergebase_lockstep_divergences.golden"
 // divergenceCase is one DAG + pair + cap evaluated in the golden test.
 type divergenceCase struct {
 	name       string
-	spec       dagSpec
+	spec       testrepo.DagSpec
 	head, base int
 	limit      int
 }
 
 func namedDivergenceCases() []divergenceCase {
 	// criss-cross: 3=merge(1,2), 4=merge(2,1); heads 5,6 have best bases {1,2}.
-	crissCross := dagSpec{Parents: [][]int{nil, {0}, {0}, {1, 2}, {2, 1}, {3}, {4}}}
+	crissCross := testrepo.DagSpec{Parents: [][]int{nil, {0}, {0}, {1, 2}, {2, 1}, {3}, {4}}}
 	// octopus: node 4 merges 1,2,3; heads descend from it and from 3.
-	octopus := dagSpec{Parents: [][]int{nil, {0}, {0}, {0}, {1, 2, 3}, {4}, {3}}}
+	octopus := testrepo.DagSpec{Parents: [][]int{nil, {0}, {0}, {0}, {1, 2, 3}, {4}, {3}}}
 	// shallow: a criss-cross whose root commits are missing from the store.
-	shallow := crissCross.truncated(1)
+	shallow := crissCross.Truncated(1)
 	cs := []divergenceCase{
 		{"crisscross", crissCross, 5, 6, 2000},
 		{"crisscross-rev", crissCross, 6, 5, 2000},
 		{"octopus", octopus, 5, 6, 2000},
 		{"octopus-rev", octopus, 6, 5, 2000},
 		{"shallow-crisscross", shallow, 5, 6, 2000},
-		{"shallow-octopus", octopus.truncated(2), 5, 6, 2000},
+		{"shallow-octopus", octopus.Truncated(2), 5, 6, 2000},
 	}
 	for limit := 2; limit <= 8; limit++ {
-		spec, head, base := linearForkSpec(12, 4, 3)
-		cs = append(cs, divergenceCase{"cap-linear-limit" + itoa(limit), spec, head, base, limit})
+		spec, head, base := testrepo.LinearForkSpec(12, 4, 3)
+		cs = append(cs, divergenceCase{"cap-linear-limit" + testrepo.Itoa(limit), spec, head, base, limit})
 	}
 	return cs
 }
@@ -264,22 +270,22 @@ func seededDivergenceCases() []divergenceCase {
 	cs := make([]divergenceCase, 0, 1200)
 	for i := range 200 {
 		rng := rand.New(rand.NewSource(int64(9000 + i)))
-		spec, h, b := randomGeneral(rng)
+		spec, h, b := testrepo.RandomGeneral(rng)
 		for _, limit := range []int{2000, 4} {
-			c := divergenceCase{"general-seed" + itoa(9000+i) + "-limit" + itoa(limit), spec, h, b, limit}
+			c := divergenceCase{"general-seed" + testrepo.Itoa(9000+i) + "-limit" + testrepo.Itoa(limit), spec, h, b, limit}
 			cs = append(cs, c)
 			sh := c
 			sh.name = "shallow-" + c.name
-			sh.spec = spec.truncated(len(spec.Parents) / 3)
+			sh.spec = spec.Truncated(len(spec.Parents) / 3)
 			cs = append(cs, sh)
 		}
 	}
 	for i := range 200 {
 		rng := rand.New(rand.NewSource(int64(13000 + i)))
-		spec, h, b := randomSingleMerge(rng)
+		spec, h, b := testrepo.RandomSingleMerge(rng)
 		cs = append(cs,
-			divergenceCase{"single-merge-seed" + itoa(13000+i) + "-fwd", spec, h, b, 2000},
-			divergenceCase{"single-merge-seed" + itoa(13000+i) + "-rev", spec, b, h, 2000})
+			divergenceCase{"single-merge-seed" + testrepo.Itoa(13000+i) + "-fwd", spec, h, b, 2000},
+			divergenceCase{"single-merge-seed" + testrepo.Itoa(13000+i) + "-rev", spec, b, h, 2000})
 	}
 	return cs
 }
@@ -287,7 +293,7 @@ func seededDivergenceCases() []divergenceCase {
 func divergenceLines(t *testing.T, cases []divergenceCase) (lines []string, total int) {
 	for _, c := range cases {
 		withMergeBaseLimit(t, c.limit)
-		d := buildDAG(t, c.spec, nil)
+		d := testrepo.BuildDAG(t, c.spec, nil)
 		l, k := legacyOutcome(d, d.Hashes[c.head], d.Hashes[c.base]), lockstepOutcome(d, d.Hashes[c.head], d.Hashes[c.base])
 		total++
 		reportBestAgreement(t, d, c, l, k)
@@ -303,11 +309,11 @@ func divergenceLines(t *testing.T, cases []divergenceCase) (lines []string, tota
 // object.Commit.MergeBase's best set, tallied per case-name family.
 var bestAgreement = map[string]*[3]int{} // family -> {cases, legacyBest, lockstepBest}
 
-func reportBestAgreement(t *testing.T, d *builtDAG, c divergenceCase, l, k walkOutcome) {
+func reportBestAgreement(t *testing.T, d *testrepo.BuiltDAG, c divergenceCase, l, k walkOutcome) {
 	if len(c.spec.Missing) > 0 || c.limit != 2000 {
 		return
 	}
-	best, err := d.bestSet(d.Hashes[c.head], d.Hashes[c.base])
+	best, err := d.BestSet(d.Hashes[c.head], d.Hashes[c.base])
 	if err != nil {
 		return
 	}
@@ -358,11 +364,11 @@ func TestFindMergeBase_ShouldRecordGoldenDivergence_WhenCrissCrossOctopusOrCapBo
 	}
 }
 
-type fakeParents map[plumbing.Hash]commitInfo
+type fakeParents map[plumbing.Hash]commitwalk.CommitInfo
 
-func (f fakeParents) info(h plumbing.Hash) (commitInfo, error) { return f[h], nil }
-func (f fakeParents) get(h plumbing.Hash) ([]plumbing.Hash, error) {
-	return f[h].parents, nil
+func (f fakeParents) Info(h plumbing.Hash) (commitwalk.CommitInfo, error) { return f[h], nil }
+func (f fakeParents) Get(h plumbing.Hash) ([]plumbing.Hash, error) {
+	return f[h].Parents, nil
 }
 
 // R (newest timestamp, clock skew) and O are both common to h1 and h2, and R is
@@ -374,13 +380,13 @@ func TestFindMergeBase_ShouldReturnCommonAncestorWithoutError_WhenSkewedRedundan
 	hh := func(s string) plumbing.Hash { return plumbing.NewHash(fmt.Sprintf("%040s", s)) }
 	r, m3, m2, m1, o, h1, h2 := hh("a1"), hh("a2"), hh("a3"), hh("a4"), hh("a5"), hh("a6"), hh("a7")
 	pm := fakeParents{
-		r: {when: 100}, m3: {parents: []plumbing.Hash{r}}, m2: {parents: []plumbing.Hash{m3}},
-		m1: {parents: []plumbing.Hash{m2}}, o: {parents: []plumbing.Hash{m1}},
-		h1: {parents: []plumbing.Hash{r, o}, when: 2}, h2: {parents: []plumbing.Hash{r, o}, when: 3},
+		r: {When: 100}, m3: {Parents: []plumbing.Hash{r}}, m2: {Parents: []plumbing.Hash{m3}},
+		m1: {Parents: []plumbing.Hash{m2}}, o: {Parents: []plumbing.Hash{m1}},
+		h1: {Parents: []plumbing.Hash{r, o}, When: 2}, h2: {Parents: []plumbing.Hash{r, o}, When: 3},
 	}
 	for _, limit := range []int{2000, 3} {
 		withMergeBaseLimit(t, limit)
-		got, err := findMergeBase(pm, h1, h2)
+		got, err := commitwalk.FindMergeBase(pm, h1, h2)
 		if err != nil || (got != r && got != o) {
 			t.Fatalf("limit %d: got %s err=%v, want %s or %s with no error", limit, got, err, r, o)
 		}

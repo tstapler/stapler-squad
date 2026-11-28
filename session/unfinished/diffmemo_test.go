@@ -11,17 +11,16 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
+	"github.com/tstapler/stapler-squad/session/unfinished/linediff"
 )
 
 // useDiffMemo installs a fresh process-wide memo whose clock reads `ahead`
 // past the real now. A backdated mtime (testrepo.Age) cannot change ctime, so
 // the clock must run >= 10 s ahead for both to read as old at store time.
-func useDiffMemo(t *testing.T, budget int64, ahead time.Duration) *fileDiffMemo {
+func useDiffMemo(t *testing.T, budget int64, ahead time.Duration) *linediff.FileDiffMemo {
 	t.Helper()
-	m := newFileDiffMemo(budget, func() time.Time { return time.Now().Add(ahead) })
-	prev := activeDiffMemo.Load()
-	activeDiffMemo.Store(m)
-	t.Cleanup(func() { activeDiffMemo.Store(prev) })
+	m := linediff.NewFileDiffMemo(budget, func() time.Time { return time.Now().Add(ahead) })
+	t.Cleanup(linediff.SwapDiffMemo(m))
 	return m
 }
 
@@ -68,7 +67,7 @@ func TestFileDiffMemo_ShouldDoZeroBlobReadsAndDiffs_WhenFileUnchanged(t *testing
 	if first.Files != 1 || first.Insertions != 2 || first.Deletions != 2 {
 		t.Fatalf("first = %+v, want 1 file +2 -2", first)
 	}
-	afterFirst, blobsFirst := memo.counters(), r.BlobReads()
+	afterFirst, blobsFirst := memo.Counters(), r.BlobReads()
 	if afterFirst.Diffs != 1 || afterFirst.Hits != 0 {
 		t.Fatalf("first poll counters = %+v, want 1 diff and 0 hits", afterFirst)
 	}
@@ -77,7 +76,7 @@ func TestFileDiffMemo_ShouldDoZeroBlobReadsAndDiffs_WhenFileUnchanged(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := memo.counters()
+	after := memo.Counters()
 	if second != first {
 		t.Errorf("memoized result %+v != computed %+v", second, first)
 	}
@@ -101,7 +100,7 @@ func TestFileDiffMemo_ShouldNotEngage_WhenDiffCounterOff(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if c := memo.counters(); c != (DiffMemoCounters{}) {
+	if c := memo.Counters(); c != (linediff.DiffMemoCounters{}) {
 		t.Errorf("memo touched with the flag off: %+v", c)
 	}
 }
@@ -148,7 +147,7 @@ func TestFileDiffMemo_ShouldMatchLegacyCounts_WhenDiffCounterOn(t *testing.T) {
 	}
 	memo := useDiffMemo(t, 0, time.Hour)
 	defer func() {
-		if memo.counters().Hits == 0 {
+		if memo.Counters().Hits == 0 {
 			t.Error("memo never hit: the second pass did not exercise it")
 		}
 	}()
@@ -161,41 +160,6 @@ func TestFileDiffMemo_ShouldMatchLegacyCounts_WhenDiffCounterOn(t *testing.T) {
 		if got != want {
 			t.Fatalf("pass %d: diff_counter on = %+v, legacy = %+v", pass, got, want)
 		}
-	}
-}
-
-func TestFileDiffMemo_ShouldMiss_WhenSizeMtimeCtimeOrInodeChanges(t *testing.T) {
-	base := fileStamp{Size: 4096, MtimeNs: 1.7e18, CtimeNs: 1.7e18, Inode: 7}
-	head := plumbing.NewHash("1111111111111111111111111111111111111111")
-	m := newFileDiffMemo(0, func() time.Time { return time.Unix(0, 1.7e18).Add(time.Hour) })
-	stamp := base
-	m.stat = func(string) (fileStamp, bool) { return stamp, true }
-	key := func(h plumbing.Hash) FileDiffMemoKey {
-		k, ok := m.keyFor("/w/a.go", h)
-		if !ok {
-			t.Fatal("keyFor refused a regular file")
-		}
-		return k
-	}
-	m.store(key(head), EditCounts{Insertions: 1})
-	if _, ok := m.lookup(key(head)); !ok {
-		t.Fatal("unchanged stamp missed")
-	}
-	for name, mutate := range map[string]func(*fileStamp){
-		"size":  func(s *fileStamp) { s.Size++ },
-		"mtime": func(s *fileStamp) { s.MtimeNs++ },
-		"ctime": func(s *fileStamp) { s.CtimeNs++ },
-		"inode": func(s *fileStamp) { s.Inode++ },
-	} {
-		stamp = base
-		mutate(&stamp)
-		if _, ok := m.lookup(key(head)); ok {
-			t.Errorf("memo hit after %s changed", name)
-		}
-	}
-	stamp = base
-	if _, ok := m.lookup(key(plumbing.NewHash("2222222222222222222222222222222222222222"))); ok {
-		t.Error("memo hit for a different HEAD blob")
 	}
 }
 
@@ -227,12 +191,12 @@ func TestFileDiffMemo_ShouldMiss_WhenEqualLengthEditRestoresMtime(t *testing.T) 
 	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
 		t.Fatal(err)
 	}
-	diffsBefore := memo.counters().Diffs
+	diffsBefore := memo.Counters().Diffs
 	second, err := r.diffShortstatUncached(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if memo.counters().Diffs != diffsBefore+1 {
+	if memo.Counters().Diffs != diffsBefore+1 {
 		t.Error("memo trusted a file rewritten with identical size and restored mtime")
 	}
 	if second.Insertions != first.Insertions+1 || second.Deletions != first.Deletions+1 {
@@ -248,15 +212,15 @@ func TestFileDiffMemo_ShouldNotTrust_WhenModifiedWithin2sOfStore(t *testing.T) {
 	}
 	// The clock reads 1 s after the file's mtime, inside the 2 s window.
 	storeTime := fi.ModTime().Add(time.Second)
-	memo := useDiffMemo(t, 0, 0)
-	memo.now = func() time.Time { return storeTime }
+	memo := linediff.NewFileDiffMemo(0, func() time.Time { return storeTime })
+	t.Cleanup(linediff.SwapDiffMemo(memo))
 	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	for range 2 {
 		if _, err := r.diffShortstatUncached(dir); err != nil {
 			t.Fatal(err)
 		}
 	}
-	c := memo.counters()
+	c := memo.Counters()
 	if c.Hits != 0 || c.Diffs != 2 || c.RacySkips == 0 {
 		t.Errorf("counters = %+v, want 0 hits, 2 diffs, racy skips > 0", c)
 	}
@@ -264,7 +228,7 @@ func TestFileDiffMemo_ShouldNotTrust_WhenModifiedWithin2sOfStore(t *testing.T) {
 
 func TestFileDiffMemo_ShouldBeDisabled_WhenCtimeUnavailable(t *testing.T) {
 	memo := useDiffMemo(t, 0, time.Hour)
-	memo.stat = func(string) (fileStamp, bool) { return fileStamp{}, false } // the !unix build's behaviour
+	memo.DisableStamps() // the !unix build's behaviour
 	dir, _ := dirtyRepo(t)
 	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	for range 2 {
@@ -272,35 +236,8 @@ func TestFileDiffMemo_ShouldBeDisabled_WhenCtimeUnavailable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if c := memo.counters(); c.Hits != 0 || c.Misses != 0 || c.Diffs != 2 {
+	if c := memo.Counters(); c.Hits != 0 || c.Misses != 0 || c.Diffs != 2 {
 		t.Errorf("counters = %+v, want the memo never consulted and 2 diffs", c)
-	}
-	if _, ok := (&fileDiffMemo{stat: statFileStamp}).keyFor(filepath.Join(t.TempDir(), "missing"), plumbing.ZeroHash); ok {
-		t.Error("keyFor accepted a path that does not exist")
-	}
-}
-
-func TestFileDiffMemo_ShouldStayUnderBudgetAndCountEvictions_When10000Files(t *testing.T) {
-	const files = 10_000
-	budget := int64(256 << 10)
-	m := newFileDiffMemo(budget, func() time.Time { return time.Unix(0, 1.7e18).Add(time.Hour) })
-	for i := range files {
-		m.store(FileDiffMemoKey{Path: fmt.Sprintf("/w/dir/file%05d.go", i), Size: 1, MtimeNs: 1.7e18, CtimeNs: 1.7e18, Inode: uint64(i)}, EditCounts{})
-	}
-	if got := m.bytes.Load(); got > budget {
-		t.Errorf("bytes = %d, want <= budget %d", got, budget)
-	}
-	c := m.counters()
-	if c.Evictions == 0 {
-		t.Error("no evictions counted although 10,000 entries exceed the budget")
-	}
-	if got := int64(m.m.Size()) + c.Evictions; got != files {
-		t.Errorf("entries %d + evictions %d = %d, want %d", m.m.Size(), c.Evictions, got, files)
-	}
-	var sum int64
-	m.m.Range(func(k FileDiffMemoKey, _ EditCounts) bool { sum += entryBytes(k); return true })
-	if sum != m.bytes.Load() {
-		t.Errorf("byte accounting drifted: tracked %d, actual %d", m.bytes.Load(), sum)
 	}
 }
 

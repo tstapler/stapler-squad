@@ -1,14 +1,14 @@
-package unfinished
+package linediff
 
 // ADR-005 spike (Story 3.2.1): candidates (a) in-package Myers and (b)
 // diffmatchpatch.DiffMainRunes, each compared with the lcsLength oracle.
 
 import (
 	"math/rand"
-	"runtime"
 	"testing"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 const spikePairs = 10_000
@@ -27,14 +27,14 @@ func spikePair(i int) (a, b []string) {
 	for range rng.Intn(8) {
 		switch pos := rng.Intn(len(b) + 1); rng.Intn(3) {
 		case 0:
-			b = append(b[:pos], append([]string{"ins" + itoa(rng.Intn(9))}, b[pos:]...)...)
+			b = append(b[:pos], append([]string{"ins" + testrepo.Itoa(rng.Intn(9))}, b[pos:]...)...)
 		case 1:
 			if pos < len(b) {
 				b = append(b[:pos], b[pos+1:]...)
 			}
 		default:
 			if pos < len(b) {
-				b[pos] = "rep" + itoa(rng.Intn(9))
+				b[pos] = "rep" + testrepo.Itoa(rng.Intn(9))
 			}
 		}
 	}
@@ -92,26 +92,13 @@ func TestDiffCandidates_ShouldReportMismatchCountsVsOracle_When10000PairsEach(t 
 func spikeFixture() (a, b []string) {
 	a = make([]string, 2000)
 	for i := range a {
-		a[i] = "line " + itoa(i) + " of the file"
+		a[i] = "line " + testrepo.Itoa(i) + " of the file"
 	}
 	b = append([]string(nil), a...)
 	for k := range 15 {
-		b[k*130+7] = "changed " + itoa(k)
+		b[k*130+7] = "changed " + testrepo.Itoa(k)
 	}
 	return a, b
-}
-
-// allocDelta reports per-call TotalAlloc and Mallocs over n calls after one
-// warm-up call; single goroutine, so concurrent allocators do not leak in.
-func allocDelta(n int, f func()) (bytesPerOp, allocsPerOp float64) {
-	f()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for range n {
-		f()
-	}
-	runtime.ReadMemStats(&after)
-	return float64(after.TotalAlloc-before.TotalAlloc) / float64(n), float64(after.Mallocs-before.Mallocs) / float64(n)
 }
 
 func TestDiffCandidates_ShouldReportAllocationsVsLcsLength_When2000Lines15Changes(t *testing.T) {
@@ -130,7 +117,7 @@ func TestDiffCandidates_ShouldReportAllocationsVsLcsLength_When2000Lines15Change
 		{"diffmatchpatch", 5, func() { _ = dmpEditCounts(a, b) }},
 	}
 	for _, r := range rows {
-		bytesOp, allocsOp := allocDelta(r.n, r.f)
+		bytesOp, allocsOp := testrepo.AllocDelta(r.n, r.f)
 		t.Logf("%-15s B/op=%10.0f allocs/op=%8.1f", r.name, bytesOp, allocsOp)
 	}
 }

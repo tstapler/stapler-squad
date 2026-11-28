@@ -7,6 +7,7 @@ package unfinished
 
 import (
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 	"os"
 	"sort"
 	"strconv"
@@ -15,37 +16,6 @@ import (
 )
 
 const mergeBaseOracleGoldenPath = "testdata/mergebase_oracle_divergences.golden"
-
-// commonAncestors returns the node indexes reachable from both a and b
-// (inclusive). A missing (shallow-boundary) node counts as an ancestor, since
-// its hash is still named by a child, but its own parents are unreachable.
-func (s dagSpec) commonAncestors(a, b int) map[int]bool {
-	reach := func(start int) map[int]bool {
-		seen := map[int]bool{}
-		stack := []int{start}
-		for len(stack) > 0 {
-			n := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if seen[n] {
-				continue
-			}
-			seen[n] = true
-			if s.Missing[n] {
-				continue
-			}
-			stack = append(stack, s.Parents[n]...)
-		}
-		return seen
-	}
-	ra, rb := reach(a), reach(b)
-	out := map[int]bool{}
-	for n := range ra {
-		if rb[n] {
-			out[n] = true
-		}
-	}
-	return out
-}
 
 // oracleVerdict classifies one walk's merge base against the MergeBase oracle.
 func oracleVerdict(mb string, best map[string]bool, common map[int]bool) string {
@@ -71,10 +41,10 @@ func TestMergeBaseOracle_ShouldRecordGoldenAgainstMergeBase_WhenCorpusRuns(t *te
 	var lines []string
 	for _, c := range oracleCorpus() {
 		withMergeBaseLimit(t, c.limit)
-		d := buildDAG(t, c.spec, nil)
+		d := testrepo.BuildDAG(t, c.spec, nil)
 		h, b := d.Hashes[c.head], d.Hashes[c.base]
-		best, oracleErr := d.bestSet(h, b)
-		common := c.spec.commonAncestors(c.head, c.base)
+		best, oracleErr := d.BestSet(h, b)
+		common := c.spec.CommonAncestors(c.head, c.base)
 		walks := map[string]walkOutcome{"legacy": legacyOutcome(d, h, b), "lockstep": lockstepOutcome(d, h, b)}
 		verdicts := map[string]string{}
 		for name, o := range walks {
@@ -133,9 +103,9 @@ func sortedKeys(m map[string]bool) string {
 func TestMergeBaseOracle_ShouldReturnOneOfBestSet_WhenCrissCross(t *testing.T) {
 	withMergeBaseLimit(t, 2000)
 	for _, c := range namedDivergenceCases()[:2] {
-		d := buildDAG(t, c.spec, nil)
+		d := testrepo.BuildDAG(t, c.spec, nil)
 		h, b := d.Hashes[c.head], d.Hashes[c.base]
-		best, err := d.bestSet(h, b)
+		best, err := d.BestSet(h, b)
 		if err != nil || len(best) != 2 || !best["1"] || !best["2"] {
 			t.Fatalf("%s: MergeBase best set = %v err=%v, want {1,2}", c.name, best, err)
 		}

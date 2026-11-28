@@ -512,7 +512,7 @@ Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes whi
 
 ## 8a. Every package over 10k
 
-**Status 2026-11-28** (`wc -l` over each directory's own `*.go` files minus `_test.go`, at `e95687f2f`): `server/services` (8,803) and `session` (9,451) are now under 10k. Still over 10k, and remaining work under the 2026-11-12 owner decision that every package goes under 10,000 non-test lines: `session/instance` 23,541 (plan: Track B of `session-hub-redesign-plan.md`), `server/services/backlogsvc` 16,016 (plan: Part 2 of `other-packages-under-10k-plan.md`), and, with no split plan yet, `server/mcp` 13,451, `server` 10,667, `session/tmux` 10,454 and `session/unfinished` 10,186.
+**Status 2026-11-28** (`wc -l` over each directory's own `*.go` files minus `_test.go`, at `e95687f2f`): `server/services` (8,803) and `session` (9,451) are now under 10k. Still over 10k, and remaining work under the 2026-11-12 owner decision that every package goes under 10,000 non-test lines: `session/instance` 23,541 (plan: Track B of `session-hub-redesign-plan.md`), `server/services/backlogsvc` 16,016 (plan: Part 2 of `other-packages-under-10k-plan.md`), and, with no split plan yet, `server/mcp` 13,451, `server` 10,667 and `session/tmux` 10,454. `session/unfinished` was 10,186 and is 9,100 since its `linediff` and `commitwalk` leaves.
 
 The table below is the 2026-11-23 snapshot, before the split (V: `ls <dir>/*.go | grep -v _test.go | xargs cat | wc -l`, run 2026-11-23; matches the reviewer's table).
 
@@ -525,9 +525,9 @@ The table below is the 2026-11-23 snapshot, before the split (V: `ls <dir>/*.go 
 | `server/mcp` | 13,322 | ADR-010 rejected splitting it (SC2/SC4); `mcp-single-root-plan.md` shrinks its edges, not its size. No plan reaches 10k. |
 | `server` | 10,476 | Root `server` package; `roadmap.md` calls it already a leaf (no size plan). |
 | `session/tmux` | 10,272 | tmux/process-backend plan. |
-| `session/unfinished` | 10,186 | No plan found by me. |
+| `session/unfinished` | 9,100 (was 10,186) | Done: the `linediff` and `commitwalk` leaves are extracted; `budget.txt` caps the package. |
 
-`server/services/wsconn` (9,767) stays under. The 2026-11-12 owner decision covers them; the cost per package is rough: `session/unfinished` and `server` are within 5% of the cap (S to M each, I); `server/mcp` needs a design that ADR-010 rejected (L); `session`, `session/instance` and `backlogsvc` have plans (the tmux/process-backend plan shrinks `session` and adds to `session/tmux`).
+`server/services/wsconn` (9,767) stays under. The 2026-11-12 owner decision covers them; the cost per package is rough: `server` is within 5% of the cap (S to M, I); `server/mcp` needs a design that ADR-010 rejected (L); `session`, `session/instance` and `backlogsvc` have plans (the tmux/process-backend plan shrinks `session` and adds to `session/tmux`).
 
 ## 9. Open questions that need the owner
 

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
@@ -32,12 +33,12 @@ func TestStockParentsReader_ShouldCountOneDecodePerRead(t *testing.T) {
 	repo, _ := testrepo.NewRepo(t)
 	hashes := testrepo.Linear(t, repo, 3)
 
-	before := DecodedCommitsTotal()
+	before := commitwalk.DecodedCommitsTotal()
 	for _, h := range hashes {
-		_, _, err := stockCommitParents.Parents(repo.Storer, h, nil)
+		_, _, err := commitwalk.StockCommitParents.Parents(repo.Storer, h, nil)
 		require.NoError(t, err)
 	}
-	assert.GreaterOrEqual(t, DecodedCommitsTotal()-before, int64(3))
+	assert.GreaterOrEqual(t, commitwalk.DecodedCommitsTotal()-before, int64(3))
 }
 
 func TestMetrics_ShouldExposeReachAndProductCaches_WhenRepoStateHasThem(t *testing.T) {

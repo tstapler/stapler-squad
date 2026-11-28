@@ -8,6 +8,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
+	"github.com/tstapler/stapler-squad/session/unfinished/linediff"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
 
@@ -41,7 +43,7 @@ type repostateInputs struct {
 	nanosHashes  int64
 	graphExt     OpDurationStats
 	// redundancy sums both merge-base walks' redundancy-check outcomes.
-	redundancy [numRedundancyOutcomes]int64
+	redundancy [commitwalk.NumRedundancyOutcomes]int64
 }
 
 func newRepostateInputs() repostateInputs {
@@ -93,12 +95,12 @@ func collectRepostateInputs(s *Scanner) repostateInputs {
 		in.nanosHashes = r.NanosForcedHashes()
 	}
 	in.graphExt = GraphExtensionDurations()
-	m := DiffMemoStats()
+	m := linediff.DiffMemoStats()
 	in.caches["diffmemo"] = repostate.CacheStats{Hits: m.Hits, Misses: m.Misses, Evictions: m.Evictions}
-	in.decoded = DecodedCommitsTotal()
-	in.redundancy = [numRedundancyOutcomes]int64{
-		redundancyBound:      mergeBaseRedundancyTotal[redundancyBound].Load() + int64(in.graph.RedundancyBound),           //nolint:gosec // counters never approach int64
-		redundancyPrunedMiss: mergeBaseRedundancyTotal[redundancyPrunedMiss].Load() + int64(in.graph.RedundancyPrunedMiss), //nolint:gosec // counters never approach int64
+	in.decoded = commitwalk.DecodedCommitsTotal()
+	in.redundancy = [commitwalk.NumRedundancyOutcomes]int64{
+		commitwalk.RedundancyBound:      commitwalk.RedundancyTotal(commitwalk.RedundancyBound) + int64(in.graph.RedundancyBound),           //nolint:gosec // counters never approach int64
+		commitwalk.RedundancyPrunedMiss: commitwalk.RedundancyTotal(commitwalk.RedundancyPrunedMiss) + int64(in.graph.RedundancyPrunedMiss), //nolint:gosec // counters never approach int64
 	}
 	if s != nil {
 		in.scan = s.ScanStateStats()
@@ -187,19 +189,10 @@ func (in repostateInputs) casRetries() int64 {
 	return n
 }
 
-// decodedCommitsTotal counts full commit decodes in production paths.
-var decodedCommitsTotal atomic.Int64
-
-// RecordDecodedCommits adds n commit decodes to unfinished.repostate.decoded_commits_total.
-func RecordDecodedCommits(n int64) { decodedCommitsTotal.Add(n) }
-
-// DecodedCommitsTotal returns the commit-decode count since process start.
-func DecodedCommitsTotal() int64 { return decodedCommitsTotal.Load() }
-
 // cycleCounters are the two process-wide counters the scan-cycle debug line
 // reports as per-Burst deltas.
 func (s *Scanner) cycleCounters() (decodes, graphRows int64) {
-	decodes = DecodedCommitsTotal()
+	decodes = commitwalk.DecodedCommitsTotal()
 	if r := s.goGitReader(); r != nil {
 		in := newRepostateInputs()
 		r.forEachRepoState(func(rs *repostate.RepoState) { in.addGraph(rs) })
@@ -333,8 +326,8 @@ func (in repostateInputs) points() []seriesPoint {
 		add("parity_mismatch_total", f.String(), in.parity.Mismatch[f])
 		add("parity_transient_total", f.String(), in.parity.Transient[f])
 	}
-	for o := range numRedundancyOutcomes {
-		add("mergebase_redundancy_unproven_total", redundancyOutcomeNames[o], in.redundancy[o])
+	for o := range commitwalk.NumRedundancyOutcomes {
+		add("mergebase_redundancy_unproven_total", commitwalk.RedundancyOutcomeNames[o], in.redundancy[o])
 	}
 	add("reach_builds_total", "scratch", int64(in.reachBuilds.Scratch))         //nolint:gosec // counters never approach int64
 	add("reach_builds_total", "incremental", int64(in.reachBuilds.Incremental)) //nolint:gosec // counters never approach int64

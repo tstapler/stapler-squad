@@ -1,4 +1,4 @@
-package unfinished
+package commitwalk
 
 import (
 	"errors"
@@ -9,6 +9,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 const (
@@ -21,7 +22,7 @@ const (
 )
 
 // commitParentsCorpus is the single table of raw commit payloads shared by
-// every parents adapter's differential test (stock, parentMemo, fork).
+// every parents adapter's differential test (stock, ParentMemo, fork).
 func commitParentsCorpus() map[string]string {
 	hdr := "tree " + cpTree + "\n"
 	return map[string]string{
@@ -60,7 +61,7 @@ func TestCommitParentsStock_ShouldMatchDecodeCommit_WhenCorpusOfShapes(t *testin
 			t.Fatalf("%s: %v", name, err)
 		}
 		want, wantErr := object.DecodeCommit(st, o)
-		got, when, err := stockCommitParents.Parents(st, o.Hash(), nil)
+		got, when, err := StockCommitParents.Parents(st, o.Hash(), nil)
 		if (err != nil) != (wantErr != nil) {
 			t.Fatalf("%s: err = %v, DecodeCommit err = %v", name, err, wantErr)
 		}
@@ -87,7 +88,7 @@ func TestCommitParentsStock_ShouldNotReturnParentText_WhenGpgsigContinuationHasP
 		"gpgsig -----BEGIN-----\n parent " + cpP2 + "\n parent " + cpP3 + "\n -----END-----\n\nparent " + cpP3 + "\n"
 	o := rawCommitObject(payload)
 	_, _ = st.SetEncodedObject(o)
-	got, _, err := stockCommitParents.Parents(st, o.Hash(), nil)
+	got, _, err := StockCommitParents.Parents(st, o.Hash(), nil)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("parents = %v err = %v, want none", got, err)
 	}
@@ -114,7 +115,7 @@ func TestCommitParentsStock_ShouldReturnError_WhenObjectIsNotACommit(t *testing.
 			t.Errorf("%s: err = %v, want ErrMalformedCommit", name, err)
 		}
 	}
-	if _, _, err := stockCommitParents.Parents(st, plumbing.NewHash(cpP1), nil); !errors.Is(err, plumbing.ErrObjectNotFound) {
+	if _, _, err := StockCommitParents.Parents(st, plumbing.NewHash(cpP1), nil); !errors.Is(err, plumbing.ErrObjectNotFound) {
 		t.Errorf("missing object: err = %v, want ErrObjectNotFound", err)
 	}
 }
@@ -125,7 +126,7 @@ func TestCommitParentsStock_ShouldSurviveHugeHeader_WhenGpgsigOver64KiB(t *testi
 	payload := "tree " + cpTree + "\nparent " + cpP1 + "\n" + cpAut + cpSig + "gpgsig " + huge + "\n\nm\n"
 	o := rawCommitObject(payload)
 	_, _ = st.SetEncodedObject(o)
-	got, when, err := stockCommitParents.Parents(st, o.Hash(), nil)
+	got, when, err := StockCommitParents.Parents(st, o.Hash(), nil)
 	if err != nil || len(got) != 1 || got[0] != plumbing.NewHash(cpP1) || when != 1700000000 {
 		t.Fatalf("got %v when=%d err=%v", got, when, err)
 	}
@@ -133,7 +134,7 @@ func TestCommitParentsStock_ShouldSurviveHugeHeader_WhenGpgsigOver64KiB(t *testi
 	long := "tree " + cpTree + "\nparent " + cpP1 + "\ncommitter " + strings.Repeat("N", 10<<10) + " <e> 42 +0000\n\nm\n"
 	o2 := rawCommitObject(long)
 	_, _ = st.SetEncodedObject(o2)
-	if _, when, err = stockCommitParents.Parents(st, o2.Hash(), nil); err != nil || when != 42 {
+	if _, when, err = StockCommitParents.Parents(st, o2.Hash(), nil); err != nil || when != 42 {
 		t.Fatalf("long committer: when=%d err=%v", when, err)
 	}
 }
@@ -143,7 +144,7 @@ func TestCommitParentsStock_ShouldCopyParentsIntoCallerBuffer_AndCapPooledBuffer
 	o := rawCommitObject("tree " + cpTree + "\nparent " + cpP1 + "\nparent " + cpP2 + "\n" + cpSig + "\nm\n")
 	_, _ = st.SetEncodedObject(o)
 	buf := make([]plumbing.Hash, 0, 4)
-	got, _, err := stockCommitParents.Parents(st, o.Hash(), buf)
+	got, _, err := StockCommitParents.Parents(st, o.Hash(), buf)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("got %v err=%v", got, err)
 	}
@@ -153,7 +154,7 @@ func TestCommitParentsStock_ShouldCopyParentsIntoCallerBuffer_AndCapPooledBuffer
 	// Pooled readers are reused across calls; the first result must not change.
 	big := rawCommitObject("tree " + cpTree + "\nparent " + cpP3 + "\n" + cpSig + "\n" + strings.Repeat("x", 80<<10))
 	_, _ = st.SetEncodedObject(big)
-	if _, _, err := stockCommitParents.Parents(st, big.Hash(), nil); err != nil {
+	if _, _, err := StockCommitParents.Parents(st, big.Hash(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if got[0] != plumbing.NewHash(cpP1) || got[1] != plumbing.NewHash(cpP2) {
@@ -175,8 +176,8 @@ func mallocDelta(n int, f func()) (bytes, mallocs uint64) {
 }
 
 func TestCommitParentsStock_ShouldUseAtMost70PctBytesOfDecode_When2500Commits(t *testing.T) {
-	spec, _, _ := linearForkSpec(2500, 0, 0)
-	d := buildDAG(t, spec, nil)
+	spec, _, _ := testrepo.LinearForkSpec(2500, 0, 0)
+	d := testrepo.BuildDAG(t, spec, nil)
 	st := d.Repo.Storer
 	var buf []plumbing.Hash
 	const rounds = 3
@@ -190,7 +191,7 @@ func TestCommitParentsStock_ShouldUseAtMost70PctBytesOfDecode_When2500Commits(t 
 	stockBytes, stockMallocs := mallocDelta(rounds, func() {
 		for _, h := range d.Hashes {
 			var err error
-			if buf, _, err = stockCommitParents.Parents(st, h, buf); err != nil {
+			if buf, _, err = StockCommitParents.Parents(st, h, buf); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -206,8 +207,8 @@ func TestCommitParentsStock_ShouldUseAtMost70PctBytesOfDecode_When2500Commits(t 
 }
 
 func BenchmarkCommitParents(b *testing.B) {
-	spec, _, _ := linearForkSpec(2500, 0, 0)
-	d := buildDAG(b, spec, nil)
+	spec, _, _ := testrepo.LinearForkSpec(2500, 0, 0)
+	d := testrepo.BuildDAG(b, spec, nil)
 	st := d.Repo.Storer
 	b.Run("decode", func(b *testing.B) {
 		b.ReportAllocs()
@@ -222,7 +223,7 @@ func BenchmarkCommitParents(b *testing.B) {
 		var buf []plumbing.Hash
 		for range b.N {
 			for _, h := range d.Hashes {
-				buf, _, _ = stockCommitParents.Parents(st, h, buf)
+				buf, _, _ = StockCommitParents.Parents(st, h, buf)
 			}
 		}
 	})

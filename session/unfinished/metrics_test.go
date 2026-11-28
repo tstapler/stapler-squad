@@ -13,6 +13,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
 
@@ -153,7 +154,7 @@ func TestMetrics_ShouldExposeFillLostCasDecodeReprobeRollbackAndCasRetries(t *te
 	in.graph = repostate.GraphStats{FillLostCAS: 1, FillLostDecode: 2, Reprobe: 3, Rollback: 4, CASRetries: 5, GraphFull: 6, FullRebuild: 14}
 	in.caches["graph"] = repostate.CacheStats{Hits: 7, Misses: 8, Evictions: 9, Coalesced: 10, Entries: 11, Bytes: 12}
 	in.parity.Mismatch[parityShortstat] = 13
-	in.redundancy = [numRedundancyOutcomes]int64{redundancyBound: 15, redundancyPrunedMiss: 16}
+	in.redundancy = [commitwalk.NumRedundancyOutcomes]int64{commitwalk.RedundancyBound: 15, commitwalk.RedundancyPrunedMiss: 16}
 
 	series := collectSeries(t, func() repostateInputs { return in })
 

@@ -146,7 +146,7 @@ func (s *RepoState) ReachCache() *ReachCache { return s.reachCache() }
 // Reach returns the set of commits reachable from want.Base, built at most once per
 // ReachKey across all callers and extended incrementally when base is a
 // descendant of the previous complete set. The caller fills want.Repo, Base and
-// Cap (the legacy maxReachableSetCommits); Shallow and Epoch are set here. The traversal order matches go-git's default
+// Cap (the legacy MaxReachableSetCommits); Shallow and Epoch are set here. The traversal order matches go-git's default
 // first-parent-first pre-order Log, so a truncated set equals the legacy one.
 // Any walk failure is an ErrFallback error and the caller runs the legacy walk.
 func (s *RepoState) Reach(ctx context.Context, src ParentsSource, ord StampOrd, want ReachKey) (*ReachBitset, error) {

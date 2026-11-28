@@ -1,0 +1,57 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "commitwalk",
+    srcs = [
+        "ahead_behind.go",
+        "counters.go",
+        "doc.go",
+        "mergebase.go",
+        "parents.go",
+        "parents_stock.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/unfinished/commitwalk",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_go_git_go_git_v5//plumbing/storer",
+        "@com_github_go_git_go_git_v5//utils/sync",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":commitwalk",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "commitwalk_test",
+    srcs = [
+        "mergebase_test.go",
+        "parents_test.go",
+        "redundancy_test.go",
+    ],
+    embed = [":commitwalk"],
+    deps = [
+        "//session/unfinished/internal/testrepo",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_go_git_go_git_v5//storage/memory",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+        "//session/unfinished:__pkg__",
+    ],
+)

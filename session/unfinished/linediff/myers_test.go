@@ -1,6 +1,9 @@
-package unfinished
+package linediff
 
-import "testing"
+import (
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
+	"testing"
+)
 
 func TestMyers_ShouldReturnZeroEdits_WhenInputsIdentical(t *testing.T) {
 	a := []string{"a", "b", "c"}
@@ -35,28 +38,16 @@ func TestMyers_ShouldTrimPrefixSuffix_WhenChangeInMiddle(t *testing.T) {
 	}
 }
 
-// gateTB is the slice of testing.TB the G5 gate needs, so a negative twin can
-// run the gate against a recorder.
-type gateTB interface {
-	Helper()
-	Errorf(format string, args ...any)
-}
-
-type failRecorder struct{ failures int }
-
-func (*failRecorder) Helper()                 {}
-func (f *failRecorder) Errorf(string, ...any) { f.failures++ }
-
 // assertG5 requires newImpl to allocate at most 25% of lcsLength's bytes and
 // allocations on the 2,000-line/15-change fixture (plan Gate G5).
-func assertG5(tb gateTB, newIterations int, newImpl func(a, b []string)) {
+func assertG5(tb testrepo.GateTB, newIterations int, newImpl func(a, b []string)) {
 	tb.Helper()
 	a, b := spikeFixture()
 	// lcsLength costs tens of ms per call on this fixture, so it gets few
 	// iterations; both results are per-op and compare directly.
 	const oldIterations = 5
-	oldBytes, oldAllocs := allocDelta(oldIterations, func() { _ = lcsLength(a, b) })
-	newBytes, newAllocs := allocDelta(newIterations, func() { newImpl(a, b) })
+	oldBytes, oldAllocs := testrepo.AllocDelta(oldIterations, func() { _ = lcsLength(a, b) })
+	newBytes, newAllocs := testrepo.AllocDelta(newIterations, func() { newImpl(a, b) })
 	if newBytes > 0.25*oldBytes {
 		tb.Errorf("G5: B/op = %.0f, ceiling = 25%% of lcsLength %.0f", newBytes, oldBytes)
 	}
@@ -76,9 +67,9 @@ func TestG5Gate_ShouldFail_WhenLcsLengthIsWiredAsNew(t *testing.T) {
 	if raceEnabled {
 		t.Skip("allocation counts are not meaningful under -race")
 	}
-	rec := &failRecorder{}
+	rec := &testrepo.FailRecorder{}
 	assertG5(rec, 5, func(a, b []string) { _ = lcsLength(a, b) })
-	if rec.failures == 0 {
+	if rec.Failures == 0 {
 		t.Error("G5 gate passed with lcsLength wired as the new implementation")
 	}
 }

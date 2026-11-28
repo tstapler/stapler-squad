@@ -1,4 +1,4 @@
-package unfinished
+package commitwalk
 
 import (
 	"bufio"

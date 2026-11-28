@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/tstapler/stapler-squad/session/git/native"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/commitwalk"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 )
@@ -87,7 +88,7 @@ func legacyStackDecodes(tb testing.TB, dir string, head, base plumbing.Hash) int
 
 func lockstepDecodes(tb testing.TB, dir string, head, base plumbing.Hash) int64 {
 	return oracleDecodes(tb, dir, func(repo *git.Repository) {
-		_, _, err := aheadBehindFrom(newParentMemo(repo), head, base)
+		_, _, err := commitwalk.AheadBehindFrom(commitwalk.NewParentMemo(repo), head, base)
 		if err != nil {
 			tb.Fatal(err)
 		}
@@ -96,7 +97,7 @@ func lockstepDecodes(tb testing.TB, dir string, head, base plumbing.Hash) int64 
 
 // assertG1 is gate G1: the new walk decodes no more than the committed-old
 // walk and the plain (paint-down) walk.
-func assertG1(tb gateTB, newDecodes, legacy, lockstep int64) {
+func assertG1(tb testrepo.GateTB, newDecodes, legacy, lockstep int64) {
 	tb.Helper()
 	if newDecodes > legacy || newDecodes > lockstep {
 		tb.Errorf("DecodeCount new=%d, committed-old=%d, plain walk=%d; want new <= both", newDecodes, legacy, lockstep)
@@ -166,9 +167,9 @@ func TestAheadBehind_ShouldDecodeNoMoreThanLegacyAndLockstep_WhenCold2500LinearW
 func TestG1Gate_ShouldFail_WhenLegacyStackWalkIsWiredAsNew(t *testing.T) {
 	_, dir, h := divergedClocked(t, 2500, 3, 2)
 	legacy, lockstep := legacyStackDecodes(t, dir, h.Head, h.Base), lockstepDecodes(t, dir, h.Head, h.Base)
-	rec := &failRecorder{}
+	rec := &testrepo.FailRecorder{}
 	assertG1(rec, legacy, legacy, lockstep)
-	if rec.failures == 0 {
+	if rec.Failures == 0 {
 		t.Errorf("G1 passed with the legacy walk wired as new (legacy=%d, plain=%d)", legacy, lockstep)
 	}
 }
