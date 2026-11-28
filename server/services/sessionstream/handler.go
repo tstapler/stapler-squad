@@ -5,6 +5,8 @@
 package sessionstream
 
 import (
+	"time"
+
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -34,9 +36,11 @@ type Ports struct {
 type Handler struct {
 	bus   *events.EventBus
 	ports Ports
+	// heartbeatEvery is events.HeartbeatInterval; a field so a test can shorten it.
+	heartbeatEvery time.Duration
 }
 
 // New returns a Handler publishing to and subscribing on bus.
 func New(bus *events.EventBus, ports Ports) *Handler {
-	return &Handler{bus: bus, ports: ports}
+	return &Handler{bus: bus, ports: ports, heartbeatEvery: events.HeartbeatInterval}
 }

@@ -11,7 +11,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -107,7 +106,7 @@ func (h *Handler) WatchSessions(
 	}
 
 	// Stream events until client disconnects or context is canceled
-	heartbeat := time.NewTicker(events.HeartbeatInterval)
+	heartbeat := time.NewTicker(h.heartbeatEvery)
 	defer heartbeat.Stop()
 
 	for {

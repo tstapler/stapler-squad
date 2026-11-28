@@ -1,8 +1,8 @@
 package sessionstream
 
 // SessionStreamer is the interface the WebSocket streaming handler requires from a session.
-// Defined in the consumer package (server/services) to prevent import cycles and to keep
-// the interface minimal — only what this package legitimately needs for terminal streaming.
+// server/services/wsconn is its consumer; it is declared beside the stream RPCs and kept
+// to what terminal streaming needs.
 //
 // *session.Instance satisfies this interface via delegation methods.
 type SessionStreamer interface {

@@ -348,6 +348,8 @@ go_test(
         "ssq_hook_handler_stamp_test.go",
         "ssq_notify_enum_parity_test.go",
         "stale_creation_sweeper_test.go",
+        "stream_ordering_test.go",
+        "stream_reads_test.go",
         "stream_route_test.go",
         "stream_terminal_characterization_test.go",
         "stream_terminal_routing_test.go",
