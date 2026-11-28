@@ -269,6 +269,7 @@ go_test(
         "github_hub_golden_test.go",
         "github_nudge_steer_test.go",
         "github_service_wiring_test.go",
+        "githubrpc_seam_guard_test.go",
         "graph_validator_stranded_test.go",
         "guards_flag_test.go",
         "guidance_dialog_canary_test.go",

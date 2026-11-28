@@ -12,6 +12,7 @@ import (
 
 // Each assertion pins one wiring line of buildGitHubUserService; a dropped
 // recorder or token resolver changes no response, so only this notices.
+// Not parallel: NewIsolatedStateDir sets process environment variables.
 func TestBuildDependencies_should_InstallEveryNudgeCollaborator_When_DepsBuilt(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
 

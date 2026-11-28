@@ -243,6 +243,7 @@ func goldenSessionPRCases(t *testing.T, o *goldenOut) {
 }
 
 func TestGitHubGolden(t *testing.T) {
+	t.Parallel()
 	o := &goldenOut{t: t}
 	goldenNudgeCases(t, o)
 	goldenPanelCases(t, o)

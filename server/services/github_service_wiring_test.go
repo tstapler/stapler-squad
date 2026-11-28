@@ -14,6 +14,7 @@ import (
 
 // The PR RPCs must read the service's own storage, not an unset one.
 func TestSessionService_should_ServePRRPCsFromItsStorage_When_Constructed(t *testing.T) {
+	t.Parallel()
 	svc := newProviderWiringService(t)
 	require.NoError(t, svc.storage.AddInstance(&instance.Instance{Title: "plain", UUID: "uuid-plain", Path: "/tmp/test", Status: domain.Stopped, Program: "claude"}))
 

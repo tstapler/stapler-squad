@@ -61,6 +61,7 @@ func msgOf[T any, P interface {
 }
 
 func TestGitHubHubGolden(t *testing.T) {
+	t.Parallel()
 	o := &goldenOut{t: t}
 	ask := func(name string, status domain.Status, mutate func(f *askFixFixture), sel *sessionv1.PullRequestRef, opts ...func(*instance.Instance)) {
 		f := newAskFixFixture(t, status, opts...)
