@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -343,6 +344,9 @@ func goldenTmuxAndHooks(t *testing.T, g *adminGolden, svc *SessionService, home 
 func TestAdminRPCGolden(t *testing.T) {
 	home := svctest.WithFakeHome(t)
 	state := svctest.WithIsolatedStateDir(t)
+	tmuxBin, err := exec.LookPath(tmux.Binary())
+	require.NoError(t, err)
+	t.Setenv("TMUX_BIN", tmuxBin) // PATH is emptied below to hide any installed ssq-hooks
 	t.Setenv("PATH", filepath.Join(home, "empty-bin"))
 	t.Setenv(tmux.EnvSocketVar, fmt.Sprintf("ssq-golden-%d", os.Getpid()))
 	g := &adminGolden{t: t, replace: []string{state, "<state>", home, "<home>"}}
