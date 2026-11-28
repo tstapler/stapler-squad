@@ -20,7 +20,7 @@ import (
 )
 
 // debugLogBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
-// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
+// executor/safeexec/safeexec_pg_test.go and server/services/internal/svctest.SyncLogBuffer.
 type debugLogBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer

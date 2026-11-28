@@ -632,7 +632,7 @@ func (d *AutonomousDriver) fireCompletion(sessionName string, outcome Autonomous
 // finishes printing a short reply while a background subagent/fork it just
 // launched is still running — was enough to fire a new orchestrator turn
 // immediately, injecting a nudge (and a paired notification, see
-// buildTurnCallback in server/services/autonomous_orchestration_service.go)
+// buildTurnCallback in server/services/autonomysvc/autonomous_orchestration_service.go)
 // every few seconds instead of only when the session genuinely needed
 // redirection (confirmed live 2026-08-02 on stapler-squad-backlog-self-resolve).
 //

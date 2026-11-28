@@ -1,4 +1,4 @@
-// In-memory ReadFileRange/StatFile server following server/services/file_ops_range*.go: 1-based lines,
+// In-memory ReadFileRange/StatFile server following server/services/fileops/file_ops_range*.go: 1-based lines,
 // CRC32C over the raw bytes, LF-normalized content, BOM stripped on the first window.
 import { Code, ConnectError, createClient, createRouterTransport } from "@connectrpc/connect";
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
