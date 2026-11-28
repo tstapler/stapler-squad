@@ -120,7 +120,7 @@ func TestWatchSessionsChar_ShouldSnapshotVisibleMatchesInOrderThenFollowTheBus_W
 	addAll(e, a, b, c, d)
 
 	w := e.watch(t, &sessionv1.WatchSessionsRequest{})
-	var snapshot []*sessionv1.SessionEvent
+	snapshot := make([]*sessionv1.SessionEvent, 0, 3)
 	for range 3 {
 		snapshot = append(snapshot, w.next())
 	}

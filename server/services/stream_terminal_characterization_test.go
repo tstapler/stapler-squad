@@ -438,7 +438,7 @@ func TestStreamTerminalChar_ShouldHoldOutputUntilResumed_When_ClientPauses(t *te
 	assert.Equal(t, "a", s.nextOutput(id, 1))
 	s.send(flowFrame(id, true))
 	// The reader notices a pause within one 250ms read deadline.
-	time.Sleep(time.Second)
+	s.quiet(time.Second)
 	p.emit(t, "held")
 	s.quiet(750 * time.Millisecond)
 	s.send(flowFrame(id, false))
