@@ -24,7 +24,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: fallback-canary-${{ github.ref }}
+  # Per event, so a manual dispatch on main cannot cancel the scheduled run (which would then report).
+  group: fallback-canary-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -223,7 +224,8 @@ jobs:
           grep -c 'missing_in_bazel: 0' test-set-diff.txt
 
   # A scheduled failure opens (once) an issue labelled build-fallback. A job that hits timeout-minutes ends
-  # `cancelled`, not `failure`, so both count.
+  # `cancelled`, not `failure`, so both count. That includes a hand-cancelled scheduled run, on purpose: the
+  # results cannot tell the two apart, and either way that week proved nothing.
   report:
     needs: [make-only, make-e2e, pass-set-equality]
     if: ${{ always() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
@@ -237,11 +239,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          title="Fallback canary failed: the make build path is broken"
+          title="Fallback canary did not pass: check the make build path"
           gh label create build-fallback --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "The make fallback build path failed its scheduled canary" 2>/dev/null || true
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label build-fallback --json number --jq length)
           if [ "$existing" = 0 ]; then
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label build-fallback \
-              --body "The weekly fallback canary failed. Run: $RUN_URL. The make path (BUILD_SYSTEM=make) is the escape hatch from Bazel; fix it before it is needed."
+              --body "The weekly fallback canary failed or was cancelled (timeout or by hand). Run: $RUN_URL. The make path (BUILD_SYSTEM=make) is the escape hatch from Bazel; fix it before it is needed."
           fi
