@@ -10,6 +10,7 @@ go_library(
         "request_facts.go",
         "request_record.go",
         "session_nudge_guard.go",
+        "steer_outcome.go",
         "terminal_access.go",
         "terminal_input_metrics.go",
         "tmux_input_send.go",

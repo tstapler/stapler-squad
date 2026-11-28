@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -101,7 +102,7 @@ func TestAskSessionToFixPullRequest_ShouldReportPRNotFound_WhenNoAccountTokenFor
 	got, err := f.ask(protoRef(11)) // only #12 has a token
 	require.NoError(t, err)
 	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, got.Outcome)
-	assert.Equal(t, nudgeNoAccountDetail, got.Detail)
+	assert.Equal(t, prs.NudgeNoAccountDetail, got.Detail)
 	assert.Equal(t, 0, f.fetcher.callCount())
 	assert.Equal(t, 0, f.rec.writes)
 }

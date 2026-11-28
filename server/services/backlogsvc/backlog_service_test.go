@@ -17,9 +17,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
@@ -205,7 +207,7 @@ type mockSessionSteerer struct {
 	notReady map[string]bool
 	// guardedOutcome overrides SteerSessionGuarded's result for a uuid (no
 	// write is recorded). Absent uuids delegate to recordSteer.
-	guardedOutcome map[string]services.SteerOutcome
+	guardedOutcome map[string]access.SteerOutcome
 	guardedSigs    []string
 	// hidden marks uuids whose IsHiddenSession must return true.
 	hidden map[string]bool
@@ -249,7 +251,7 @@ func (m *mockSessionSteerer) SteerActiveSession(ctx context.Context, uuid, messa
 	return m.recordSteer(ctx, uuid, message)
 }
 
-func (m *mockSessionSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (services.SteerOutcome, error) {
+func (m *mockSessionSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (access.SteerOutcome, error) {
 	m.mu.Lock()
 	m.guardedSigs = append(m.guardedSigs, sig)
 	override, ok := m.guardedOutcome[uuid]
@@ -258,9 +260,9 @@ func (m *mockSessionSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig,
 		return override, nil
 	}
 	if err := m.recordSteer(ctx, uuid, message); err != nil {
-		return services.SteerFailed, err
+		return access.SteerFailed, err
 	}
-	return services.SteerDelivered, nil
+	return access.SteerDelivered, nil
 }
 
 // calls returns a snapshot copy of steerCalls, safe to read concurrently with

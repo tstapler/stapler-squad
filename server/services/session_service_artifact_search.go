@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/server/services/prs"
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -132,7 +134,7 @@ func (a *ArtifactService) FindSessionsByPullRequest(
 	if a.index == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("artifact index is not running"))
 	}
-	ref, err := prRefFromProto(req.Msg.GetPr())
+	ref, err := prs.PRRefFromProto(req.Msg.GetPr())
 	if err != nil {
 		return nil, err
 	}

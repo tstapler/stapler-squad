@@ -9,13 +9,13 @@ import (
 	"unicode/utf8"
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/prs"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -721,22 +721,22 @@ type guardBackedSteerer struct {
 	guard *access.SessionNudgeGuard
 }
 
-func (g *guardBackedSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (services.SteerOutcome, error) {
+func (g *guardBackedSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (access.SteerOutcome, error) {
 	release, outcome := g.guard.TryBegin(uuid, sig)
 	switch outcome {
 	case access.GuardBusy:
-		return services.SteerGuardBusy, nil
+		return access.SteerGuardBusy, nil
 	case access.GuardDuplicate:
-		return services.SteerDuplicate, nil
+		return access.SteerDuplicate, nil
 	case access.GuardCoolingDown:
-		return services.SteerCoolingDown, nil
+		return access.SteerCoolingDown, nil
 	}
 	err := g.recordSteer(ctx, uuid, message)
 	release(err == nil)
 	if err != nil {
-		return services.SteerFailed, err
+		return access.SteerFailed, err
 	}
-	return services.SteerDelivered, nil
+	return access.SteerDelivered, nil
 }
 
 func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed_When_GuardDuplicateFromJustDeliveredManualNudge(t *testing.T) {
@@ -745,7 +745,7 @@ func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed
 	defer cancel()
 	ch, _ := bus.Subscribe(subCtx)
 	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
-	steerer.guardedOutcome = map[string]services.SteerOutcome{activeSessionUUIDPrimary: services.SteerDuplicate}
+	steerer.guardedOutcome = map[string]access.SteerOutcome{activeSessionUUIDPrimary: access.SteerDuplicate}
 
 	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
 
@@ -755,11 +755,11 @@ func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed
 }
 
 func TestSteerActiveSessionForPRFix_should_NotCallDegradeAndKeepItemUnblocked_When_GuardBusyOrDuplicate(t *testing.T) {
-	for name, outcome := range map[string]services.SteerOutcome{"busy": services.SteerGuardBusy, "duplicate": services.SteerDuplicate} {
+	for name, outcome := range map[string]access.SteerOutcome{"busy": access.SteerGuardBusy, "duplicate": access.SteerDuplicate} {
 		t.Run(name, func(t *testing.T) {
 			svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
 			itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
-			steerer.guardedOutcome = map[string]services.SteerOutcome{activeSessionUUIDPrimary: outcome}
+			steerer.guardedOutcome = map[string]access.SteerOutcome{activeSessionUUIDPrimary: outcome}
 
 			pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
 
@@ -843,7 +843,7 @@ func testPRKey(t *testing.T, n int) githubpkg.PRKey {
 func TestReasonSignatureKey_should_MatchManualNudgeSignature_When_SameProblemSetAndPR(t *testing.T) {
 	pr := testPRKey(t, 7)
 	auto := buildReasonSignature("## Merge conflict\nx\n## Failing CI checks\n- lint\n").key(pr.Key())
-	manual := services.NudgeSignature(pr, []sessionv1.NudgeReason{
+	manual := prs.NudgeSignature(pr, []sessionv1.NudgeReason{
 		sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS,
 		sessionv1.NudgeReason_NUDGE_REASON_MERGE_CONFLICT,
 	})
@@ -852,7 +852,7 @@ func TestReasonSignatureKey_should_MatchManualNudgeSignature_When_SameProblemSet
 
 func TestSharedGuard_should_DedupeAutoSteerAfterManualNudgeAndViceVersa_ForSamePR(t *testing.T) {
 	pr := testPRKey(t, 7)
-	manual := services.NudgeSignature(pr, []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS})
+	manual := prs.NudgeSignature(pr, []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS})
 	auto := buildReasonSignature("## Failing CI checks\n- lint\n").key(pr.Key())
 
 	g := &access.SessionNudgeGuard{}
@@ -873,10 +873,10 @@ func TestSharedGuard_should_DedupeAutoSteerAfterManualNudgeAndViceVersa_ForSameP
 func TestSharedGuard_should_NotDedupe_When_SessionIsLinkedToTwoPRs(t *testing.T) {
 	reasons := []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS}
 	g := &access.SessionNudgeGuard{}
-	rel, out := g.TryBegin("s", services.NudgeSignature(testPRKey(t, 7), reasons))
+	rel, out := g.TryBegin("s", prs.NudgeSignature(testPRKey(t, 7), reasons))
 	require.Equal(t, access.GuardOK, out)
 	rel(true)
-	_, out = g.TryBegin("s", services.NudgeSignature(testPRKey(t, 8), reasons))
+	_, out = g.TryBegin("s", prs.NudgeSignature(testPRKey(t, 8), reasons))
 	assert.Equal(t, access.GuardOK, out, "a nudge for the second PR is not a repeat of the first")
 	_, out = g.TryBegin("s", buildReasonSignature("## Failing CI checks\n").key(testPRKey(t, 8).Key()))
 	assert.Equal(t, access.GuardBusy, out, "second claim is still in flight")
@@ -885,7 +885,7 @@ func TestSharedGuard_should_NotDedupe_When_SessionIsLinkedToTwoPRs(t *testing.T)
 func TestCanonicalReasonForHeader_should_KeepChangesRequestedSeparateFromThreads(t *testing.T) {
 	pr := testPRKey(t, 7).Key()
 	changes := buildReasonSignature("## Review: changes requested by @bob\nx\n").key(pr)
-	threads := services.NudgeSignature(testPRKey(t, 7), []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_UNRESOLVED_THREADS})
+	threads := prs.NudgeSignature(testPRKey(t, 7), []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_UNRESOLVED_THREADS})
 	assert.NotEqual(t, threads, changes)
 
 	g := &access.SessionNudgeGuard{}

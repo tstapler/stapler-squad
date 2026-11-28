@@ -22,6 +22,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -124,9 +126,9 @@ func goldenNudgeCases(t *testing.T, o *goldenOut) {
 		o.line("  fetches=%d finds=%d manual=%v tracked=%v", f.fetcher.callCount(), f.nudger.finds, rec.calls, f.prs.recorded)
 		o.logs(f.logs)
 	}
-	for _, outcome := range []SteerOutcome{SteerUnspecified, SteerDelivered, SteerGuardBusy, SteerDuplicate, SteerCoolingDown,
-		SteerBusy, SteerNoStatusSource, SteerNotTracked, SteerFailed, SteerOutcome(99)} {
-		for _, serr := range []error{nil, errors.New("write boom"), fmt.Errorf("x: %w", ErrSteerPaneOwnership)} {
+	for _, outcome := range []access.SteerOutcome{access.SteerUnspecified, access.SteerDelivered, access.SteerGuardBusy, access.SteerDuplicate, access.SteerCoolingDown,
+		access.SteerBusy, access.SteerNoStatusSource, access.SteerNotTracked, access.SteerFailed, access.SteerOutcome(99)} {
+		for _, serr := range []error{nil, errors.New("write boom"), fmt.Errorf("x: %w", access.ErrSteerPaneOwnership)} {
 			f := newNudgeFixture(t)
 			rec := &fakeNudgeRecorder{}
 			f.svc.SetNudgeRecorder(rec)
@@ -236,7 +238,7 @@ func goldenSessionPRCases(t *testing.T, o *goldenOut) {
 		o.line("  calls=%v", rec.calls)
 	}
 	for _, at := range []time.Time{time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2999, 1, 1, 0, 0, 0, 0, time.UTC)} {
-		o.line("classify %v", classifyGitHubRateLimitError(rateLimitedUntilErr(at)))
+		o.line("classify %v", prs.ClassifyGitHubRateLimitError(rateLimitedUntilErr(at)))
 	}
 }
 

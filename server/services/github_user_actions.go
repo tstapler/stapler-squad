@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"connectrpc.com/connect"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -20,7 +22,7 @@ type prActionDeps struct {
 	close     func(ctx context.Context, ref githubpkg.RepoRef, number int) error
 	setDraft  func(ctx context.Context, host, nodeID, token string, draft bool) error
 	refresh   func(ctx context.Context) error
-	tokenFrom PRTokenResolver
+	tokenFrom prs.PRTokenResolver
 	snapshot  PRSnapshotSource
 }
 
@@ -78,7 +80,7 @@ func (d prActionDeps) prActionTarget(owner, repo string, number int32, host stri
 // WatchUserPRs subscribers see the new state, and builds the response.
 func finishPRAction(ctx context.Context, d prActionDeps, err error, failure, success string) (*connect.Response[sessionv1.PRActionResponse], error) {
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, classifyGitHubRateLimitError(fmt.Errorf("%s: %w", failure, err)))
+		return nil, connect.NewError(connect.CodeInternal, prs.ClassifyGitHubRateLimitError(fmt.Errorf("%s: %w", failure, err)))
 	}
 	if rerr := d.refresh(ctx); rerr != nil {
 		log.Warn("PR cache refresh after action failed", "error", rerr)

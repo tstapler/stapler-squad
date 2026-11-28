@@ -4,9 +4,12 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "prs",
     srcs = [
+        "github_ratelimit.go",
+        "nudge_shared.go",
         "pr_creation_service.go",
         "pr_holds_shared.go",
         "pr_nudge_prompt.go",
+        "pr_target.go",
         "prwatch_signature.go",
         "reasons.go",
         "session_pr_holds.go",
@@ -42,6 +45,7 @@ go_test(
     name = "prs_test",
     srcs = [
         "create_pull_request_test.go",
+        "github_ratelimit_test.go",
         "pr_creation_service_test.go",
         "pr_nudge_prompt_test.go",
         "prwatch_signature_test.go",
