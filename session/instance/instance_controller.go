@@ -86,7 +86,7 @@ func (i *Instance) StartController() error {
 		log.Info("pty eof received from response stream", "session", i.Title)
 		exitContent := controller.GetExitContent()
 		i.send(func(s *instanceState) {
-			if s.inst.Status == domain.Active {
+			if s.inst.liveStatus() == domain.Active {
 				if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 				}

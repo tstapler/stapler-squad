@@ -112,7 +112,7 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot switch workspace for session that has not been started")
 	}
-	if i.Status == domain.Paused {
+	if i.liveStatus() == domain.Paused {
 		return nil, fmt.Errorf("cannot switch workspace for paused session - resume first")
 	}
 

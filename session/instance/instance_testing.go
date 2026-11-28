@@ -53,7 +53,7 @@ func SetStatusForTest(tb testing.TB, inst *Instance, status domain.Status, archi
 	tb.Helper()
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
-	inst.Status = status
+	inst.loadStatus(status)
 	inst.ArchivedAt = archivedAt
 	inst.snapshot.Store(BuildSnapshot(inst))
 }
@@ -171,6 +171,7 @@ func (i *Instance) MutateForTest(fn func(*Instance)) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	fn(i)
+	i.loadStatus(i.Status) // fn may have assigned Status directly
 	i.snapshot.Store(BuildSnapshot(i))
 }
 

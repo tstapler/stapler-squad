@@ -94,13 +94,9 @@ func CanTransition(from, to domain.Status) bool {
 }
 
 // canTransitionLocked reports whether the instance's current status can legally
-// transition to `to`, without mutating any state. Must only be called from
-// within sendSyncErr/send/sendCtx closures (reads i.Status under i.mu.RLock,
-// matching transitionToLocked's read).
-func canTransitionLocked(s *instanceState, to domain.Status) bool {
-	i := s.inst
-	i.mu.RLock()
-	status := i.Status
-	i.mu.RUnlock()
-	return CanTransition(status, to)
+// transition to `to`, without mutating any state, and returns the status it
+// checked. Must only be called from within sendSyncErr/send/sendCtx closures.
+func canTransitionLocked(s *instanceState, to domain.Status) (domain.Status, bool) {
+	status := s.inst.liveStatus()
+	return status, CanTransition(status, to)
 }
