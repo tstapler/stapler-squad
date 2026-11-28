@@ -468,6 +468,18 @@ Differences from 2.3, 5 and section 6: (1) the CSV rows are a file-name partitio
 
 Characterization tests (`stream_terminal_characterization_test.go`, `watch_sessions_characterization_test.go`) were committed before the move, run through the Connect wire and stay in `server/services`. They pin two behaviours that look unintended and were not changed: a client half-close ends `StreamTerminal` with `CodeInternal`, and a pane EOF does not end it. A third is pinned in `stream_reads_test.go`: `GetSessionDiff` for a stored session never sees its worktree row (the hub lists with `LoadMinimal`), so it diffs the session Path.
 
+### 6.12 Stage 6b `sessioncreate`
+
+Done in the Stage 6b PR, in two leaves that never import `server/services`. `server/services/sessioncreate` (16 files, 3,266 lines, 32 internal imports) holds `CreateSession`, `PreviewDestinationPath`, the background resolution pipeline, `AwaitCreationTerminal`, cancel and retry with `CleanupPartialCreation`, batch and fan-out, the directory, worktree, review and diagnose spawners, and `StaleCreationSweeper`. `server/services/workspacerpc` (1 file, 569 lines, 14 imports) holds `WorkspaceService`. `server/services` goes from 47 files / 12,854 to 39 / 9,341 top-level non-test lines on the Stage 6a base, and to 35 / 8,803 after merging the Stage 5 leftovers (which alone left main at 43 / 12,316).
+
+The hub reaches the handler through `session_service_create_delegates.go`, which builds it per call over `Deps`; every dependency a setter can install later is a func, so a running pipeline sees it. `SessionSpawnOptions` moved to `session/domain` so `backlogsvc` does not import the leaf.
+
+Differences from 5 and section 6: (1) `sessioncreate` alone would have left the hub at 9,897, so `workspacerpc` was added; no 6c work was needed. (2) `superseded_session_sweeper.go` stays in the hub: it is backlog round retirement, not session creation, and would have needed a port for `FindSupersededSessions`. (3) No `sessionkit` package: the two hubs share nothing that `Deps` does not carry.
+
+`session_create_characterization_test.go` and `testdata/session_create.golden` were committed before the move; the only change to them since is the `domain.SessionSpawnOptions` qualifier. The golden records one behaviour that looks like a defect and was not changed: nothing writes the `creation_epoch` column, so after `RetrySessionCreation` the epoch-fenced terminal write is rejected and a retry that fails stays `Creating`.
+
+Stage 7: `T9dServicesLOCMax` (10,000) in `tools/bzl/scoping/t9.go` now caps `server/services` in T9d; `session` keeps `LargestPkgLOCMax`. No CI workflow or make target runs `scoping t9`. The cap itself is enforced on every PR by `scoping services-cap`, a step of the `bazel-guards` job in `.github/workflows/bazel.yml` that checks only this value (not a required status check, like every check in this repo). The exact `server/services` row in `budget.txt` is still checked only by `make ready-scoping-budget`, which CI reaches through the Fallback canary workflow.
+
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
 Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes while the guard no longer guards.

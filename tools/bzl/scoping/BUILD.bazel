@@ -17,6 +17,7 @@ go_library(
         "move.go",
         "relocate.go",
         "replay.go",
+        "services_cap.go",
         "t9.go",
         "touch.go",
     ],
@@ -48,9 +49,19 @@ go_test(
         "move_test.go",
         "relocate_test.go",
         "scoping_test.go",
+        "services_cap_test.go",
         "touch_test.go",
     ],
+    # services_cap_test.go pins the CI step in bazel.yml.
+    data = [
+        "//.github:workflows/bazel.yml",
+        "//:go.mod",
+    ],
     embed = [":scoping_lib"],
+    deps = [
+        "//internal/reporoot",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
 )
 
 # Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.

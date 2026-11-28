@@ -9,6 +9,7 @@
 //	scoping touch     [--commits N] [--files a,b|--per-file]  T9b gain of moving files (changes that touch only them)
 //	scoping criteria [--lower] --relocated N --uses N --importers a,b --natural a   SC1/SC3 verdicts (lower-package rule)
 //	scoping t9        [--commits N]              T9a-T9f PASS|FAIL|UNMEASURED against baseline.json
+//	scoping services-cap                         exits 1 when top-level server/services exceeds its T9d cap (CI)
 //	scoping inversions [--json]                  exits 1 when a package's tests import a package that depends on it
 //	scoping budget    [--file F] [--base REF]   per-package size/import caps (ratchet); --init a,b prints caps from the tree
 //	scoping boundaries [--file F]               packages that must not depend (transitively) on others
@@ -346,6 +347,8 @@ func main() {
 		os.Exit(runCriteria(os.Args[2:], os.Stdout))
 	case "t9":
 		os.Exit(runT9(os.Args[2:], os.Stdout))
+	case "services-cap":
+		os.Exit(runServicesCap(os.Args[2:], os.Stdout))
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand", os.Args[1])
 		os.Exit(2)

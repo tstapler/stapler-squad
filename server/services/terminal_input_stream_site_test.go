@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/registry"
@@ -42,7 +43,7 @@ func TestInputSites_ShouldRecordReceivedAndForwarded_When_PermittedWriterAtStrea
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
 
 	spawn := func(hidden bool) *instance.Instance {
-		inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
+		inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), domain.SessionSpawnOptions{
 			Title: newSiteSessionID("obs-stream"), Hidden: hidden, ProgramOverride: "bash",
 		})
 		if err != nil {

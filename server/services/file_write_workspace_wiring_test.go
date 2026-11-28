@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/workspacerpc"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -43,7 +44,7 @@ func writeThroughHub(t *testing.T, inst *instancepkg.Instance) (*SessionService,
 	require.NoError(t, os.WriteFile(path, []byte("one\n"), 0o644))
 	stat, err := svc.StatFile(context.Background(), connect.NewRequest(&sessionv1.StatFileRequest{SessionId: inst.Title, Path: "a.go"}))
 	require.NoError(t, err)
-	svc.workspaceSvc.vcs.StoreForTest(inst.Workspace().ActiveDir, nil, time.Now())
+	svc.workspaceSvc.VCSCacheForTest().StoreForTest(inst.Workspace().ActiveDir, nil, time.Now())
 	_, err = svc.WriteFile(context.Background(), connect.NewRequest(&sessionv1.WriteFileRequest{
 		SessionId: inst.Title, Path: "a.go", ExpectedToken: stat.Msg.VersionToken, Content: []byte("mine\n"),
 	}))
@@ -79,12 +80,15 @@ func TestSessionServiceWriteFile_ShouldRefuseHiddenSession_ThroughTheWorkspaceGu
 	requireWriteRefusal(t, err, connect.CodePermissionDenied, sessionv1.ReadOnlyReason_READ_ONLY_REASON_HIDDEN_SESSION)
 
 	// The same guard allows once the live guards flag is off, and allows a visible session.
-	ws := &WorkspaceService{liveFinder: staticFinder{inst}}
+	ws := workspacerpc.NewWorkspaceService(nil, nil)
+	ws.SetLiveFinder(staticFinder{inst})
 	off := &access.UnaryGuardsFlag{}
 	off.SetEnabled(false)
 	ws.SetGuardsFlag(off)
 	assert.NoError(t, ws.CheckWriteAccess(inst.Title))
-	assert.NoError(t, (&WorkspaceService{liveFinder: staticFinder{hiddenInstance(t, false)}}).CheckWriteAccess(inst.Title))
+	visible := workspacerpc.NewWorkspaceService(nil, nil)
+	visible.SetLiveFinder(staticFinder{hiddenInstance(t, false)})
+	assert.NoError(t, visible.CheckWriteAccess(inst.Title))
 }
 
 func TestSessionServiceWriteFile_ShouldRefuseArchivedSession_And_NeverReviveIt(t *testing.T) {
@@ -101,14 +105,14 @@ func TestSessionServiceWriteFile_ShouldRefuseArchivedSession_And_NeverReviveIt(t
 
 func TestWorkspaceService_ShouldEvictVcsStatusCache_When_InvalidateVcsStatusCalledBySave(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	ws := &WorkspaceService{}
-	ws.vcs.StoreForTest("/work/a", nil, time.Now())
-	ws.vcs.StoreForTest("/work/b", nil, time.Now())
+	ws := workspacerpc.NewWorkspaceService(nil, nil)
+	ws.VCSCacheForTest().StoreForTest("/work/a", nil, time.Now())
+	ws.VCSCacheForTest().StoreForTest("/work/b", nil, time.Now())
 
 	ws.InvalidateVCSStatus("/work/a")
 
-	_, _, aCached := ws.vcs.PeekForTest("/work/a")
-	_, _, bCached := ws.vcs.PeekForTest("/work/b")
+	_, _, aCached := ws.VCSCacheForTest().PeekForTest("/work/a")
+	_, _, bCached := ws.VCSCacheForTest().PeekForTest("/work/b")
 	assert.False(t, aCached, "keyed like GetVCSStatus: the entry for the saved session's dir is gone")
 	assert.True(t, bCached, "other sessions' entries stay")
 
@@ -116,7 +120,7 @@ func TestWorkspaceService_ShouldEvictVcsStatusCache_When_InvalidateVcsStatusCall
 	inst := hiddenInstance(t, false)
 	svc, err := writeThroughHub(t, inst)
 	require.NoError(t, err)
-	_, _, still := svc.workspaceSvc.vcs.PeekForTest(inst.Workspace().ActiveDir)
+	_, _, still := svc.workspaceSvc.VCSCacheForTest().PeekForTest(inst.Workspace().ActiveDir)
 	assert.False(t, still, "the next GetVCSStatus recomputes instead of waiting out the 15 s TTL")
 }
 

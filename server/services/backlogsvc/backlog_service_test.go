@@ -20,7 +20,6 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
@@ -314,7 +313,7 @@ type mockCreateCall struct {
 	programOverride string
 }
 
-func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path string, opts services.SessionSpawnOptions) (*instance.Instance, error) {
+func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path string, opts domain.SessionSpawnOptions) (*instance.Instance, error) {
 	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
@@ -360,7 +359,7 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path stri
 
 // CreateWorktreeSession records the call to the same calls slice as CreateDirectorySession,
 // using worktreePath as the session path (that's where files are written before spawn).
-func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktreePath string, opts services.SessionSpawnOptions) (*instance.Instance, error) {
+func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktreePath string, opts domain.SessionSpawnOptions) (*instance.Instance, error) {
 	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
@@ -3866,11 +3865,11 @@ func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 // errSessionCreator always returns an error from CreateDirectorySession and CreateWorktreeSession.
 type errSessionCreator struct{ err error }
 
-func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _ string, _ services.SessionSpawnOptions) (*instance.Instance, error) {
+func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _ string, _ domain.SessionSpawnOptions) (*instance.Instance, error) {
 	return nil, e.err
 }
 
-func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _ string, _ services.SessionSpawnOptions) (*instance.Instance, error) {
+func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _ string, _ domain.SessionSpawnOptions) (*instance.Instance, error) {
 	return nil, e.err
 }
 

@@ -132,10 +132,11 @@ targets:
     note: "CONFLICT: the measured baseline 0.3945 is already below the 0.395 proposal, so the first clause cannot detect improvement (plan assumed 0.405); only the 0.12 clause constrains. Owner may want a lower bound, e.g. 0.385 (ADR-010's predicted 38.5%)"
   - id: T9d
     status: COMPUTED
-    formula: "each of the two largest packages <= 72,000 LOC (90,000 without Tier B) and 0 test-only layering inversions"
+    formula: "server/services <= 10,000 non-test LOC (gated in CI by scoping services-cap), session <= 72,000 LOC (90,000 without Tier B) and 0 test-only layering inversions"
     baseline_value: 93019  # t9d_services_loc; session 92060; inversions 12
-    target_value: 72000
-    without_tier_b_max: 90000
+    target_value: 10000  # server/services
+    session_target_value: 72000
+    without_tier_b_max: 90000  # session
     inversions_max: 0
     source: "scoping/baseline.json t9d_services_loc, t9d_session_loc, t9d_test_inversions"
     note: "plan text quotes 93,118 and 92,248 LOC; baseline.json (commit 145bce76) has 93,019 and 92,060"

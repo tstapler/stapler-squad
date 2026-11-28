@@ -19,6 +19,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/sessioncreate"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -357,11 +358,11 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, instance.GetStableID()) })
 	svctest.StopSessionDriverOnCleanup(t, instance)
 
-	fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
-		instance:        instance,
-		epoch:           1, // stale: the persisted row's creation_epoch defaults to 0
-		instanceTitle:   instance.Title,
-		instanceRootDir: instance.GetEffectiveRootDir(),
+	fix.svc.creator().RunResolutionPipeline(context.Background(), sessioncreate.PipelineParams{
+		Instance: instance,
+		Epoch:    1, // stale: the persisted row's creation_epoch defaults to 0
+		Title:    instance.Title,
+		RootDir:  instance.GetEffectiveRootDir(),
 	})
 
 	assert.Equal(t, domain.Creating, domain.Status(instance.GetStatus()),
@@ -434,14 +435,14 @@ func TestCreateSession_should_PublishExactlyOneTerminalEvent_When_CancelRacesSuc
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		results[0] = commitTerminalStatus(context.Background(), storage, inst, 0, domain.Active, "")
+		results[0] = sessioncreate.CommitTerminalStatus(context.Background(), storage, inst, 0, domain.Active, "")
 		if results[0] {
 			bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status", "creation_progress"}))
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		results[1] = commitTerminalStatus(context.Background(), storage, inst, 0, domain.Failed, "Cancelled")
+		results[1] = sessioncreate.CommitTerminalStatus(context.Background(), storage, inst, 0, domain.Failed, "Cancelled")
 		if results[1] {
 			bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status", "creation_progress"}))
 		}
@@ -472,7 +473,7 @@ drain:
 
 // TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHookConfig
 // is worktree-envvars-hijack Epic 4.2's regression test for Epic 2's
-// stale-instanceRootDir fix (session_creation_pipeline.go:284): a plain
+// stale-instanceRootDir fix (sessioncreate/pipeline.go:284): a plain
 // SessionTypeNewWorktree session's instanceRootDir must be re-derived AFTER
 // Start() completes worktree creation, or InjectHookConfig below writes
 // .claude/settings.local.json into the stale, pre-Start() root (the bare
@@ -500,11 +501,11 @@ func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHoo
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, instance.GetStableID()) })
 	svctest.StopSessionDriverOnCleanup(t, instance)
 
-	fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
-		instance:        instance,
-		epoch:           instance.CreationEpoch(),
-		instanceTitle:   instance.Title,
-		instanceRootDir: instance.GetEffectiveRootDir(),
+	fix.svc.creator().RunResolutionPipeline(context.Background(), sessioncreate.PipelineParams{
+		Instance: instance,
+		Epoch:    instance.CreationEpoch(),
+		Title:    instance.Title,
+		RootDir:  instance.GetEffectiveRootDir(),
 	})
 
 	wait.RequireEventually(t, func() bool {
@@ -589,16 +590,16 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, instanceB.GetStableID()) })
 
-	fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
-		instance:        instanceB,
-		epoch:           instanceB.CreationEpoch(),
-		instanceTitle:   instanceB.Title,
-		instanceRootDir: instanceB.GetEffectiveRootDir(),
+	fix.svc.creator().RunResolutionPipeline(context.Background(), sessioncreate.PipelineParams{
+		Instance: instanceB,
+		Epoch:    instanceB.CreationEpoch(),
+		Title:    instanceB.Title,
+		RootDir:  instanceB.GetEffectiveRootDir(),
 	})
 
 	require.Equal(t, domain.Failed, domain.Status(instanceB.GetStatus()),
 		"session B must fail, not silently spawn into session A's already-occupied directory")
-	// "DirectoryCollision" is session_creation_pipeline.go's classification for
+	// "DirectoryCollision" is sessioncreate/pipeline.go's classification for
 	// errors.Is(startErr, session.ErrDirectoryCollision) (its only source) --
 	// asserting on it here is the integration-level proof that Start()'s
 	// error actually wrapped that sentinel and was correctly classified by
@@ -677,11 +678,11 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 		go func() {
 			defer wg.Done()
 			<-start
-			fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
-				instance:        inst,
-				epoch:           inst.CreationEpoch(),
-				instanceTitle:   inst.Title,
-				instanceRootDir: inst.GetEffectiveRootDir(),
+			fix.svc.creator().RunResolutionPipeline(context.Background(), sessioncreate.PipelineParams{
+				Instance: inst,
+				Epoch:    inst.CreationEpoch(),
+				Title:    inst.Title,
+				RootDir:  inst.GetEffectiveRootDir(),
 			})
 		}()
 	}

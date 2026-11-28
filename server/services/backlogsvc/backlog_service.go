@@ -29,7 +29,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/autonomysvc"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
@@ -53,11 +52,11 @@ import (
 type SessionCreator interface {
 	// CreateDirectorySession creates a directory-type session at path. See
 	// SessionSpawnOptions.ProgramOverride's doc comment for how program overrides apply.
-	CreateDirectorySession(ctx context.Context, path string, opts services.SessionSpawnOptions) (*instance.Instance, error)
+	CreateDirectorySession(ctx context.Context, path string, opts domain.SessionSpawnOptions) (*instance.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
 	// must already exist on disk before this is called.
-	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts services.SessionSpawnOptions) (*instance.Instance, error)
+	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts domain.SessionSpawnOptions) (*instance.Instance, error)
 }
 
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes

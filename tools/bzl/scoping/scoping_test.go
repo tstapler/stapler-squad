@@ -134,7 +134,7 @@ func TestInversionsSubcommandExitCodes(t *testing.T) {
 func TestPrintT9(t *testing.T) {
 	good := &Report{
 		T9aTestLOCShare500: 0.44, T9bUniversalTouch500: 0.58, T9cMeanLibLOCShare: 0.385, T9cChangesWithLowerLib: 0.148,
-		T9dServicesLOC: 67000, T9dSessionLOC: 68000, T9eTargetModelShare: 0.07,
+		T9dServicesLOC: 9000, T9dSessionLOC: 68000, T9eTargetModelShare: 0.07,
 	}
 	var out bytes.Buffer
 	if !PrintT9(&out, good, DefaultT9Targets, T9fLine(t.TempDir())) || strings.Count(out.String(), ": PASS") != 5 || !strings.Contains(out.String(), "T9f: UNMEASURED") {
@@ -145,6 +145,24 @@ func TestPrintT9(t *testing.T) {
 	out.Reset()
 	if PrintT9(&out, &bad, DefaultT9Targets, T9fLine(t.TempDir())) || !strings.Contains(out.String(), "T9d: FAIL") {
 		t.Fatalf("inversions must fail T9d: %s", out.String())
+	}
+}
+
+func TestPrintT9_ShouldCapServerServicesApartFromSession(t *testing.T) {
+	for name, tc := range map[string]struct {
+		services, session int
+		want              string
+	}{
+		"services at the cap":    {10000, 68000, "T9d: PASS"},
+		"services over the cap":  {10001, 68000, "T9d: FAIL"},
+		"session over services'": {9000, 10001, "T9d: PASS"},
+		"session over its cap":   {9000, 72001, "T9d: FAIL"},
+	} {
+		var out bytes.Buffer
+		PrintT9(&out, &Report{T9dServicesLOC: tc.services, T9dSessionLOC: tc.session}, DefaultT9Targets, "")
+		if !strings.Contains(out.String(), tc.want) {
+			t.Errorf("%s: want %s in %s", name, tc.want, out.String())
+		}
 	}
 }
 

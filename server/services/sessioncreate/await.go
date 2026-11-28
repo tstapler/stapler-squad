@@ -1,4 +1,4 @@
-package services
+package sessioncreate
 
 import (
 	"context"
@@ -41,8 +41,8 @@ func isTerminalCreationStatus(status domain.Status) bool {
 //     CancelSessionCreation removed it).
 //   - (domain.CreationOutcome{}, ctx.Err()) if the caller's own ctx is done first —
 //     returned as-is, not wrapped in a sentinel.
-func (s *SessionService) AwaitCreationTerminal(ctx context.Context, instanceID string, timeout time.Duration) (domain.CreationOutcome, error) {
-	return s.awaitCreationTerminal(ctx, instanceID, timeout, creationAwaitPollInterval)
+func (h *Handler) AwaitCreationTerminal(ctx context.Context, instanceID string, timeout time.Duration) (domain.CreationOutcome, error) {
+	return h.awaitCreationTerminal(ctx, instanceID, timeout, creationAwaitPollInterval)
 }
 
 // awaitCreationTerminal is AwaitCreationTerminal's interval-parameterized
@@ -50,7 +50,7 @@ func (s *SessionService) AwaitCreationTerminal(ctx context.Context, instanceID s
 // which fixes pollInterval at creationAwaitPollInterval; tests call this
 // directly with a much shorter interval to observe transitions quickly
 // without waiting out the real 250ms cadence.
-func (s *SessionService) awaitCreationTerminal(
+func (h *Handler) awaitCreationTerminal(
 	ctx context.Context,
 	instanceID string,
 	timeout time.Duration,
@@ -68,7 +68,7 @@ func (s *SessionService) awaitCreationTerminal(
 	var seenAlive bool
 
 	checkOnce := func() (domain.CreationOutcome, error, bool) {
-		inst := s.FindLiveInstance(instanceID)
+		inst := h.d.FindLive(instanceID)
 		if inst == nil {
 			if seenAlive {
 				return domain.CreationOutcome{}, domain.ErrCreationVanished, true

@@ -69,7 +69,7 @@ func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	// Capture creation-progress phase text (same seam
 	// TestCreateSession_should_ReachActiveViaPipeline's ModeIsRestart subtest
 	// uses): the pipeline's FailureReason is always the fixed label
-	// "StartupError" (session_creation_pipeline.go), never the underlying
+	// "StartupError" (sessioncreate/pipeline.go), never the underlying
 	// error text, so the phase hook is the only way to observe whether a
 	// Failed outcome actually names the worktree/branch conflict versus some
 	// unrelated startup failure.
@@ -92,7 +92,7 @@ func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	id := resp.Msg.Session.Id
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
 
-	outcome, err := fix.svc.awaitCreationTerminal(context.Background(), id, 30*time.Second, 20*time.Millisecond)
+	outcome, err := fix.svc.AwaitCreationTerminal(context.Background(), id, 30*time.Second)
 	require.NoError(t, err, "AwaitCreationTerminal must not error before the pipeline reaches a terminal status")
 
 	mu.Lock()

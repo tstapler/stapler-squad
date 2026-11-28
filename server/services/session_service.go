@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/server/services/reviewqueuerpc"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
+	"github.com/tstapler/stapler-squad/server/services/sessioncreate"
 	"github.com/tstapler/stapler-squad/server/services/sessiondefaults"
 	"github.com/tstapler/stapler-squad/server/services/slashcommands"
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
@@ -39,6 +38,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/windowfocus"
 	"github.com/tstapler/stapler-squad/server/services/workflowrpc"
 	"github.com/tstapler/stapler-squad/server/services/workspacedb"
+	"github.com/tstapler/stapler-squad/server/services/workspacerpc"
 
 	"github.com/google/uuid"
 
@@ -74,7 +74,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/external"
-	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -99,22 +98,6 @@ var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 // Compile-time interface check: SessionService satisfies BacklogService's
 // consumer-defined SessionSteerer interface.
 var _ sessionports.SessionSteerer = (*SessionService)(nil)
-
-// resumeIDRe validates the client-supplied resume_id field: must be a standard UUID.
-// createSessionTimeout bounds the synchronous portion of CreateSession (fast-fail
-// validation, config/remote/restart-source resolution, alias-existence check,
-// title-uniqueness check, and instance construction/persist/publish). As of
-// Epic 2.1 (async-session-creation), GitHub URL resolution (`git clone`, up to
-// ~120s for large repos per research) no longer runs on this synchronous path
-// -- it is deferred to the Background Resolution Pipeline (Epic 2.2, see
-// runBackgroundResolutionPipeline in session_creation_pipeline.go and its
-// own maxCreationResolutionTimeout), same as the tmux startup poll (~10s)
-// that already ran there. This value stays generous rather than being
-// tightened immediately, since other synchronous sub-operations (e.g. remote
-// SSH dial/worktree setup) can still be slow.
-const createSessionTimeout = 150 * time.Second
-
-var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // testTmuxServerSocketCounter gives each SessionService created within a test binary run a
 // unique tmux -L socket suffix (combined with os.Getpid() for cross-process uniqueness), so
@@ -212,7 +195,7 @@ type SessionService struct {
 	reviewQueueSvc  *reviewqueuerpc.ReviewQueueService
 	searchSvc       *searchrpc.SearchService
 	githubSvc       *githubrpc.GitHubService
-	workspaceSvc    *WorkspaceService
+	workspaceSvc    *workspacerpc.WorkspaceService
 	configSvc       *claudeconfig.ConfigService
 	notificationSvc *notify.NotificationService
 	approvalSvc     *approvals.ApprovalService
@@ -451,7 +434,7 @@ type SessionService struct {
 	// creationResolutionTimeout bounds the Background Resolution Pipeline's
 	// (Epic 2.2) entire run end to end -- the Background Resolution
 	// Context is context.WithTimeout(context.WithoutCancel(rpcCtx),
-	// creationResolutionTimeout). Defaults to maxCreationResolutionTimeout;
+	// creationResolutionTimeout). Defaults to sessioncreate.DefaultResolutionTimeout;
 	// overridable directly in tests (same package, same pattern as
 	// githubResolver/testTmuxServerSocket above) to exercise the
 	// timeout-exceeded path without waiting the real 10 minutes.
@@ -761,59 +744,6 @@ func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassif
 	})
 }
 
-// testModeGitHubResolver wraps session.ResolveGitHubInputCtxWithHosts with a
-// small artificial floor on how fast it can return, but ONLY under
-// config.IsIsolatedInstance() -- a no-op (returns the real resolver
-// directly) in every production/dev run. Deliberately IsIsolatedInstance(),
-// not the narrower IsTestMode(): the e2e harness's `stapler-squad --test-mode
-// --test-dir ...` process is a real compiled binary (STAPLER_SQUAD_TEST_DIR
-// set, not a `go test` binary), which IsTestMode() alone does not detect --
-// confirmed the hard way, this wrapper was a silent no-op against the e2e
-// server on the first attempt. Fixes a genuine e2e flake: the async creation
-// pipeline's Creating -> Failed transition for a GitHub-404 (accessibility.spec.ts's
-// "Cancel and Retry controls are keyboard-reachable" test, session-creation-async.spec.ts's
-// Epic 5.3 toast test) is a REAL network round trip, and on a fast/warm
-// connection it can complete in well under a second -- faster than a
-// Playwright test can reliably observe the Creating state and drive real
-// keyboard interaction against it (repro: 0-2 of 3 runs failed with the
-// Cancel button already gone by the time the test got to use it, even after
-// several rounds of test-side ordering/timing fixes). Those tests' own doc
-// comments already flagged "no backend test-mode hook exists yet to simulate
-// an actually-slow GitHub host resolution end-to-end" as a known gap -- this
-// is that hook. Safe for `go test` runs too: every existing unit test that
-// exercises this path overrides svc.githubResolver directly after
-// construction (see session_creation_pipeline_test.go, session_service_test.go,
-// session_service_create_test.go), which replaces this default outright, so
-// none of them see the added delay. STAPLER_SQUAD_TEST_GITHUB_RESOLVE_MIN_MS
-// overrides the floor (0 disables it entirely); unset defaults to 3000ms,
-// comfortably inside every existing e2e timeout that waits on this
-// transition (all >= 10s, most 30s).
-func testModeGitHubResolver() func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
-	if !config.IsIsolatedInstance() {
-		return instance.ResolveGitHubInputCtxWithHosts
-	}
-	minDelay := 3 * time.Second
-	if raw := os.Getenv("STAPLER_SQUAD_TEST_GITHUB_RESOLVE_MIN_MS"); raw != "" {
-		if ms, err := strconv.Atoi(raw); err == nil && ms >= 0 {
-			minDelay = time.Duration(ms) * time.Millisecond
-		}
-	}
-	if minDelay == 0 {
-		return instance.ResolveGitHubInputCtxWithHosts
-	}
-	return func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
-		start := time.Now()
-		localPath, ref, err := instance.ResolveGitHubInputCtxWithHosts(ctx, input, enterpriseHosts)
-		if elapsed := time.Since(start); elapsed < minDelay {
-			select {
-			case <-time.After(minDelay - elapsed):
-			case <-ctx.Done():
-			}
-		}
-		return localPath, ref, err
-	}
-}
-
 // NewSessionServiceWithSearchEngine is the dependency-injection seam for the search engine:
 // pass an explicit *search.SearchEngine (e.g. search.NewSearchEngine() for in-memory)
 // instead of relying on NewSessionService's config.IsTestMode() default. Full migration of
@@ -998,7 +928,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		}
 	}
 
-	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
+	workspaceSvc := workspacerpc.NewWorkspaceService(concStorage, eventBus)
 
 	svc := &SessionService{
 		storage:                     storage,
@@ -1035,8 +965,8 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		capacityMonitor:             capacityMonitor,
 		deleteSessionCleanupTimeout: defaultDeleteSessionCleanupTimeout,
 		credChain:                   credChain,
-		githubResolver:              testModeGitHubResolver(),
-		creationResolutionTimeout:   maxCreationResolutionTimeout,
+		githubResolver:              sessioncreate.TestModeGitHubResolver(),
+		creationResolutionTimeout:   sessioncreate.DefaultResolutionTimeout,
 	}
 	capacityMonitor.SetSessionPorts(svc, svc)
 
@@ -1361,12 +1291,6 @@ func (s *SessionService) setGitBackend(b backend.Backend) {
 		panic("services: setGitBackend called with a nil backend")
 	}
 	s.gitBackendOnce.Do(func() { s.gitBackend = b })
-}
-
-// remoteWorktreeOps builds the worktree ops for a remote runner, routing git through the
-// service's backend. The runner passed here is the value that reaches Backend as Remote.Runner.
-func (s *SessionService) remoteWorktreeOps(runner tmux.CommandRunner, host string) *git.RemoteWorktreeOps {
-	return git.NewRemoteWorktreeOps(runner, git.WithGitBackend(s.gitBackendOrDefault()), git.WithRemoteHost(host))
 }
 
 // Federation returns the federated-sessions view, nil unless host gossip is running.

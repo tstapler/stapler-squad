@@ -25,7 +25,7 @@ import (
 // this change (inst.Start(true) ran with no context deadline threaded into
 // its GitHub/worktree/tmux calls at all) -- 150s is therefore a new,
 // deliberately chosen cap, picked to align with the frontend's own SLO
-// expectation for CreateSession (createSessionTimeout in
+// expectation for CreateSession (CreateSessionTimeout in
 // server/services/session_service.go), not a preservation of a prior bound.
 // Intentionally shorter than the pipeline's own maxCreationResolutionTimeout
 // (10 min) so a genuinely slow pipeline degrades to the "still creating"
@@ -153,7 +153,7 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 // call this directly with a much shorter timeout to exercise the
 // still_creating outcome (Story 2.3.4) without waiting out the real 150s
 // bound — the same interval-parameterized-implementation seam
-// AwaitCreationTerminal itself uses (server/services/session_creation_await.go).
+// AwaitCreationTerminal itself uses (server/services/sessioncreate/await.go).
 func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, req mcpgo.CallToolRequest, awaitTimeout time.Duration) (*mcpgo.CallToolResult, error) {
 	if !lh.createLimiter.allow("global") {
 		return errResult(ErrRateLimitExceeded, "create_session rate limit exceeded (max 3 per minute)",

@@ -5,7 +5,7 @@
   "method": "PickFanoutWinner",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/session_service_fanout.go",
+  "handlerFile": "server/services/sessioncreate/fanout.go",
   "tested": true,
   "testIds": [
     "TestPickFanoutWinner_MergesWinnerAndArchivesLosers",
@@ -16,5 +16,5 @@
     "TestPickFanoutWinner_ConcurrentPicksMergeOnlyOneWinner",
     "TestPickFanoutWinner_UnknownGroupIsNotFound"
   ],
-  "lastModified": "2026-10-18T20:58:59.272246784-07:00"
+  "lastModified": "2026-11-28T03:56:03.154908827-08:00"
 }

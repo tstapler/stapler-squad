@@ -53,6 +53,12 @@ jobs:
           bash tools/bzl/check-test-tags.sh
           go run ./tools/bzl/scandata .
 
+      # T9d's server/services cap alone (project_plans/package-split-ocp/session-service-hub-plan.md, stage 7);
+      # the other T9 components are measurements and are not gated here.
+      - name: server/services line cap
+        if: ${{ !cancelled() }}
+        run: go run ./tools/bzl/scoping services-cap
+
       # Analysis errors (visibility, missing deps) are deterministic and cheap, but the non-blocking `bazel` job
       # hid them (#1690). No --keep_going: with --nobuild it silently skips the failing target.
       - name: Set up Bazel (repository cache)

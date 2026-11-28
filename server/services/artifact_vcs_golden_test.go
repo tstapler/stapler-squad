@@ -20,6 +20,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/workspacerpc"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/search"
@@ -174,15 +175,15 @@ func goldenVCSStatus(t *testing.T, o *goldenOut) {
 	// below a jj repo in $HOME), and the VCS lookup walks the parents.
 	const plain = "/ssq-golden-no-vcs/plain"
 	// out records a response with the repo's own paths, hashes and times blanked.
-	out := func(name string, ws *WorkspaceService, req *sessionv1.GetVCSStatusRequest) {
+	out := func(name string, ws *workspacerpc.WorkspaceService, req *sessionv1.GetVCSStatusRequest) {
 		sub := &goldenOut{t: t}
 		resp, err := ws.GetVCSStatus(ctx, connect.NewRequest(req))
 		sub.record("vcs/"+name, msgOf(resp), err)
 		line := strings.ReplaceAll(sub.b.String(), plain, "<plain>")
 		o.b.WriteString(goldenVolatile.ReplaceAllString(line, `"$1":"*"`))
 	}
-	service := func(inst *instance.Instance) *WorkspaceService {
-		ws := NewWorkspaceService(nil, nil)
+	service := func(inst *instance.Instance) *workspacerpc.WorkspaceService {
+		ws := workspacerpc.NewWorkspaceService(nil, nil)
 		ws.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 		return ws
 	}
@@ -197,7 +198,7 @@ func goldenVCSStatus(t *testing.T, o *goldenOut) {
 	fresh := &sessionv1.GetVCSStatusRequest{Id: "golden", WaitForFresh: true}
 
 	out("empty-id", service(mk(dir, "")), &sessionv1.GetVCSStatusRequest{})
-	out("unknown", NewWorkspaceService(nil, nil), req)
+	out("unknown", workspacerpc.NewWorkspaceService(nil, nil), req)
 	out("no-workdir", service(mk("", "")), req)
 	out("not-vcs", service(mk(plain, "")), req)
 	out("no-base", service(mk(dir, "")), req)

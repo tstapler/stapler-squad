@@ -1264,7 +1264,7 @@ ready-vt-conformance-gate: ## Blocking VT conformance gate: xterm.js and ghostty
 # branch merge base 51132ee23, measured 2026-10-16 on a loaded 127%-CPU machine: 270.229s, 2813 tests, all pass.
 # Refresh these two values only by re-measuring on a clean checkout, never to make a gate pass.
 # The gate now sums FILES_VIEWER_RACE_PACKAGES (run with -p 1); the baseline predates that split and was not re-measured.
-FILES_VIEWER_RACE_PACKAGES = ./server/services ./server/services/contentsearch ./server/services/fileops ./server/services/pathcomplete ./server/services/fsops
+FILES_VIEWER_RACE_PACKAGES = ./server/services ./server/services/contentsearch ./server/services/fileops ./server/services/pathcomplete ./server/services/fsops ./server/services/sessioncreate
 FILES_VIEWER_RACE_BASELINE_SECONDS ?= 270
 FILES_VIEWER_RACE_BUDGET_PERCENT ?= 10
 FILES_VIEWER_JSCPD_THRESHOLD ?= 0.14
@@ -1275,7 +1275,7 @@ FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRe
 .PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
 
 files-viewer-go-tests: ensure-tools proto-gen ## Iterate on the files-viewer Go tests only, with -race (fixed -run prefix list)
-	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/contentsearch ./server/services/fileops ./server/services/pathcomplete ./server/services/fsops
+	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/contentsearch ./server/services/fileops ./server/services/pathcomplete ./server/services/fsops ./server/services/sessioncreate
 
 files-viewer-perf: ensure-tools proto-gen ## Files-viewer benchmarks on full 50k-file fixtures (non-race, run in the background)
 	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services ./server/services/contentsearch

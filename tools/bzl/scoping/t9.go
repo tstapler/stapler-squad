@@ -59,13 +59,15 @@ type T9Targets struct {
 	LibLOCShareMax       float64
 	LowerLibMin          float64
 	LargestPkgLOCMax     int
-	TargetShareMax       float64
+	// T9dServicesLOCMax caps server/services alone; LargestPkgLOCMax still caps session.
+	T9dServicesLOCMax int
+	TargetShareMax    float64
 }
 
 // DefaultT9Targets are the "at close" values.
 var DefaultT9Targets = T9Targets{
 	TestLOCShareMax: 0.45, UniversalTouch500Max: 0.61, LibLOCShareMax: 0.395, LowerLibMin: 0.12,
-	LargestPkgLOCMax: 72000, TargetShareMax: 0.30,
+	LargestPkgLOCMax: 72000, T9dServicesLOCMax: 10000, TargetShareMax: 0.30,
 }
 
 func verdict(ok bool) string {
@@ -87,8 +89,9 @@ func PrintT9(w io.Writer, r *Report, t T9Targets, t9f string) bool {
 		{"T9b", r.T9bUniversalTouch500 <= t.UniversalTouch500Max, fmt.Sprintf("universal_touch_500=%.4f max=%.2f", r.T9bUniversalTouch500, t.UniversalTouch500Max)},
 		{"T9c", r.T9cMeanLibLOCShare <= t.LibLOCShareMax && r.T9cChangesWithLowerLib >= t.LowerLibMin,
 			fmt.Sprintf("lib_loc_share=%.4f max=%.3f lower=%.3f min=%.2f", r.T9cMeanLibLOCShare, t.LibLOCShareMax, r.T9cChangesWithLowerLib, t.LowerLibMin)},
-		{"T9d", r.T9dServicesLOC <= t.LargestPkgLOCMax && r.T9dSessionLOC <= t.LargestPkgLOCMax && r.T9dTestInversions == 0,
-			fmt.Sprintf("services=%d session=%d inversions=%d max=%d", r.T9dServicesLOC, r.T9dSessionLOC, r.T9dTestInversions, t.LargestPkgLOCMax)},
+		{"T9d", r.T9dServicesLOC <= t.T9dServicesLOCMax && r.T9dSessionLOC <= t.LargestPkgLOCMax && r.T9dTestInversions == 0,
+			fmt.Sprintf("services=%d services_max=%d session=%d session_max=%d inversions=%d",
+				r.T9dServicesLOC, t.T9dServicesLOCMax, r.T9dSessionLOC, t.LargestPkgLOCMax, r.T9dTestInversions)},
 		{"T9e", r.T9eTargetModelShare <= t.TargetShareMax, fmt.Sprintf("target_share=%.4f max=%.2f", r.T9eTargetModelShare, t.TargetShareMax)},
 	}
 	pass := true

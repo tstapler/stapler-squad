@@ -6,6 +6,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,8 +103,9 @@ func TestGetDetectionEvents_ShouldReturnTheNewestUpToTheCappedLimit_When_Control
 	p := newCharPane(t)
 	e.poller.AddInstance(p.inst)
 	detector := detection.NewStatusDetector()
-	detector.SetSessionID(p.inst.Title)
-	for range 150 {
+	// Each event keeps the session ID set when it was recorded, which numbers it.
+	for i := range 150 {
+		detector.SetSessionID(fmt.Sprintf("event-%d", i))
 		detector.Detect([]byte("some output"))
 	}
 	controller := claudectl.NewBareForTest(p.inst.Title, nil)
@@ -117,14 +119,13 @@ func TestGetDetectionEvents_ShouldReturnTheNewestUpToTheCappedLimit_When_Control
 		require.NoError(t, err)
 		return resp.Msg.Events
 	}
-	assert.Len(t, get(0), 20)
-	assert.Len(t, get(-1), 20)
-	assert.Len(t, get(5), 5)
-	assert.Len(t, get(100), 100)
-	capped := get(500)
-	require.Len(t, capped, 100)
-	assert.Equal(t, p.inst.Title, capped[0].SessionId)
-	assert.False(t, capped[0].Timestamp.AsTime().Before(capped[99].Timestamp.AsTime()), "newest first")
+	for limit, want := range map[int32]int{0: 20, -1: 20, 5: 5, 100: 100, 500: 100} {
+		got := get(limit)
+		require.Len(t, got, want, "limit %d", limit)
+		for i, event := range got {
+			require.Equal(t, fmt.Sprintf("event-%d", 149-i), event.SessionId, "limit %d returns the newest, newest first", limit)
+		}
+	}
 }
 
 // A session known only to external discovery is found by the stream reads.

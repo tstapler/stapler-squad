@@ -43,6 +43,7 @@ go_library(
         "rule_data.go",
         "rule_spec.go",
         "session_roles.go",
+        "session_spawn_options.go",
         "session_type.go",
         "status.go",
         "terminal_status.go",

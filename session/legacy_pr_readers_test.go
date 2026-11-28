@@ -37,7 +37,7 @@ var legacyPRReaders = map[string]string{
 	"server/reviewqueue/review_queue_manager.go":                readsSnapshot,
 	"server/services/approvals/approval_service.go":             readsSnapshot,
 	"server/services/debuglogs/debug_snapshot.go":               readsInstanceData,
-	"server/services/session_service_create.go":                 readsSnapshot, // writes InstanceOptions only; the instance attaches it
+	"server/services/sessioncreate/create.go":                   readsSnapshot, // writes InstanceOptions only; the instance attaches it
 	"server/services/unfinishedwork/unfinished_work_service.go": readsInstanceData,
 	"session/instance/instance.go":                              readsSnapshot,
 	"session/instance/instance_actor_setters.go":                readsSnapshot,

@@ -225,7 +225,7 @@ func (i *Instance) FailureReason() string {
 // straddle an intervening write (e.g. TryStartRetry resetting Status to
 // Creating between the two reads while leaving the prior attempt's
 // failureReason in place until TryForceStatusIfEpoch's next closure clears
-// it). Used by AwaitCreationTerminal (server/services/session_creation_await.go)
+// it). Used by AwaitCreationTerminal (server/services/sessioncreate/await.go)
 // to build its CreationOutcome snapshot atomically.
 func (i *Instance) StatusAndFailureReason() (status domain.Status, failureReason string) {
 	type statusAndReason struct {

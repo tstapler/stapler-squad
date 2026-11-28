@@ -1,4 +1,4 @@
-package services
+package sessioncreate
 
 import (
 	"testing"
@@ -10,5 +10,5 @@ import (
 // allow-list must carry it.
 func TestDiagnosticSessionAllowedTools_CarriesResetRemediation(t *testing.T) {
 	t.Parallel()
-	assert.Contains(t, diagnosticSessionAllowedTools, "mcp__stapler-squad__diagnose_reset_remediation")
+	assert.Contains(t, DiagnosticSessionAllowedTools, "mcp__stapler-squad__diagnose_reset_remediation")
 }

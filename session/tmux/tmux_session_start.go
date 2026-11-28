@@ -281,7 +281,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// not kill, the session it just created (Close()'s own DoesSessionExist() call
 	// hits the identical false negative, so kill-session never runs): the tmux pane
 	// is left running, alive and orphaned from the app's perspective, while the
-	// caller (session_creation_pipeline.go) marks the session Failed and never wires
+	// caller (sessioncreate/pipeline.go) marks the session Failed and never wires
 	// SessionDriver -- so neither the startup trust-dialog nor the initial prompt
 	// ever get delivered even though the session is fine. Routing this specific,
 	// latency-sensitive, one-shot check through the resync fast lane (the same

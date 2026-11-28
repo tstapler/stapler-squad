@@ -24,7 +24,7 @@ import (
 // newCancelTestInstance builds a *session.Instance registered with both
 // storage (so CancelSessionCreation's storage.DeleteInstance call has a row
 // to remove) and svc's live poller (so FindLiveInstance resolves it), mirroring
-// newAwaitTestInstance (session_creation_await_test.go) but additionally
+// newAwaitTestInstance (sessioncreate/await_test.go) but additionally
 // persisting to storage — CancelSessionCreation, unlike AwaitCreationTerminal,
 // deletes the storage row on success. wrapLive controls whether the instance
 // is wrapped in a session.LiveInstance: the race test needs the actor mailbox
@@ -236,7 +236,7 @@ func TestCancelSessionCreation_should_ResolveAwaitCreationTerminalPromptly_When_
 	awaitDone := make(chan awaitResult, 1)
 	start := time.Now()
 	go func() {
-		outcome, err := svc.awaitCreationTerminal(context.Background(), "cancel-await-race", 5*time.Second, 10*time.Millisecond)
+		outcome, err := svc.AwaitCreationTerminal(context.Background(), "cancel-await-race", 5*time.Second)
 		awaitDone <- awaitResult{outcome, err}
 	}()
 

@@ -35,6 +35,7 @@ func TestLogAssertions_ShouldInjectHandlerAndNeverUseCaptureLogsUnderParallel_Wh
 		"../services/*/slack_gate_test.go",
 		"../services/session_service_diagnose_test.go",
 		"../services/*/session_service_diagnose_test.go",
+		"../services/sessioncreate/spawn_test.go",
 	}
 	forbidden := map[string]bool{
 		"log.SetSlogDefaultForTest": true, // the repo's global-logger swap seam

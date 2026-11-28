@@ -1121,6 +1121,81 @@ linters:
             - github.com/tstapler/stapler-squad/session/markerstore$
             - github.com/tstapler/stapler-squad/session/sshremote$
             - github.com/tstapler/stapler-squad/session/tmux$
+        # server/services/sessioncreate creates, retries, cancels and spawns sessions; the hub passes Deps. It never imports the
+        # services hub.
+        isolate_sessioncreate:
+          list-mode: strict
+          files:
+            - "**/services/sessioncreate/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/go-git/go-git/v5/plumbing
+            - github.com/google/uuid
+            - go.opentelemetry.io/otel/attribute
+            - go.opentelemetry.io/otel/codes
+            - go.opentelemetry.io/otel/metric
+            - golang.org/x/crypto/ssh
+            - google.golang.org/protobuf/proto
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/github$
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/adapters$
+            - github.com/tstapler/stapler-squad/server/events$
+            - github.com/tstapler/stapler-squad/server/services/approvals$
+            - github.com/tstapler/stapler-squad/server/services/autonomysvc$
+            - github.com/tstapler/stapler-squad/server/services/internal/streammetrics$
+            - github.com/tstapler/stapler-squad/server/services/remote$
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/autonomous$
+            - github.com/tstapler/stapler-squad/session/backlog$
+            - github.com/tstapler/stapler-squad/session/claudehistory$
+            - github.com/tstapler/stapler-squad/session/detection$
+            - github.com/tstapler/stapler-squad/session/domain$
+            - github.com/tstapler/stapler-squad/session/domain/backlogdto$
+            - github.com/tstapler/stapler-squad/session/driver$
+            - github.com/tstapler/stapler-squad/session/git$
+            - github.com/tstapler/stapler-squad/session/git/backend$
+            - github.com/tstapler/stapler-squad/session/gitprovider$
+            - github.com/tstapler/stapler-squad/session/headless$
+            - github.com/tstapler/stapler-squad/session/importer$
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/namegen$
+            - github.com/tstapler/stapler-squad/session/prompts$
+            - github.com/tstapler/stapler-squad/session/registry$
+            - github.com/tstapler/stapler-squad/session/sshremote$
+            - github.com/tstapler/stapler-squad/session/summaries$
+            - github.com/tstapler/stapler-squad/session/tagpoller$
+            - github.com/tstapler/stapler-squad/session/tmux$
+            - github.com/tstapler/stapler-squad/telemetry$
+        # server/services/workspacerpc serves the VCS and workspace RPCs; it never imports the services hub.
+        isolate_workspacerpc:
+          list-mode: strict
+          files:
+            - "**/services/workspacerpc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - go.opentelemetry.io/otel/attribute
+            - go.opentelemetry.io/otel/trace
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/adapters$
+            - github.com/tstapler/stapler-squad/server/events$
+            - github.com/tstapler/stapler-squad/server/services/access$
+            - github.com/tstapler/stapler-squad/server/services/fileops$
+            - github.com/tstapler/stapler-squad/server/services/vcsstatus$
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain$
+            - github.com/tstapler/stapler-squad/session/git/backend$
+            - github.com/tstapler/stapler-squad/session/gitprovider$
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/vcs$
+            - github.com/tstapler/stapler-squad/telemetry$
         # server/services/tmuxadmin serves the tmux version-mismatch and server-restart RPCs; it never imports the services hub.
         isolate_tmuxadmin:
           list-mode: strict
@@ -1574,7 +1649,7 @@ linters:
       - path: "server/dependencies\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
-      - path: "server/services/workspace_service\\.go"
+      - path: "server/services/workspacerpc/workspace_service\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       - path: "server/services/session_service\\.go"
@@ -1583,7 +1658,11 @@ linters:
       # Same intentional LoadInstances uses as session_service.go above, moved
       # verbatim into these files by the session_service_*.go file-size split
       # (2026-10) — not newly introduced.
-      - path: "server/services/session_service_(crud|lifecycle)\\.go"
+      - path: "server/services/session_service_lifecycle\\.go"
+        linters: [forbidigo]
+        text: "LoadInstances"
+      # BatchCreateSessions' title pre-check, moved verbatim from session_service_crud.go.
+      - path: "server/services/sessioncreate/batch\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       # MCP tools have their own per-tool LoadInstances calls that are aware of the

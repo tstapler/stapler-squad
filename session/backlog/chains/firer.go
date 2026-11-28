@@ -58,7 +58,7 @@ const maxInFlightChainFires = 20
 // chainFireTimeout bounds a single ChainFirer.Fire attempt (workflow lookup +
 // prompt build + FireTriggerChained's CreateSession call). Generous relative
 // to a plain HTTP callback (callbackAttemptTimeout is 5s) because CreateSession
-// itself provisions a tmux session and git worktree — matches createSessionTimeout's
+// itself provisions a tmux session and git worktree — matches CreateSessionTimeout's
 // order of magnitude in server/services/session_service.go.
 const chainFireTimeout = 5 * time.Minute
 

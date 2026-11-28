@@ -12,7 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
-// Files RPC instruments, registered once like session_creation_metrics.go. Attributes
+// Files RPC instruments, registered once like sessioncreate/metrics.go. Attributes
 // are closed enums only: never a path, query or error text.
 var (
 	filesSearchTotal = streammetrics.MustInt64Counter(telemetry.GetMeter(), "files.search.total",
