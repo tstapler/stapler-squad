@@ -50,6 +50,7 @@ The `CoreOption` in `github_port.go` uses `coreConfig`, so it moves to `server.g
 | `tools_pr_rpc_unreachable_test.go` (`filepath.Glob("*.go")`) | **Silent**: the UI-only PR RPC ban stops covering the moved handlers. |
 | `server/services/workflow_bypass_inventory_test.go` rows keyed by path and `Type.method` | Fails; re-key. |
 | `tools_backlog_test.go` reads `tools_backlog.go` by name | Fails; moves with the file. |
+| Exact per-file maps: `session/wake_polling_guard_test.go` (`tools_backlog.go`), `session/legacy_item_pr_readers_test.go` (`tools_backlog_pr.go`, `tools_stuck_report.go`); also `workflow_bypass_strict_test.go` and the file names in `session/domain/transition_callers.go` | The maps fail; re-key. `transition_callers.go` was not checked for a test that enforces it. |
 | `server/services/terminal_write_pins_test.go` | Unaffected: the pinned writers stay. |
 
 **Tests.** 18 backlog, guidance, stuck and PR test files (about 11,000 lines; chosen by file name, inferred) move or split; `tools_lifecycle_open_pr_test.go` and port tests may stay. `tool_set_golden_test.go` and the registration-order test must pass unchanged. Shared fakes probably need a `mcpkittest` package (inferred). Mutation-check the extended guards by planting a violation in the new subpackage.
@@ -83,6 +84,8 @@ All file names below omit the `backlog_service_` prefix unless shown in full.
 | `backlog_service_base_commit_guard_test.go` (`os.ReadDir(".")`) | **Silent** for any leaf that creates ItemSessions (B5). Extend to walk leaves, and mutation-check. |
 | `.golangci.yml` per-file `session/ent` exemptions, and the `ent.IsNotFound` / `LoadInstances` path regexes | Fail (exemption lost). Re-key or remove the ent use. |
 | `backlog_service_test.go` reads `backlog_service_trigger_triage.go` by name | Fails; moves with B5. |
+| `session/legacy_item_pr_readers_test.go` (`pr_fix_steer`, `ship`, `ship_status`: B3) and `session/wake_polling_guard_test.go` (`verdict_steer`: B3) | Fail on moved paths. Re-key. |
+| File names in `session/domain/transition_callers.go` (`headless_run`, `trigger_triage`) | Re-key in B5; whether a test enforces them was not checked. |
 | `manual_nudge_recorders_test.go` (walks subdirectories) | Unaffected by this plan (`lifecycle` stays). |
 
 **Tests.** 80 test files (30,444 lines) share `newBacklogService`-style fixtures; each leaf PR needs those in an `internal` test-support package first (inferred: not enumerated per PR). Add one test per PR that asserts `BacklogService` still satisfies the Connect handler interface and that each embedded handler is non-nil on every constructor path.
@@ -109,7 +112,7 @@ Place leaves as **siblings** (`session/<leaf>`), never under `session/instance/`
 - `scoping move --dry-run` ran cleanly for I1-I6 (not I7). It does not report *exported* back-edges; the column above comes from a separate go/types pass.
 - About 3,100 more lines in the remaining files do not depend on `Instance` (launch-command helpers, MCP proof helpers, constants, errors). Moving them needs `scoping relocate` per declaration and gets to about 15,000 at best.
 
-**Guards.** I6's `scroll_forward_golden_fixture_test.go` and `scroll_forward_canary_test.go` read `testdata/`, whose `BUILD.bazel` is hand-written (`tools/bzl/hand-build-files.txt`): move the fixtures with I6 and update that list. `main_test.go`'s hermetic setup needs an equivalent in any leaf whose tests start processes. `server/deliverygate/sink_guard_test.go`, `terminal_write_pins_test.go` and `feature_flag_service_test.go` key on `session/instance` paths or symbols. `noarchivedrevival`'s listed instance files stay; moved declarations cannot call `Instance` methods, so none is a revival site. Many depguard rows allow `session/instance$`, so importers of a new leaf need the leaf added.
+**Guards.** I6's `scroll_forward_golden_fixture_test.go` and `scroll_forward_canary_test.go` read `testdata/`, whose `BUILD.bazel` is hand-written (`tools/bzl/hand-build-files.txt`): move the fixtures with I6 and update that list. `main_test.go`'s hermetic setup needs an equivalent in any leaf whose tests start processes. `session/legacy_pr_readers_test.go` names `pr_set_rules.go` (I1). `instance_status_gate_test.go` scans only this package and allow-lists writes in `session_goal.go` (I7) and `shell_registry.go` (I5). `server/deliverygate/sink_guard_test.go`, `terminal_write_pins_test.go` and `feature_flag_service_test.go` key on `session/instance` paths or symbols. `noarchivedrevival`'s listed instance files stay; moved declarations cannot call `Instance` methods, so none is a revival site. Many depguard rows allow `session/instance$`, so importers of a new leaf need the leaf added.
 
 ### 3b. Why 10k is not reachable by moving files
 
