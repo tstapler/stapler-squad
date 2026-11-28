@@ -478,7 +478,7 @@ Differences from 5 and section 6: (1) `sessioncreate` alone would have left the 
 
 `session_create_characterization_test.go` and `testdata/session_create.golden` were committed before the move; the only change to them since is the `domain.SessionSpawnOptions` qualifier. The golden records one behaviour that looks like a defect and was not changed: nothing writes the `creation_epoch` column, so after `RetrySessionCreation` the epoch-fenced terminal write is rejected and a retry that fails stays `Creating`.
 
-Stage 7: `T9dServicesLOCMax` (10,000) in `tools/bzl/scoping/t9.go` now caps `server/services` in T9d; `session` keeps `LargestPkgLOCMax`. No CI workflow or make target runs `scoping t9`, so it is a measurement, not an enforcement. The `server/services` row in `budget.txt` is checked by `make ready-scoping-budget`, which CI reaches only through the Fallback canary workflow (weekly, manual, or a PR touching its listed paths).
+Stage 7: `T9dServicesLOCMax` (10,000) in `tools/bzl/scoping/t9.go` now caps `server/services` in T9d; `session` keeps `LargestPkgLOCMax`. No CI workflow or make target runs `scoping t9`. The cap itself is enforced on every PR by `scoping services-cap`, a step of the `bazel-guards` job in `.github/workflows/bazel.yml` that checks only this value (not a required status check, like every check in this repo). The exact `server/services` row in `budget.txt` is still checked only by `make ready-scoping-budget`, which CI reaches through the Fallback canary workflow.
 
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 

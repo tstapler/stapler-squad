@@ -8,6 +8,11 @@ exports_files(
 )
 
 exports_files(
+    ["workflows/bazel.yml"],
+    visibility = ["//tools/bzl/scoping:__pkg__"],
+)
+
+exports_files(
     ["workflows/main-ci.yml"],
     visibility = ["//tools/ci/testshards:__pkg__"],
 )
