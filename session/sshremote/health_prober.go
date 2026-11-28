@@ -9,7 +9,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 )
 
 // RemoteConnectionState identifies where a configured remote's SSH
@@ -92,7 +92,7 @@ const defaultLivenessCheckTimeout = 10 * time.Second
 // constructed against the SAME SSHClientPool passed as pool (and the same
 // SSHTarget.Name as remoteName), so both this prober's liveness checks and
 // any session's own SSHRunner/RemoteApprovalRelay for the same remote share
-// exactly one dialed *ssh.Client (see tmux.SSHRunner.Dial's doc comment,
+// exactly one dialed *ssh.Client (see sshtransport.SSHRunner.Dial's doc comment,
 // which names RemoteHealthProber as its reuse case). Disconnect detection
 // is driven primarily by that shared client's Wait() -- a push/blocking
 // signal, not a poll loop -- with a periodic lightweight liveness check
@@ -100,8 +100,8 @@ const defaultLivenessCheckTimeout = 10 * time.Second
 // a connection that hasn't hard-failed yet but also isn't currently
 // answering commands.
 type RemoteHealthProber struct {
-	pool       *tmux.SSHClientPool
-	runner     *tmux.SSHRunner
+	pool       *sshtransport.SSHClientPool
+	runner     *sshtransport.SSHRunner
 	remoteName string
 	publisher  HealthEventPublisher
 
@@ -144,8 +144,8 @@ func withLivenessCheckTimeout(d time.Duration) RemoteHealthProberOption {
 // SSHTarget.Name as remoteName (see this type's doc comment); publisher
 // receives every actual state transition.
 func NewRemoteHealthProber(
-	pool *tmux.SSHClientPool,
-	runner *tmux.SSHRunner,
+	pool *sshtransport.SSHClientPool,
+	runner *sshtransport.SSHRunner,
 	remoteName string,
 	publisher HealthEventPublisher,
 	opts ...RemoteHealthProberOption,
@@ -213,7 +213,7 @@ func (p *RemoteHealthProber) Start(ctx context.Context) {
 // doc comment for why: it blocks on the pooled *ssh.Client's own Wait(),
 // which has no relationship to this prober's ctx and may not return for as
 // long as the underlying connection stays alive -- exactly the same
-// unbounded-lifetime shape session/tmux/ssh_pool.go's own internal
+// unbounded-lifetime shape session/sshtransport/ssh_pool.go's own internal
 // Client.Wait() eviction watcher already has, and for the same reason: the
 // shared client can legitimately outlive any single consumer). Those
 // goroutines check p.ctx.Done() before publishing, so a stale post-Stop
@@ -252,7 +252,7 @@ func (p *RemoteHealthProber) watchReconnects(ch <-chan *ssh.Client, unsubscribe 
 
 // watchClientDeath blocks on client.Wait() -- the push/blocking hard-
 // disconnect signal Story 6.4.1's acceptance criteria calls for. Safe to
-// run alongside session/tmux/ssh_pool.go's OWN internal Client.Wait()-based
+// run alongside session/sshtransport/ssh_pool.go's OWN internal Client.Wait()-based
 // eviction watcher (SSHClientPool.register spawns one per dial too):
 // golang.org/x/crypto/ssh's mux.Wait() blocks on a sync.Cond and the
 // connection's read loop calls Broadcast (not Signal) once on close

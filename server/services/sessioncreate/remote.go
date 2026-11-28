@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -164,13 +165,13 @@ func (h *Handler) setupRemoteSessionTarget(
 			errors.New("remote session support is not configured on this server"))
 	}
 
-	target := tmux.SSHTarget{Name: resolvedRemote.Name, Addr: remote.RemoteAddr(resolvedRemote.Host)}
+	target := sshtransport.SSHTarget{Name: resolvedRemote.Name, Addr: remote.RemoteAddr(resolvedRemote.Host)}
 	clientConfig := ssh.ClientConfig{
 		User:            resolvedRemote.User,
 		Auth:            remote.ResolveIdentityAuthMethods(ctx, keyStore, resolvedRemote.IdentityRef),
 		HostKeyCallback: knownHosts.HostKeyCallback(),
 	}
-	runner := tmux.NewSSHRunner(target, clientConfig, tmux.WithSSHClientPool(h.d.SSHClientPool()))
+	runner := sshtransport.NewSSHRunner(target, clientConfig, sshtransport.WithSSHClientPool(h.d.SSHClientPool()))
 	if dialErr := runner.Dial(ctx); dialErr != nil {
 		return nil, "", "", "", "", connect.NewError(connect.CodeUnavailable,
 			fmt.Errorf("failed to connect to remote %q: %w", resolvedRemote.Name, dialErr))
@@ -348,7 +349,7 @@ func (h *Handler) setupRemoteApprovalHooks(instance *instancepkg.Instance, rootD
 // user, base_path, identity_ref) -- ssh-remote-workspaces Phase 4, Task
 // 4.2.1b. It does not dial anything; that's the mode-specific block in
 // CreateSession below (Task 4.2.1c), which pairs this data with a dialed
-// *tmux.SSHRunner into a single session.RemoteExecutionTarget in one atomic
+// *sshtransport.SSHRunner into a single session.RemoteExecutionTarget in one atomic
 // step.
 //
 // Returns (nil, nil) when msg.Remote is unset or names no remote (the

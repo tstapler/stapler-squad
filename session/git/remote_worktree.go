@@ -54,7 +54,7 @@ func WithRemoteHost(host string) RemoteWorktreeOption {
 }
 
 // NewRemoteWorktreeOps constructs a RemoteWorktreeOps that runs every command
-// through runner (a *tmux.SSHRunner in production, tmux.LocalRunner{} or a
+// through runner (a *sshtransport.SSHRunner in production, tmux.LocalRunner{} or a
 // test spy in tests). Git operations go through the backend (WithGitBackend);
 // non-git commands (test -d, the sh -c init script) use runner directly.
 func NewRemoteWorktreeOps(runner tmux.CommandRunner, opts ...RemoteWorktreeOption) *RemoteWorktreeOps {
@@ -235,7 +235,7 @@ func requiredGitEnvExports() string {
 // (a project path is not attacker-controlled in practice, but quoting it
 // defensively costs nothing and avoids depending on that assumption staying
 // true). Deliberately package-local rather than reusing session/tmux's
-// unexported shellQuote in ssh_runner.go, which this package cannot import
+// unexported shellQuote in session/sshtransport/ssh_runner.go, which this package cannot import
 // (unexported, different package) — same escaping strategy (close quote,
 // literal quote, reopen quote), independently duplicated because it is a
 // three-line pure function, not worth promoting to a shared export for one

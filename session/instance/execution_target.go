@@ -9,6 +9,7 @@ package instance
 
 import (
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -83,7 +84,7 @@ type RemoteTarget struct {
 	IdentityRef string
 }
 
-// RemoteExecutionTarget pairs a resolved RemoteTarget with the *tmux.SSHRunner
+// RemoteExecutionTarget pairs a resolved RemoteTarget with the *sshtransport.SSHRunner
 // already dialed to it. Fields are unexported and only settable via
 // NewRemoteExecutionTarget so this value can never exist half-built (a
 // Target with no matching Runner, or vice versa) -- the single-step
@@ -96,7 +97,7 @@ type RemoteTarget struct {
 // this type exists to rule out.
 type RemoteExecutionTarget struct {
 	target RemoteTarget
-	runner *tmux.SSHRunner
+	runner *sshtransport.SSHRunner
 }
 
 // NewRemoteExecutionTarget constructs a RemoteExecutionTarget from a resolved
@@ -105,7 +106,7 @@ type RemoteExecutionTarget struct {
 // IsRemote() report true while Runner() silently returns a nil
 // tmux.CommandRunner, exactly the half-built state this type exists to make
 // unrepresentable.
-func NewRemoteExecutionTarget(target RemoteTarget, runner *tmux.SSHRunner) RemoteExecutionTarget {
+func NewRemoteExecutionTarget(target RemoteTarget, runner *sshtransport.SSHRunner) RemoteExecutionTarget {
 	if runner == nil {
 		panic("session: NewRemoteExecutionTarget called with a nil runner")
 	}
@@ -115,7 +116,7 @@ func NewRemoteExecutionTarget(target RemoteTarget, runner *tmux.SSHRunner) Remot
 // IsRemote implements ExecutionTarget. Always true.
 func (t RemoteExecutionTarget) IsRemote() bool { return true }
 
-// Runner implements ExecutionTarget, returning the dialed *tmux.SSHRunner
+// Runner implements ExecutionTarget, returning the dialed *sshtransport.SSHRunner
 // (which itself implements tmux.CommandRunner).
 func (t RemoteExecutionTarget) Runner() tmux.CommandRunner { return t.runner }
 

@@ -3,8 +3,15 @@ package tmux
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+)
+
+// ctx budgets for remote commands: existence checks and long ones (worktree add).
+const (
+	ExistenceCheckTimeout     = 3 * time.Second
+	LongRunningCommandTimeout = 60 * time.Second
 )
 
 // CommandRunner is the execution seam between session/tmux (and session/git,

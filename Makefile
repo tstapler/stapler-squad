@@ -732,8 +732,8 @@ test: gen-gate-strict ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run
 	# default is 10s -- see session/tmux/tmux.go's sessionCreateTimeoutDefault).
 	# testutil also forks real tmux subprocesses (TestRealTmuxSessionLifecycle) and
 	# hit the same contention under full-suite load -- included in the -p 1 group.
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -p 1 ./session ./session/mux ./session/sshtransport ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/sshtransport|session/tmux|testutil)$$')
 endif
 
 test-verbose: ensure-tools proto-gen ## Run tests with verbose output
@@ -768,8 +768,8 @@ test-coverage: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests 
 	# Same tmux-contention root cause as the test target above -- see its comment.
 	# Split into two invocations and merge the resulting coverage profiles since
 	# go test only writes one -coverprofile per invocation.
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -p 1 -cover -coverprofile=coverage.tmux.out ./session ./session/mux ./session/tmux ./testutil
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -cover -coverprofile=coverage.rest.out $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -p 1 -cover -coverprofile=coverage.tmux.out ./session ./session/mux ./session/sshtransport ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -cover -coverprofile=coverage.rest.out $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/sshtransport|session/tmux|testutil)$$')
 	head -n 1 coverage.tmux.out > coverage.out
 	tail -q -n +2 coverage.tmux.out coverage.rest.out >> coverage.out
 	rm -f coverage.tmux.out coverage.rest.out
@@ -826,8 +826,8 @@ ifneq ($(BUILD_SYSTEM),bazel)
 test-race: gen-gate-strict ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with race detector enabled, skipping slow integration tests (Bazel: bazel test --config=race)
 	@echo "[build-system=make] gotestsum -- -race -short -timeout=20m (see Makefile test-race)"
 	# Same tmux-contention root cause as the test target above -- see its comment.
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m -p 1 ./session ./session/mux ./session/sshtransport ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/sshtransport|session/tmux|testutil)$$')
 endif
 
 ifneq ($(BUILD_SYSTEM),bazel)

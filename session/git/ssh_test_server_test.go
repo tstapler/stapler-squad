@@ -16,7 +16,7 @@ import (
 
 // testSSHServer is a minimal in-process SSH server backing this package's
 // remote_worktree_test.go tests. It is session/git's own equivalent of
-// session/tmux's testSSHServer (session/tmux/ssh_test_server_test.go) rather
+// session/sshtransport's testSSHServer (session/sshtransport/ssh_test_server_test.go) rather
 // than a reuse of it: that file is a _test.go file, so it is not importable
 // across packages (Go test-file visibility), and its handler dispatches a
 // small fixed set of builtin verbs (echo/cat/sleep/false) to avoid depending
@@ -55,7 +55,7 @@ func startTestSSHServer(t *testing.T) *testSSHServer {
 		Handler: testGitSSHHandler,
 		PublicKeyHandler: func(gliderssh.Context, gliderssh.PublicKey) bool {
 			// Real identity resolution (Phase 3) is out of scope for these
-			// tests -- mirrors session/tmux's test server, which accepts any
+			// tests -- mirrors session/sshtransport's test server, which accepts any
 			// client public key for the same reason.
 			return true
 		},
@@ -72,10 +72,10 @@ func startTestSSHServer(t *testing.T) *testSSHServer {
 }
 
 // testGitSSHHandler executes the exact raw command line the client sent
-// (session.RawCommand(), not the shlex-split session.Command() session/tmux's
+// (session.RawCommand(), not the shlex-split session.Command() session/sshtransport's
 // handler dispatches on) through a real `sh -c`, so RemoteWorktreeOps's
 // `cd <dir> && 'git' 'worktree' 'add' ...`-shaped commands (buildRemoteCommand
-// in session/tmux/ssh_runner.go) and its InitializeProjectDirectory
+// in session/sshtransport/ssh_runner.go) and its InitializeProjectDirectory
 // `sh -c <script>` commands run exactly as they would against a real remote
 // host's login shell, using the git/mkdir/test/sh binaries already on the
 // machine running `go test` -- there is no meaningful way to unit-test real
@@ -100,7 +100,7 @@ func testGitSSHHandler(s gliderssh.Session) {
 // testClientAuth returns an ssh.AuthMethod for a throwaway client keypair.
 // The test server's PublicKeyHandler accepts any key, so the key itself is
 // never verified -- it exists only so the client completes SSH's publickey
-// auth flow. Mirrors session/tmux/ssh_test_server_test.go's helper of the
+// auth flow. Mirrors session/sshtransport/ssh_test_server_test.go's helper of the
 // same name (unexported, package-local, so no cross-package reuse is
 // possible -- see this file's top-of-file doc comment).
 func testClientAuth(t *testing.T) ssh.AuthMethod {

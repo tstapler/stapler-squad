@@ -21,7 +21,7 @@ import (
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	testutil "github.com/tstapler/stapler-squad/testutil/socket"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -110,7 +110,7 @@ func directStreamlocalHandler(_ *gliderssh.Server, _ *ssh.ServerConn, newChan ss
 // direct-streamlocal channel opens, standing in for a real sshd on the
 // "remote host" side of RemoteApprovalRelay's tests. Deliberately a
 // separate, trimmed-down helper rather than a reuse of
-// session/tmux/ssh_test_server_test.go's testSSHServer: that file's helpers
+// session/sshtransport/ssh_test_server_test.go's testSSHServer: that file's helpers
 // are unexported and live in a _test.go file in a different package
 // (tmux), so this package can't import them.
 type approvalRelayTestServer struct {
@@ -238,14 +238,14 @@ func listenApprovalExchange(socketPath string, payload relayedApprovalPayload) (
 	return resultCh, func() { _ = ln.Close() }, nil
 }
 
-func newTestPool(t *testing.T) *tmux.SSHClientPool {
+func newTestPool(t *testing.T) *sshtransport.SSHClientPool {
 	t.Helper()
-	return tmux.NewSSHClientPool()
+	return sshtransport.NewSSHClientPool()
 }
 
-func poolTargetFor(t *testing.T, srv *approvalRelayTestServer, name string) (tmux.SSHTarget, ssh.ClientConfig) {
+func poolTargetFor(t *testing.T, srv *approvalRelayTestServer, name string) (sshtransport.SSHTarget, ssh.ClientConfig) {
 	t.Helper()
-	return tmux.SSHTarget{Name: name, Addr: srv.Addr}, testClientConfig(t, srv.HostKey)
+	return sshtransport.SSHTarget{Name: name, Addr: srv.Addr}, testClientConfig(t, srv.HostKey)
 }
 
 // fakePermissionRequestHandler is a same-package test double for
@@ -343,7 +343,7 @@ func TestNewRemoteApprovalRelay_ValidatesArgs(t *testing.T) {
 
 	tests := []struct {
 		name            string
-		pool            *tmux.SSHClientPool
+		pool            *sshtransport.SSHClientPool
 		handler         PermissionRequestHandler
 		remoteName      string
 		basePath        string

@@ -20,7 +20,7 @@ func pkgs(rel ...string) []string {
 }
 
 func fixture() []string {
-	return pkgs("config", "server", "server/services", "session", "session/mux", "session/tmux",
+	return pkgs("config", "server", "server/services", "session", "session/mux", "session/sshtransport", "session/tmux",
 		"session/tmux/embed", "session/artifacts", "session/backlog", "session/backlog/chains",
 		"session/backlogstore", "session/unfinished", "session/unfinished/repostate", "session/brandnew")
 }

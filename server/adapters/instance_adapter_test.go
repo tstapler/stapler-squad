@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -16,7 +17,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestRateLimitStateToProto_AllStates(t *testing.T) {
@@ -151,7 +151,7 @@ func TestInstanceToProto_RemoteName_EmptyForLocal(t *testing.T) {
 // name on the proto Session -- the data source for the SessionCard host
 // badge (ssh-remote-workspaces Epic 6.2).
 func TestInstanceToProto_RemoteName_SetForRemote(t *testing.T) {
-	runner := tmux.NewSSHRunner(tmux.SSHTarget{Name: "prod-box", Addr: "prod-box.example.com:22"}, ssh.ClientConfig{})
+	runner := sshtransport.NewSSHRunner(sshtransport.SSHTarget{Name: "prod-box", Addr: "prod-box.example.com:22"}, ssh.ClientConfig{})
 	target := instance.NewRemoteExecutionTarget(instance.RemoteTarget{Name: "prod-box"}, runner)
 	inst := &instance.Instance{ExecutionTarget: target}
 	proto := InstanceToProto(inst, nil)

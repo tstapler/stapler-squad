@@ -1,4 +1,4 @@
-package tmux
+package sshtransport
 
 import (
 	"errors"
@@ -69,7 +69,7 @@ func defaultSSHBackoffConfig() sshBackoffConfig {
 // executor/circuit_breaker.go's Clock interface. Defined locally (rather
 // than importing executor.Clock) since it's a single-method interface with
 // no other shared behavior -- a little duplication here is cheaper than a
-// cross-package dependency for one method, and keeps session/tmux's SSH
+// cross-package dependency for one method, and keeps the SSH
 // backoff independent of executor's command-execution-focused package.
 type clock interface {
 	Now() time.Time

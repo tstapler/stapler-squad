@@ -1,20 +1,36 @@
-package tmux
+package sshtransport
 
 import (
 	"context"
+	"io"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// startCountingRunner counts piped Start calls: control mode on a remote
+// session must go through the runner, not a local subprocess.
+type startCountingRunner struct {
+	tmux.CommandRunner
+	starts atomic.Int32
+}
+
+func (r *startCountingRunner) Start(ctx context.Context, dir, name string, args ...string) (io.WriteCloser, io.ReadCloser, func() error, error) {
+	r.starts.Add(1)
+	return r.CommandRunner.Start(ctx, dir, name, args...)
+}
 
 // TestStartRemoteControlMode_TerminalRoundTrip is Task 4.4.1g's integration
 // test: a client (SendInputViaControlMode, standing in for a browser client
 // typing a character over StreamTerminal/streamViaControlMode) sends a byte
 // through a REMOTE tmux control-mode connection (real in-process test sshd +
-// real tmux server, per this package's existing tmux_remote_test.go
+// real tmux server, per this package's remote_session_test.go
 // pattern), and the resulting output is verified two independent ways:
 //
 //  1. It arrives back over the SAME control-mode connection's subscriber
@@ -39,14 +55,15 @@ func TestStartRemoteControlMode_TerminalRoundTrip(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = safeexec.CommandContext(ctx, Binary(), "-L", socket, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, tmux.Binary(), "-L", socket, "kill-server").Run()
 	})
 
 	// "cat" as the pane's program: it echoes anything written to its stdin
 	// straight back out to its stdout (the pane), so a byte sent via
 	// SendInputViaControlMode is guaranteed to produce visible pane output,
 	// independent of any real shell's own line-editing/echo behavior.
-	sess := NewTmuxSessionWithServerSocket("cm-roundtrip-session", "cat", TmuxPrefix, socket, WithCommandRunner(runner), WithRegistry(nil))
+	recorder := &startCountingRunner{CommandRunner: runner}
+	sess := tmux.NewTmuxSessionWithServerSocket("cm-roundtrip-session", "cat", tmux.TmuxPrefix, socket, tmux.WithCommandRunner(recorder), tmux.WithRegistry(nil))
 
 	ctx := context.Background()
 	workDir := t.TempDir()
@@ -63,11 +80,8 @@ func TestStartRemoteControlMode_TerminalRoundTrip(t *testing.T) {
 		}
 	}()
 
-	if sess.controlModeRemoteProc == nil {
-		t.Fatal("StartControlMode() did not populate controlModeRemoteProc for a remote session")
-	}
-	if sess.controlModeCmd != nil {
-		t.Fatal("StartControlMode() populated the local-only controlModeCmd for a remote session")
+	if got := recorder.starts.Load(); got != 1 {
+		t.Fatalf("StartControlMode() started %d piped commands on the remote runner, want 1", got)
 	}
 
 	subscriberID, updateCh := sess.SubscribeToControlModeUpdates()
@@ -110,8 +124,8 @@ waitForEcho:
 	})
 	verifyRunner := newTestSSHRunner(t, "cm-roundtrip-verify", srv.Addr, cfg, WithSSHClientPool(verifyPool))
 
-	captureArgs := Socket(socket).Args("capture-pane", "-p", "-t", sess.GetSanitizedName())
-	captureName, captureArgs := wrapRemoteCommand(Binary(), captureArgs)
+	captureArgs := tmux.Socket(socket).Args("capture-pane", "-p", "-t", sess.GetSanitizedName())
+	captureName, captureArgs := tmux.WrapRemoteCommand(tmux.Binary(), captureArgs)
 
 	deadlineCapture := time.Now().Add(10 * time.Second)
 	captureTick := time.NewTicker(50 * time.Millisecond)

@@ -245,7 +245,7 @@ func TestSetIdentity_FailsLoud_When_NoKeyringBackendAvailable(t *testing.T) {
 // must not block CreateSession forever -- it must return a context-deadline
 // error at its timeout budget. Uses a small injected budget (via
 // withIdentityTimeout) instead of the production 5s so this test runs fast;
-// the mechanism under test (ctx-racing, per session/tmux/ssh_runner.go's
+// the mechanism under test (ctx-racing, per session/sshtransport/ssh_runner.go's
 // newSession technique) is identical regardless of the budget's size.
 func TestGetIdentity_ReturnsDeadlineError_When_KeyringHangs(t *testing.T) {
 	release := make(chan struct{})

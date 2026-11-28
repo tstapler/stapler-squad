@@ -13,13 +13,14 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/backend/cli"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // A tmux.CommandRunner satisfies backend.Runner with no adapter (plan Story 1.1.2).
 var (
 	_ backend.Runner = tmux.LocalRunner{}
-	_ backend.Runner = (*tmux.SSHRunner)(nil)
+	_ backend.Runner = (*sshtransport.SSHRunner)(nil)
 	// Locate takes any tmux.CommandRunner as-is (plan Story 1.1.5).
 	_ backend.Locatable = tmux.CommandRunner(nil)
 )

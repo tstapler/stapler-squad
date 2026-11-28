@@ -13,13 +13,13 @@ import (
 	gliderssh "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 )
 
 // healthProberTestServer is a minimal in-process SSH server backing every
 // RemoteHealthProber test in this file. Deliberately a separate,
 // trimmed-down helper rather than a reuse of
-// session/tmux/ssh_test_server_test.go's testSSHServer or this file's own
+// session/sshtransport/ssh_test_server_test.go's testSSHServer or this file's own
 // sibling approvalRelayTestServer: both live in different packages/files
 // with unexported helpers this file can't reach for free, and this prober
 // only ever needs to run a single command ("true", via
@@ -156,20 +156,20 @@ func (f *fakeHealthPublisher) waitForState(t *testing.T, want RemoteConnectionSt
 	}
 }
 
-func newHealthProberTestPool(t *testing.T) *tmux.SSHClientPool {
+func newHealthProberTestPool(t *testing.T) *sshtransport.SSHClientPool {
 	t.Helper()
-	return tmux.NewSSHClientPool()
+	return sshtransport.NewSSHClientPool()
 }
 
 func TestNewRemoteHealthProber_ValidatesArgs(t *testing.T) {
 	pool := newHealthProberTestPool(t)
-	runner := tmux.NewSSHRunner(tmux.SSHTarget{Name: "r", Addr: "unused:22"}, ssh.ClientConfig{}, tmux.WithSSHClientPool(pool))
+	runner := sshtransport.NewSSHRunner(sshtransport.SSHTarget{Name: "r", Addr: "unused:22"}, ssh.ClientConfig{}, sshtransport.WithSSHClientPool(pool))
 	publisher := newFakeHealthPublisher()
 
 	tests := []struct {
 		name       string
-		pool       *tmux.SSHClientPool
-		runner     *tmux.SSHRunner
+		pool       *sshtransport.SSHClientPool
+		runner     *sshtransport.SSHRunner
 		remoteName string
 		publisher  HealthEventPublisher
 	}{
@@ -195,7 +195,7 @@ func TestNewRemoteHealthProber_ValidatesArgs(t *testing.T) {
 func TestRemoteHealthProber_PublishesConnectedWhenAlreadyPooled(t *testing.T) {
 	srv := startHealthProberTestServer(t)
 	pool := newHealthProberTestPool(t)
-	target := tmux.SSHTarget{Name: "connected-remote", Addr: srv.Addr}
+	target := sshtransport.SSHTarget{Name: "connected-remote", Addr: srv.Addr}
 	cfg := healthProberTestClientConfig(t, srv.HostKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -205,7 +205,7 @@ func TestRemoteHealthProber_PublishesConnectedWhenAlreadyPooled(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	runner := tmux.NewSSHRunner(target, cfg, tmux.WithSSHClientPool(pool))
+	runner := sshtransport.NewSSHRunner(target, cfg, sshtransport.WithSSHClientPool(pool))
 	publisher := newFakeHealthPublisher()
 	prober, err := NewRemoteHealthProber(pool, runner, target.Name, publisher, withLivenessCheckInterval(time.Hour))
 	if err != nil {
@@ -236,7 +236,7 @@ func TestRemoteHealthProber_PublishesConnectedWhenAlreadyPooled(t *testing.T) {
 func TestRemoteHealthProber_DisconnectTriggersEventWithinOneTick(t *testing.T) {
 	srv := startHealthProberTestServer(t)
 	pool := newHealthProberTestPool(t)
-	target := tmux.SSHTarget{Name: "disconnect-remote", Addr: srv.Addr}
+	target := sshtransport.SSHTarget{Name: "disconnect-remote", Addr: srv.Addr}
 	cfg := healthProberTestClientConfig(t, srv.HostKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -247,7 +247,7 @@ func TestRemoteHealthProber_DisconnectTriggersEventWithinOneTick(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	runner := tmux.NewSSHRunner(target, cfg, tmux.WithSSHClientPool(pool))
+	runner := sshtransport.NewSSHRunner(target, cfg, sshtransport.WithSSHClientPool(pool))
 	publisher := newFakeHealthPublisher()
 	// A liveness interval far longer than this test's own timeout budget:
 	// if a disconnected event arrives anyway, it can only have come from
@@ -281,7 +281,7 @@ func TestRemoteHealthProber_DisconnectTriggersEventWithinOneTick(t *testing.T) {
 func TestRemoteHealthProber_ReconnectAfterHardDisconnectRestoresConnected(t *testing.T) {
 	srv := startHealthProberTestServer(t)
 	pool := newHealthProberTestPool(t)
-	target := tmux.SSHTarget{Name: "reconnect-remote", Addr: srv.Addr}
+	target := sshtransport.SSHTarget{Name: "reconnect-remote", Addr: srv.Addr}
 	cfg := healthProberTestClientConfig(t, srv.HostKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -292,7 +292,7 @@ func TestRemoteHealthProber_ReconnectAfterHardDisconnectRestoresConnected(t *tes
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	runner := tmux.NewSSHRunner(target, cfg, tmux.WithSSHClientPool(pool))
+	runner := sshtransport.NewSSHRunner(target, cfg, sshtransport.WithSSHClientPool(pool))
 	publisher := newFakeHealthPublisher()
 	prober, err := NewRemoteHealthProber(pool, runner, target.Name, publisher, withLivenessCheckInterval(time.Hour))
 	if err != nil {
@@ -331,7 +331,7 @@ func TestRemoteHealthProber_ReconnectAfterHardDisconnectRestoresConnected(t *tes
 func TestRemoteHealthProber_LivenessFailureTransitionsToReconnecting(t *testing.T) {
 	srv := startHealthProberTestServer(t)
 	pool := newHealthProberTestPool(t)
-	target := tmux.SSHTarget{Name: "flaky-remote", Addr: srv.Addr}
+	target := sshtransport.SSHTarget{Name: "flaky-remote", Addr: srv.Addr}
 	cfg := healthProberTestClientConfig(t, srv.HostKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -341,7 +341,7 @@ func TestRemoteHealthProber_LivenessFailureTransitionsToReconnecting(t *testing.
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	runner := tmux.NewSSHRunner(target, cfg, tmux.WithSSHClientPool(pool))
+	runner := sshtransport.NewSSHRunner(target, cfg, sshtransport.WithSSHClientPool(pool))
 	publisher := newFakeHealthPublisher()
 	prober, err := NewRemoteHealthProber(
 		pool, runner, target.Name, publisher,
@@ -370,7 +370,7 @@ func TestRemoteHealthProber_LivenessFailureTransitionsToReconnecting(t *testing.
 func TestRemoteHealthProber_StopIsIdempotentAndReturnsPromptly(t *testing.T) {
 	srv := startHealthProberTestServer(t)
 	pool := newHealthProberTestPool(t)
-	target := tmux.SSHTarget{Name: "stop-remote", Addr: srv.Addr}
+	target := sshtransport.SSHTarget{Name: "stop-remote", Addr: srv.Addr}
 	cfg := healthProberTestClientConfig(t, srv.HostKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -380,7 +380,7 @@ func TestRemoteHealthProber_StopIsIdempotentAndReturnsPromptly(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	runner := tmux.NewSSHRunner(target, cfg, tmux.WithSSHClientPool(pool))
+	runner := sshtransport.NewSSHRunner(target, cfg, sshtransport.WithSSHClientPool(pool))
 	publisher := newFakeHealthPublisher()
 	prober, err := NewRemoteHealthProber(pool, runner, target.Name, publisher, withLivenessCheckInterval(time.Hour))
 	if err != nil {
@@ -410,7 +410,7 @@ func TestRemoteHealthProber_StopIsIdempotentAndReturnsPromptly(t *testing.T) {
 func TestRemoteHealthProber_NoOpTransitionDoesNotRepublish(t *testing.T) {
 	srv := startHealthProberTestServer(t)
 	pool := newHealthProberTestPool(t)
-	target := tmux.SSHTarget{Name: "no-flood-remote", Addr: srv.Addr}
+	target := sshtransport.SSHTarget{Name: "no-flood-remote", Addr: srv.Addr}
 	cfg := healthProberTestClientConfig(t, srv.HostKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -420,7 +420,7 @@ func TestRemoteHealthProber_NoOpTransitionDoesNotRepublish(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	runner := tmux.NewSSHRunner(target, cfg, tmux.WithSSHClientPool(pool))
+	runner := sshtransport.NewSSHRunner(target, cfg, sshtransport.WithSSHClientPool(pool))
 	publisher := newFakeHealthPublisher()
 	prober, err := NewRemoteHealthProber(
 		pool, runner, target.Name, publisher,
@@ -457,7 +457,7 @@ func TestRemoteHealthProber_NoOpTransitionDoesNotRepublish(t *testing.T) {
 func TestRemoteHealthProber_CheckLiveness_NoOpAfterCtxCancelled(t *testing.T) {
 	srv := startHealthProberTestServer(t)
 	pool := newHealthProberTestPool(t)
-	target := tmux.SSHTarget{Name: "cancelled-ctx-remote", Addr: srv.Addr}
+	target := sshtransport.SSHTarget{Name: "cancelled-ctx-remote", Addr: srv.Addr}
 	cfg := healthProberTestClientConfig(t, srv.HostKey)
 
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -466,7 +466,7 @@ func TestRemoteHealthProber_CheckLiveness_NoOpAfterCtxCancelled(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	runner := tmux.NewSSHRunner(target, cfg, tmux.WithSSHClientPool(pool))
+	runner := sshtransport.NewSSHRunner(target, cfg, sshtransport.WithSSHClientPool(pool))
 	publisher := newFakeHealthPublisher()
 	prober, err := NewRemoteHealthProber(
 		pool, runner, target.Name, publisher,

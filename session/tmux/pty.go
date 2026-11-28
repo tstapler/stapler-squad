@@ -20,7 +20,7 @@ type PtyFactory interface {
 
 // PtySession abstracts a live, resizable, bidirectional pseudo-terminal connection --
 // the shared shape both a local raw-PTY attach (*os.File, via session's localPTYSession)
-// and a remote SSH-backed attach (session/tmux/ssh_runner.go's sshPtySession, Task
+// and a remote SSH-backed attach (session/sshtransport/ssh_runner.go's sshPtySession, Task
 // 4.4.1b) present to callers that only need to read/write terminal bytes and resize.
 // It is deliberately NOT what PtyFactory.Start/StartWithSize return (*os.File) --
 // see PtyFactory's doc comment below for why that interface itself is untouched.
@@ -42,7 +42,7 @@ type PtySession interface {
 // struct fields protected by ptmxMu) -- retrofitting that surface to an
 // interface is out of scope for this epic's blast radius and would risk the
 // local-only streaming paths this project must leave unmodified. See
-// session/tmux/ssh_runner.go's SSHPtyFactory for the concrete
+// session/sshtransport/ssh_runner.go's SSHPtyFactory for the concrete
 // RequestPty+Start-based implementation.
 type RemotePtyFactory interface {
 	// StartPty opens a new SSH channel on the remote host, requests a PTY of

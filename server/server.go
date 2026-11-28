@@ -73,6 +73,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sessionpr"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/sweeper"
@@ -847,7 +848,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 		// Start one RemoteHealthProber per configured remote (ssh-remote-workspaces
 		// Epic 6.4, Task 6.4.1c), closing the loop for Epic 6.2's connection
-		// indicator: each prober shares tmux.DefaultSSHClientPool() -- the SAME
+		// indicator: each prober shares sshtransport.DefaultSSHClientPool() -- the SAME
 		// process-wide pool a session's own SSHRunner/RemoteApprovalRelay for
 		// that remote already uses -- so this never opens a dedicated connection
 		// of its own (BuildRemoteHealthProber's doc comment). healthPublisher is
@@ -867,7 +868,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		remotesCfg := config.LoadConfig().Remotes
 		for i := range remotesCfg {
 			rc := &remotesCfg[i]
-			prober, proberErr := remote.BuildRemoteHealthProber(serverCtx, rc, tmux.DefaultSSHClientPool(), knownHosts, keyStore, healthPublisher)
+			prober, proberErr := remote.BuildRemoteHealthProber(serverCtx, rc, sshtransport.DefaultSSHClientPool(), knownHosts, keyStore, healthPublisher)
 			if proberErr != nil {
 				log.Error("failed to build RemoteHealthProber, connection indicator will not update live for this remote", "remote", rc.Name, "err", proberErr)
 				continue

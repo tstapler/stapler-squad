@@ -5,13 +5,13 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/sshtransport"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/tstapler/stapler-squad/session/git/backend"
-	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 type attachRecorder struct {
@@ -35,7 +35,7 @@ func (r *attachRecorder) CurrentBranch(_ context.Context, loc backend.RepoLocati
 
 func attachRemoteWorktree(t *testing.T, rec *attachRecorder) (*Instance, RemoteExecutionTarget) {
 	t.Helper()
-	runner := tmux.NewSSHRunner(tmux.SSHTarget{Name: "box", Addr: "127.0.0.1:1"}, ssh.ClientConfig{})
+	runner := sshtransport.NewSSHRunner(sshtransport.SSHTarget{Name: "box", Addr: "127.0.0.1:1"}, ssh.ClientConfig{})
 	target := NewRemoteExecutionTarget(RemoteTarget{Name: "box", Host: "127.0.0.1:1"}, runner)
 	inst := &Instance{
 		Title:            "remote-attach",

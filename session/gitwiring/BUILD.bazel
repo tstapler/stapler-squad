@@ -26,6 +26,7 @@ go_library(
         "//session/git/backend/gogit",
         "//session/git/native/capability",
         "//session/gitprovider",
+        "//session/sshtransport",
         "//session/tmux",
         "//telemetry",
         "@io_opentelemetry_go_otel//attribute",

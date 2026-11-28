@@ -142,8 +142,8 @@ func rawGitCall(call *ast.CallExpr, pass *analysis.Pass) (string, bool) {
 			return fn.Pkg().Name() + "." + fn.Name(), true
 		}
 	case (fn.Name() == "Run" || fn.Name() == "RunStdout") && sig.Recv() != nil && fn.Pkg() != nil &&
-		(isPackage(fn.Pkg(), "/session/tmux") || isPackage(fn.Pkg(), "/session/git/backend")):
-		// tmux.CommandRunner / backend.Runner / backend.StdoutRunner shape:
+		(isPackage(fn.Pkg(), "/session/tmux") || isPackage(fn.Pkg(), "/session/sshtransport") || isPackage(fn.Pkg(), "/session/git/backend")):
+		// tmux.CommandRunner / sshtransport.SSHRunner / backend.Runner / backend.StdoutRunner shape:
 		// Run(ctx, dir, name string, args ...string).
 		if sig.Params().Len() == 4 && sig.Variadic() && isStringParam(sig, 1) && isStringParam(sig, 2) &&
 			isGitArg(call, 2, pass) {
