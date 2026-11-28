@@ -988,7 +988,7 @@ func (i *Instance) KillExternalSession() error {
 // HasUpdated reports whether terminal content has changed since the last check.
 // Returns (updated, hasPrompt) and side-effects terminal timestamps on change.
 func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
-	if !i.started.Load() || i.liveStatus() == domain.Paused {
+	if !i.started.Load() || i.Snapshot().Status == domain.Paused {
 		return false, false
 	}
 
@@ -1029,7 +1029,7 @@ func (i *Instance) Attach() (chan struct{}, error) {
 
 // SetPreviewSize sets the detached terminal dimensions for preview rendering.
 func (i *Instance) SetPreviewSize(width, height int) error {
-	if !i.started.Load() || i.liveStatus() == domain.Paused {
+	if !i.started.Load() || i.Snapshot().Status == domain.Paused {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
 			"is paused")
 	}
@@ -1111,7 +1111,7 @@ func (i *Instance) TmuxSessionExists() bool {
 // reconcileSessions Hibernated-but-alive and Crashed-but-alive cases exist as the
 // safety net for exactly that scenario.
 func (i *Instance) TmuxAlive() bool {
-	if status := i.liveStatus(); status == domain.Paused || status == domain.Stopped || !i.started.Load() || !i.pm().HasSession() {
+	if status := i.Snapshot().Status; status == domain.Paused || status == domain.Stopped || !i.started.Load() || !i.pm().HasSession() {
 		return false
 	}
 	return i.pm().IsAlive()
@@ -1418,7 +1418,7 @@ func (i *Instance) ResizePTYContext(ctx context.Context, cols, rows int) error {
 // This is a simple wrapper around TmuxSession.CapturePaneContent() for compatibility
 // with the terminal WebSocket handlers.
 func (i *Instance) CapturePaneContent() (string, error) {
-	if !i.started.Load() || i.liveStatus() == domain.Paused {
+	if !i.started.Load() || i.Snapshot().Status == domain.Paused {
 		return "", streamhub.ErrSessionNotStarted
 	}
 	return i.pm().CapturePaneContent()
@@ -1437,7 +1437,7 @@ const terminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-l
 // non-tmux-backed instances (there is no fast lane to reach there, and the
 // plain call is a correct, if unoptimized, behavior).
 func (i *Instance) CapturePaneContentPriority() (string, error) {
-	if !i.started.Load() || i.liveStatus() == domain.Paused {
+	if !i.started.Load() || i.Snapshot().Status == domain.Paused {
 		return "", streamhub.ErrSessionNotStarted
 	}
 	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
@@ -1744,7 +1744,7 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 // skip-and-retry branch (hub.go) couldn't recognize, plus logged a spurious
 // WARN on every restart.
 func (i *Instance) SetWindowSize(cols, rows int) error {
-	if !i.started.Load() || i.liveStatus() == domain.Paused {
+	if !i.started.Load() || i.Snapshot().Status == domain.Paused {
 		return streamhub.ErrSessionNotStarted
 	}
 	if i.pm().HasSession() {
@@ -1813,7 +1813,7 @@ func BuildSubmittableInputAndSubmit(input string) string {
 
 // SendKeys sends keys to the tmux session.
 func (i *Instance) SendKeys(keys string) error {
-	if !i.started.Load() || i.liveStatus() == domain.Paused {
+	if !i.started.Load() || i.Snapshot().Status == domain.Paused {
 		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	_, err := i.pm().SendKeys(keys)
@@ -1824,7 +1824,7 @@ func (i *Instance) SendKeys(keys string) error {
 // that provably wrote nothing (0, err) from one that may have written. Its only
 // caller is SubmitReplyOnce.
 func (i *Instance) SendKeysN(keys string) (int, error) {
-	if !i.started.Load() || i.liveStatus() == domain.Paused {
+	if !i.started.Load() || i.Snapshot().Status == domain.Paused {
 		return 0, fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	return i.pm().SendKeys(keys)
@@ -1833,7 +1833,7 @@ func (i *Instance) SendKeysN(keys string) (int, error) {
 // SendInputViaControlMode sends raw bytes through the existing control mode connection,
 // avoiding the subprocess spawn overhead and timeout risk of exec.CommandContext.
 func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	if !i.started.Load() || i.liveStatus() == domain.Paused {
+	if !i.started.Load() || i.Snapshot().Status == domain.Paused {
 		return fmt.Errorf("cannot send input to instance that has not been started or is paused")
 	}
 	return i.pm().SendInputViaControlMode(ctx, data)

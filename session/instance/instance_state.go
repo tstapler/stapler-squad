@@ -76,8 +76,8 @@ func (i *Instance) liveStatus() domain.Status {
 	return i.Status
 }
 
-// ensureActiveLocked transitions to Active unless already there. The check and the transition
-// share one status read, so a concurrent move to Active is not an invalid Active -> Active edge.
+// ensureActiveLocked transitions to Active, treating an instance already there as success.
+// Not atomic: transitionToLocked validates under RLock and writes under Lock without rechecking.
 func ensureActiveLocked(s *instanceState, ctx context.Context) error {
 	err := transitionToLocked(s, ctx, domain.Active)
 	var invalid domain.ErrInvalidTransition
@@ -312,9 +312,8 @@ func (i *Instance) transitionIf(ctx context.Context, from, to domain.Status, loa
 		if err != nil && loadOnError {
 			s.inst.mu.Lock()
 			s.inst.loadStatus(to)
-			snap := BuildSnapshot(s.inst)
+			s.inst.snapshot.Store(BuildSnapshot(s.inst))
 			s.inst.mu.Unlock()
-			s.inst.snapshot.Store(snap)
 		}
 		return result{err}, nil
 	})

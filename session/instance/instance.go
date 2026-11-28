@@ -1592,7 +1592,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	} else {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
 		reviveOutcome = domain.ReviveOutcomeFreshExpected
-		basePath := i.Path
+		basePath := i.GetPath()
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
 			if i.SessionType != domain.SessionTypeExistingWorktree {
@@ -1888,7 +1888,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		// inert in production — every StartWithCleanup caller is in a _test.go file
 		// (repo-wide grep) — but a future production caller would bypass isolation
 		// safety entirely. Track consolidation under Epic 7.
-		basePath := i.Path
+		basePath := i.GetPath()
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
 			if i.SessionType != domain.SessionTypeExistingWorktree {
@@ -2455,8 +2455,8 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	// Validate the transition before any destructive side effect (kill tmux, remove
 	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
 	// the tmux session and worktree untouched.
-	if !canTransitionLocked(s, domain.Stopped) {
-		return domain.ErrInvalidTransition{From: i.liveStatus(), To: domain.Stopped}
+	if from, ok := canTransitionLocked(s, domain.Stopped); !ok {
+		return domain.ErrInvalidTransition{From: from, To: domain.Stopped}
 	}
 
 	// Fail closed before any side effect — see pauseLocked.

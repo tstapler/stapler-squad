@@ -66,7 +66,76 @@ func TestInstanceStart_should_ReadStatusUnderLock_When_TerminalWriteLandsMidStar
 	assert.Equal(t, domain.Active, inst.GetLifecycleStatus())
 }
 
-// Lifecycle readers of Status must synchronize with writers that bypass the actor. Each
+// idleIOPM answers every pane I/O call without touching the Instance.
+type idleIOPM struct{ hotRestorablePM }
+
+func (idleIOPM) HasUpdated() (bool, bool, string)                      { return false, false, "" }
+func (idleIOPM) CapturePaneContent() (string, error)                   { return "", nil }
+func (idleIOPM) SetDetachedSize(int, int, string) error                { return nil }
+func (idleIOPM) SetWindowSize(int, int) error                          { return nil }
+func (idleIOPM) SendKeys(string) (int, error)                          { return 0, nil }
+func (idleIOPM) SendInputViaControlMode(context.Context, []byte) error { return nil }
+
+// StopController holds i.mu across a controller join; typing and polling must not wait for it.
+func TestInstanceIOGates_should_NotBlock_When_MuIsWriteHeld(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "io-gates", Status: domain.Active, Path: t.TempDir(), IsManaged: true}
+	inst.processManager = idleIOPM{}
+	inst.started.Store(true)
+	FinishInstanceConstruction(inst)
+	gates := map[string]func(){
+		"HasUpdated":                 func() { inst.HasUpdated() },
+		"SetPreviewSize":             func() { _ = inst.SetPreviewSize(80, 24) },
+		"TmuxAlive":                  func() { inst.TmuxAlive() },
+		"CapturePaneContent":         func() { _, _ = inst.CapturePaneContent() },
+		"CapturePaneContentPriority": func() { _, _ = inst.CapturePaneContentPriority() },
+		"SetWindowSize":              func() { _ = inst.SetWindowSize(80, 24) },
+		"SendKeys":                   func() { _ = inst.SendKeys("x") },
+		"SendKeysN":                  func() { _, _ = inst.SendKeysN("x") },
+		"SendInputViaControlMode":    func() { _ = inst.SendInputViaControlMode(context.Background(), []byte("x")) },
+		"GetStatusIconForType":       func() { inst.GetStatusIconForType() },
+		"RepoName":                   func() { _, _ = inst.RepoName() },
+	}
+
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	for name, gate := range gates {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			gate()
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s blocked on i.mu", name)
+		}
+	}
+}
+
+// Creating -> Paused has no edge, which stands in for a transition refused after the from check.
+func TestTransitionIf_should_LoadAndPublishTarget_When_TransitionRefused(t *testing.T) {
+	t.Parallel()
+	for name, loadOnError := range map[string]bool{"load": true, "keep": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{Title: "transition-if-" + name, Status: domain.Creating, Path: t.TempDir()}
+			FinishInstanceConstruction(inst)
+			want := domain.Creating
+			if loadOnError {
+				want = domain.Paused
+			}
+
+			err := inst.transitionIf(context.Background(), domain.Creating, domain.Paused, loadOnError)
+
+			assert.ErrorAs(t, err, &domain.ErrInvalidTransition{})
+			assert.Equal(t, want, inst.liveStatus())
+			assert.Equal(t, want, inst.GetLifecycleStatus(), "snapshot must be republished")
+		})
+	}
+}
+
+// Status readers must synchronize with writers that bypass the actor. Each
 // written status makes the reader return right after its status check.
 func TestInstanceStatusReaders_should_NotRace_When_StatusWrittenOutsideTheReader(t *testing.T) {
 	t.Parallel()

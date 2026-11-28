@@ -327,6 +327,7 @@ func pauseIfWorktreeMissing(instance *Instance) {
 				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
 				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
 				instance.loadStatus(domain.Paused)
+				instance.snapshot.Store(BuildSnapshot(instance))
 			}
 		}
 	}
@@ -381,6 +382,7 @@ func restoreStoppedInstance(instance *Instance, deferStart bool) {
 		if instance.processManager.IsAlive() && !paneExited {
 			log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
 			instance.loadStatus(domain.Active)
+			instance.snapshot.Store(BuildSnapshot(instance))
 			if deferStart {
 				// Leave started=false: the async Step 6 loop will call Start(false)
 				// and hot-attach to this already-live session off the critical path.
