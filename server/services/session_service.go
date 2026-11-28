@@ -19,18 +19,24 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/capacity"
 	"github.com/tstapler/stapler-squad/server/services/checkpointrpc"
 	"github.com/tstapler/stapler-squad/server/services/claudeconfig"
+	"github.com/tstapler/stapler-squad/server/services/debuglogs"
+	"github.com/tstapler/stapler-squad/server/services/errorregistry"
 	"github.com/tstapler/stapler-squad/server/services/fileops"
 	"github.com/tstapler/stapler-squad/server/services/githubrpc"
 	"github.com/tstapler/stapler-squad/server/services/julesrpc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/notifyactions"
 	"github.com/tstapler/stapler-squad/server/services/pathcomplete"
+	"github.com/tstapler/stapler-squad/server/services/projectrpc"
 	"github.com/tstapler/stapler-squad/server/services/prs"
 	"github.com/tstapler/stapler-squad/server/services/reviewqueuerpc"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/sessiondefaults"
+	"github.com/tstapler/stapler-squad/server/services/slashcommands"
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
+	"github.com/tstapler/stapler-squad/server/services/tccrpc"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
+	"github.com/tstapler/stapler-squad/server/services/windowfocus"
 	"github.com/tstapler/stapler-squad/server/services/workflowrpc"
 	"github.com/tstapler/stapler-squad/server/services/workspacedb"
 
@@ -115,7 +121,7 @@ var testTmuxServerSocketCounter uint64
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
 type SessionService struct {
-	tccEnrichment     tccEnrichmentState
+	tccEnrichment     tccrpc.State
 	storage           session.InstanceStore
 	eventBus          *events.EventBus
 	statusManager     *instance.InstanceStatusManager
@@ -208,7 +214,8 @@ type SessionService struct {
 	configSvc       *claudeconfig.ConfigService
 	notificationSvc *notify.NotificationService
 	approvalSvc     *approvals.ApprovalService
-	utilitySvc      *UtilityService
+	debugLogs       *debuglogs.Service
+	windowFocus     *windowfocus.Service
 	rulesSvc        *rules.RulesService
 	// taggingRulesSvc is exposed over ListTaggingRules/UpsertTaggingRule/DeleteTaggingRule
 	// (Phase 5 of the session-classifier-pipeline project). nil-safe: those RPC handlers
@@ -258,7 +265,7 @@ type SessionService struct {
 	pathCompletionSvc *pathcomplete.PathCompletionService
 
 	// slashCommandSvc resolves slash commands from disk and built-ins.
-	slashCommandSvc *SlashCommandService
+	slashCommandSvc *slashcommands.SlashCommandService
 
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *sessiondefaults.DefaultsService
@@ -297,7 +304,7 @@ type SessionService struct {
 	launcherPresetsSvc *sessiondefaults.LauncherPresetsService
 
 	// projectSvc handles Project CRUD RPCs.
-	projectSvc *ProjectService
+	projectSvc *projectrpc.ProjectService
 
 	// checkpointSvc handles CreateCheckpoint/ListCheckpoints/ClearConversationState RPCs.
 	checkpointSvc *checkpointrpc.CheckpointService
@@ -331,7 +338,7 @@ type SessionService struct {
 
 	// errorRegistry persists deduplicated RPC errors to SQLite.
 	// May be nil when wired without an ent-backed storage (e.g. in tests).
-	errorRegistry *ErrorRegistry
+	errorRegistry *errorregistry.ErrorRegistry
 
 	// backlogLifecycleListener is wired to each newly created session so that
 	// backlog item state transitions fire when the session exits.
@@ -838,7 +845,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	approvalSvc := approvals.NewApprovalService(approvalStore)
 	approvalSvc.SetEventBus(eventBus)
 	approvalSvc.SetReviewQueueRemover(reviewQueue)
-	utilitySvc := NewUtilityService(approvalStore)
+	debugLogs := debuglogs.NewService(approvalStore, ServerStartTime)
 
 	// Build rules store, analytics store, and classifier for approval rules service.
 	rulesStore, rulesErr := rules.NewRulesStore(concStorage)
@@ -1002,7 +1009,8 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		configSvc:                   claudeconfig.NewConfigService(),
 		notificationSvc:             notificationSvc,
 		approvalSvc:                 approvalSvc,
-		utilitySvc:                  utilitySvc,
+		debugLogs:                   debugLogs,
+		windowFocus:                 windowfocus.NewService(),
 		rulesSvc:                    rulesSvc,
 		taggingRulesSvc:             taggingRulesSvc,
 		taggingEngine:               taggingEngine,
@@ -1010,14 +1018,14 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		databaseSvc:                 workspacedb.NewDatabaseService(),
 		fileSvc:                     fileops.NewFileService(workspaceSvc),
 		pathCompletionSvc:           pathcomplete.NewPathCompletionService(),
-		slashCommandSvc:             NewSlashCommandService(),
+		slashCommandSvc:             slashcommands.NewSlashCommandService(),
 		defaultsSvc:                 sessiondefaults.NewDefaultsService(),
 		slackConfigSvc:              notify.NewSlackConfigService(notify.NewSlackNotifier()),
 		julesConfigSvc:              julesrpc.NewJulesConfigService(nil, nil, nil),
 		callbackConfigSvc:           webhooks.NewCallbackConfigService(),
 		streamHubRolloutSvc:         streamhubrollout.NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          sessiondefaults.NewLauncherPresetsService(),
-		projectSvc:                  NewProjectService(concStorage),
+		projectSvc:                  projectrpc.NewProjectService(concStorage),
 		checkpointSvc:               checkpointrpc.NewCheckpointService(storage, eventBus),
 		featureFlagSvc:              flagsvc.NewFeatureFlagService(),
 		terminalSvc:                 NewTerminalService(),

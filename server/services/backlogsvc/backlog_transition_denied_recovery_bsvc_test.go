@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
@@ -135,7 +135,7 @@ func TestTransitionDeniedContext_should_RoundTrip(t *testing.T) {
 	_, ok = domain.ParseTransitionDeniedContext("something else")
 	assert.False(t, ok)
 	assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_TRANSITION_DENIED, toProtoStuckReason(domain.StuckReasonTransitionDenied))
-	assert.Equal(t, domain.StuckReasonTransitionDenied, services.FromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_TRANSITION_DENIED))
+	assert.Equal(t, domain.StuckReasonTransitionDenied, adapters.FromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_TRANSITION_DENIED))
 }
 
 const denHeldLog = "item waits on a denied transition, skipping"

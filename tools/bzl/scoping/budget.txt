@@ -46,7 +46,7 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=62 loc=17047 imports=96
+server/services files=52 loc=14239 imports=100
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
@@ -134,6 +134,16 @@ server/services/updatecheck files=1 loc=157 imports=5
 server/services/fileops files=14 loc=2808 imports=8
 server/services/pathcomplete files=1 loc=268 imports=4
 server/services/githubrpc files=5 loc=1542 imports=11
+server/services/debuglogs files=3 loc=1217 imports=9
+server/services/windowfocus files=2 loc=241 imports=4
+server/services/diagnosesvc files=1 loc=378 imports=13
+server/services/errorregistry files=1 loc=136 imports=3
+server/services/projectrpc files=1 loc=140 imports=3
+server/services/slashcommands files=1 loc=178 imports=3
+server/services/capturetap files=1 loc=183 imports=4
+server/services/tccrpc files=1 loc=106 imports=4
+server/services/tmuxadmin files=1 loc=69 imports=3
+server/services/hookinstall files=1 loc=236 imports=4
 server/services/artifactrpc files=3 loc=653 imports=9
 server/services/vcsstatus files=4 loc=853 imports=6
 server/services/workflowrpc files=3 loc=1100 imports=14

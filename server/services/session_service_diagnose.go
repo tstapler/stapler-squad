@@ -158,9 +158,9 @@ const diagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
 
 // SpawnDiagnosticSession creates a hidden, one-shot Diagnose & Nudge session
 // for item, carrying prompt (the assembled context bundle plus dispatch
-// instructions — see server/services/diagnostic_service.go's
+// instructions — see server/services/diagnosesvc's
 // buildDiagnosePrompt). Mirrors SpawnReviewSession's shape; satisfies
-// services.DiagnosticSpawner. Unlike SpawnReviewSession, restricts the
+// diagnosesvc.DiagnosticSpawner. Unlike SpawnReviewSession, restricts the
 // session's MCP tool surface via diagnosticSessionAllowedTools — see that
 // constant's doc comment for why this alone isn't the real enforcement.
 func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*instance.Instance, error) {

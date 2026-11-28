@@ -930,6 +930,148 @@ linters:
             - github.com/tstapler/stapler-squad/session/instance$
             - github.com/tstapler/stapler-squad/session/markerstore
             - google.golang.org/protobuf/types/known/timestamppb
+        # server/services/debuglogs serves GetLogs and CreateDebugSnapshot from the log file, live sessions and tmux; it never imports the services hub.
+        isolate_debuglogs:
+          list-mode: strict
+          files:
+            - "**/services/debuglogs/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config$
+            - github.com/tstapler/stapler-squad/executor/safeexec$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/approvalkit$
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain$
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/tmux$
+        # server/services/windowfocus serves the FocusWindow RPC through Launch Services; it never imports the services hub.
+        isolate_windowfocus:
+          list-mode: strict
+          files:
+            - "**/services/windowfocus/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/executor/safeexec$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/notify$
+        # server/services/diagnosesvc serves the DiagnosticService RPCs of Diagnose & Nudge; it never imports the services hub.
+        isolate_diagnosesvc:
+          list-mode: strict
+          files:
+            - "**/services/diagnosesvc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/adapters$
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/autonomous$
+            - github.com/tstapler/stapler-squad/session/backlog/pipeline$
+            - github.com/tstapler/stapler-squad/session/diagnose$
+            - github.com/tstapler/stapler-squad/session/domain$
+            - github.com/tstapler/stapler-squad/session/domain/backlogdto$
+            - github.com/tstapler/stapler-squad/session/external$
+            - github.com/tstapler/stapler-squad/session/git/backend$
+            - github.com/tstapler/stapler-squad/session/gitprovider$
+            - github.com/tstapler/stapler-squad/session/instance$
+        # server/services/errorregistry persists deduplicated RPC errors; it never imports the services hub.
+        isolate_errorregistry:
+          list-mode: strict
+          files:
+            - "**/services/errorregistry/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/session/ent$
+            - github.com/tstapler/stapler-squad/session/ent/errorevent$
+        # server/services/projectrpc serves the Project CRUD RPCs; it never imports the services hub.
+        isolate_projectrpc:
+          list-mode: strict
+          files:
+            - "**/services/projectrpc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/session$
+            - github.com/tstapler/stapler-squad/session/domain$
+        # server/services/slashcommands serves ListSlashCommands; it never imports the services hub.
+        isolate_slashcommands:
+          list-mode: strict
+          files:
+            - "**/services/slashcommands/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/services/fsops$
+        # server/services/capturetap serves the loopback-only terminal capture tap RPCs; it never imports the services hub.
+        isolate_capturetap:
+          list-mode: strict
+          files:
+            - "**/services/capturetap/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/server/middleware$
+            - github.com/tstapler/stapler-squad/session/streamhub$
+        # server/services/tccrpc serves the TCC enrichment consent RPCs; it never imports the services hub.
+        isolate_tccrpc:
+          list-mode: strict
+          files:
+            - "**/services/tccrpc/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/server/services/access$
+            - github.com/tstapler/stapler-squad/session/instance$
+            - github.com/tstapler/stapler-squad/session/tcc$
+        # server/services/tmuxadmin serves the tmux version-mismatch and server-restart RPCs; it never imports the services hub.
+        isolate_tmuxadmin:
+          list-mode: strict
+          files:
+            - "**/services/tmuxadmin/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/log$
+            - github.com/tstapler/stapler-squad/session/tmux$
+        # server/services/hookinstall serves the global CLI hook status and install RPCs; it never imports the services hub.
+        isolate_hookinstall:
+          list-mode: strict
+          files:
+            - "**/services/hookinstall/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/tstapler/stapler-squad/executor/safeexec$
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/internal/claudehooks$
+            - github.com/tstapler/stapler-squad/log$
         # server/services/artifactrpc serves the artifact browse, search and rescan RPCs; it never imports
         # the services hub.
         isolate_artifactrpc:
@@ -1184,8 +1326,8 @@ linters:
           files:
             - "**/server/services/**"
             # Temporarily excluded — session/ent still imported; removed-in: refactor/storage-interface-cleanup (P6)
-            - "!**/server/services/error_registry.go"
-            - "!**/server/services/error_registry_test.go"
+            - "!**/server/services/errorregistry/error_registry.go"
+            - "!**/server/services/errorregistry/error_registry_test.go"
             - "!**/server/services/escapecode/analytics_escape_service.go"
             - "!**/server/services/escapecode/analytics_escape_service_test.go"
             - "!**/server/services/workflowrpc/workflow_golden_test.go"

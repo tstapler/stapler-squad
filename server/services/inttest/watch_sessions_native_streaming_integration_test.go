@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/approvals"
+	"github.com/tstapler/stapler-squad/server/services/errorregistry"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/external"
@@ -76,7 +77,7 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 	sessionService := services.NewSessionService(storage, eventBus)
 	t.Cleanup(sessionService.Shutdown)
 
-	errorRegistry := services.NewErrorRegistry(storage.GetEntClient(), true)
+	errorRegistry := errorregistry.NewErrorRegistry(storage.GetEntClient(), true)
 	sessionService.SetErrorRegistry(errorRegistry)
 
 	statusManager := instance.NewInstanceStatusManager()

@@ -435,7 +435,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetPendingGates":        "backlog:get-pending-gates",
 	// Tmux client/server version mismatch RPCs (session.proto) -- pre-existing
 	// collateral debt found by TestMethodToIDCompleteness: must match the
-	// "// +api: tmux:*" markers in server/services/tmux_version_status_service.go
+	// "// +api: tmux:*" markers in server/services/tmuxadmin/service.go
 	// verbatim, same failure mode as the SearchGitHubRepos comment above.
 	"GetTmuxVersionStatus": "tmux:version-status",
 	"RestartTmuxServer":    "tmux:restart-server",
@@ -461,7 +461,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"DismissFinding": "DismissFinding",
 	// Diagnose & Nudge RPCs (DiagnosticService in diagnose.proto, backlog item
 	// 68964304) -- must match the "// +api: session:diagnose-*" markers in
-	// server/services/diagnostic_service.go verbatim, same failure mode as
+	// server/services/diagnosesvc/diagnostic_service.go verbatim, same failure mode as
 	// the SearchGitHubRepos comment above.
 	"AssembleDiagnosticBundle": "session:diagnose-assemble-bundle",
 	"DispatchDiagnose":         "session:diagnose-dispatch",
