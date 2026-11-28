@@ -10,7 +10,7 @@ Owner decision 2026-11-23: "every package under 10k" still applies to `server/se
 4. **The 10k goal needs stages 0 to 5 plus two hub extractions** (top level 8,645 after 6b); the full OCP hub redesign (stage 6c) is not needed for the size goal (section 6).
 5. **The 10k decision is not gated anywhere, and the gate is not a largest-package check.** `tools/bzl/scoping/t9.go:68` sets `LargestPkgLOCMax: 72000`, but T9d (`t9.go:90`) compares only `server/services` and `session` against it (V). Stage 7 splits the gate (section 6).
 6. **The "kernels" and the L1 layer were not DAGs in the first draft** (an independent type-based review found 77 kernel-to-leaf symbols and an L1 cycle; I reproduced the 77). Section 3.3 now lists the symbol cuts and file moves; the assignment is committed as `session-service-hub-assignment.csv`.
-7. **Seven other packages are over 10k today** (section 8a); the owner's scope for them is open question 5.
+7. **Other packages are over 10k** (section 8a). The 2026-11-12 owner decision (every package under 10,000 non-test lines) covers them.
 
 ## 1. Evidence base
 
@@ -478,7 +478,7 @@ Differences from 5 and section 6: (1) `sessioncreate` alone would have left the 
 
 `session_create_characterization_test.go` and `testdata/session_create.golden` were committed before the move; the only change to them since is the `domain.SessionSpawnOptions` qualifier. The golden records one behaviour that looks like a defect and was not changed: nothing writes the `creation_epoch` column, so after `RetrySessionCreation` the epoch-fenced terminal write is rejected and a retry that fails stays `Creating`.
 
-Stage 7: `T9dServicesLOCMax` (10,000) in `tools/bzl/scoping/t9.go` now caps `server/services` in T9d; `session` keeps `LargestPkgLOCMax`. No CI workflow or make target runs `scoping t9`. The cap itself is enforced on every PR by `scoping services-cap`, a step of the `bazel-guards` job in `.github/workflows/bazel.yml` that checks only this value (not a required status check, like every check in this repo). It counts every non-test `.go` file directly in the directory, including build-tagged, cgo and generated ones; `t9` itself still counts host-build files only. The step is last in its job, and `lint.yml` runs the test that pins this wiring. The exact `server/services` row in `budget.txt` is still checked only by `make ready-scoping-budget`, which CI reaches through the Fallback canary workflow.
+Stage 7: `T9dServicesLOCMax` (10,000) in `tools/bzl/scoping/t9.go` now caps `server/services` in T9d; `session` keeps `LargestPkgLOCMax`. No CI workflow or make target runs `scoping t9`. The cap itself is enforced on every PR by `scoping services-cap`, a step of the `bazel-guards` job in `.github/workflows/bazel.yml` that checks only this value (not a required status check, like every check in this repo). It counts every non-test `.go` file directly in the directory, including build-tagged, cgo and generated ones; `t9` itself still counts host-build files only. The step is last in its job, and both `bazel-guards` and `lint.yml` run the test that pins this wiring. The exact `server/services` row in `budget.txt` is still checked only by `make ready-scoping-budget`, which CI reaches through the Fallback canary workflow.
 
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
@@ -512,7 +512,7 @@ Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes whi
 
 ## 8a. Every package over 10k
 
-**Status 2026-11-28** (`wc -l` over each directory's own `*.go` files minus `_test.go`, at `e95687f2f`): `server/services` (8,803) and `session` (9,451) are now under 10k. Over 10k and not yet scoped: `session/instance` 23,541, `server/services/backlogsvc` 16,016, `server/mcp` 13,451, `server` 10,667, `session/tmux` 10,454 and `session/unfinished` 10,186.
+**Status 2026-11-28** (`wc -l` over each directory's own `*.go` files minus `_test.go`, at `e95687f2f`): `server/services` (8,803) and `session` (9,451) are now under 10k. Still over 10k, and remaining work under the 2026-11-12 owner decision that every package goes under 10,000 non-test lines: `session/instance` 23,541 (plan: Track B of `session-hub-redesign-plan.md`), `server/services/backlogsvc` 16,016 (plan: Part 2 of `other-packages-under-10k-plan.md`), and, with no split plan yet, `server/mcp` 13,451, `server` 10,667, `session/tmux` 10,454 and `session/unfinished` 10,186.
 
 The table below is the 2026-11-23 snapshot, before the split (V: `ls <dir>/*.go | grep -v _test.go | xargs cat | wc -l`, run 2026-11-23; matches the reviewer's table).
 
@@ -527,7 +527,7 @@ The table below is the 2026-11-23 snapshot, before the split (V: `ls <dir>/*.go 
 | `session/tmux` | 10,272 | tmux/process-backend plan. |
 | `session/unfinished` | 10,186 | No plan found by me. |
 
-`server/services/wsconn` (9,767) stays under. Whether "every package under 10k" covers the other seven is open question 5; the cost per package is rough: `session/unfinished` and `server` are within 5% of the cap (S to M each, I); `server/mcp` needs a design that ADR-010 rejected (L); `session`, `session/tmux`, `session/instance` and `backlogsvc` have plans.
+`server/services/wsconn` (9,767) stays under. The 2026-11-12 owner decision covers them; the cost per package is rough: `session/unfinished` and `server` are within 5% of the cap (S to M each, I); `server/mcp` needs a design that ADR-010 rejected (L); `session`, `session/instance` and `backlogsvc` have plans (the tmux/process-backend plan shrinks `session` and adds to `session/tmux`).
 
 ## 9. Open questions that need the owner
 
@@ -535,7 +535,7 @@ The table below is the 2026-11-23 snapshot, before the split (V: `ls <dir>/*.go 
 2. **Is stage 6c in scope, or is the size goal enough?** Stages 0 to 6b reach 8,645; 6c only makes the facade thin.
 3. **Kernel packages exported or `internal`?** `server`, `server/mcp` and `wsconn` need `access` and `flagsvc` types, so `internal/` would block them. Default here: exported.
 4. **`attention` split.** Answered by measurement in section 6.2: three packages (`approvals`, `notifyactions`, `qareply`).
-5. **Scope of "every package under 10k".** The owner said it applies to `server/services`. Does it also cover `session`, `session/instance`, `backlogsvc`, `server/mcp`, `server`, `session/tmux`, `session/unfinished` (section 8a)? This decides whether stage 7 is a services-only threshold or a repo-wide check, and whether `server/mcp` (rejected by ADR-010) and `server` need new plans.
+5. **Scope of "every package under 10k".** Answered by the 2026-11-12 owner decision ([other-packages-under-10k-plan.md](other-packages-under-10k-plan.md)): every package. Still undecided: whether stage 7 stays a `server/services` threshold or becomes a repo-wide check.
 6. **Budget basis.** Which base is authoritative: `wc` (65,807), the `budget.txt` row (65,715, GOOS-tagged files excluded), or t9?
 7. **Does Story 1.3 (backend-di) land before 6c?** Both rewrite the 54 `Set*` calls.
 8. **Who owns cutting the L1 cycles (3.3.3) and the kernel symbol relocations (3.3.2)?** They are the riskiest part of stages 1, 4 and 5; the plan assumes one author wave per PR with a review wave, but a decision on one owner per kernel avoids two PRs relocating the same symbol.

@@ -163,7 +163,10 @@ jobs:
       # and test-affected narrows on .go files, so a bazel.yml-only PR would not run the test.
       - name: services-cap CI wiring pin
         if: ${{ !cancelled() }}
-        run: go test -count=1 -run '^TestServicesCap_' ./tools/bzl/scoping
+        run: |
+          set -euo pipefail
+          go test -count=1 -v -run '^TestServicesCap_' ./tools/bzl/scoping | tee "$RUNNER_TEMP/services-cap-pin.txt"
+          grep -q '^--- PASS: TestServicesCap_ShouldPinCIWiring ' "$RUNNER_TEMP/services-cap-pin.txt"
 
       # Soft-timeout wrapper (16m, below this job's hard timeout-minutes ceiling):
       # golangci-lint-action is a `uses:` step, so it can't be wrapped with the shell

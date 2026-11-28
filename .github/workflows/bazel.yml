@@ -128,6 +128,14 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: bash tools/bzl/check-pr-title.sh "$PR_TITLE"
 
+      # Also run by lint.yml: each copy catches the other workflow's job being disabled.
+      - name: services-cap CI wiring pin
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          go test -count=1 -v -run '^TestServicesCap_' ./tools/bzl/scoping | tee "$RUNNER_TEMP/services-cap-pin.txt"
+          grep -q '^--- PASS: TestServicesCap_ShouldPinCIWiring ' "$RUNNER_TEMP/services-cap-pin.txt"
+
       # T9d's server/services cap alone (project_plans/package-split-ocp/session-service-hub-plan.md, stage 7);
       # the other T9 components are measurements and are not gated here. Keep it last: later steps
       # without !cancelled() would be skipped by its failure.

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -36,6 +37,12 @@ func TestServicesCap_ShouldFailOnlyAboveTheCap(t *testing.T) {
 	if code := runServicesCap([]string{"-root", t.TempDir()}, &out); code != 1 {
 		t.Errorf("a missing package must not pass: code=%d output=%s", code, out.String())
 	}
+	emptied := t.TempDir()
+	write(t, emptied, "server/services/a_test.go", "package services\n")
+	out.Reset()
+	if code := runServicesCap([]string{"-root", emptied}, &out); code != 1 || !strings.Contains(out.String(), "no non-test lines") {
+		t.Errorf("a directory with no non-test lines must not pass: code=%d output=%s", code, out.String())
+	}
 }
 
 func TestServicesCap_ShouldCountEveryNonTestGoFile(t *testing.T) {
@@ -59,71 +66,110 @@ func TestServicesCap_ShouldCountEveryNonTestGoFile(t *testing.T) {
 	}
 }
 
-// The cap is enforced by this step alone: it must run on every pull request in a
-// job that can fail it, and last, so that its failure skips no other guard.
-func TestServicesCap_ShouldBeTheLastBlockingStepOfBazelGuardsOnEveryPullRequest(t *testing.T) {
-	t.Parallel()
+// pinScript fails when -run matches nothing, which `go test` alone reports as success.
+const pinScript = `set -euo pipefail
+go test -count=1 -v -run '^TestServicesCap_' ./tools/bzl/scoping | tee "$RUNNER_TEMP/services-cap-pin.txt"
+grep -q '^--- PASS: TestServicesCap_ShouldPinCIWiring ' "$RUNNER_TEMP/services-cap-pin.txt"
+`
+
+type workflowStep struct {
+	Run              string `yaml:"run"`
+	If               string `yaml:"if"`
+	Shell            string `yaml:"shell"`
+	WorkingDirectory string `yaml:"working-directory"`
+	Env              any    `yaml:"env"`
+	ContinueOnError  any    `yaml:"continue-on-error"`
+}
+
+type workflow struct {
+	On struct {
+		PullRequest map[string]any `yaml:"pull_request"`
+	} `yaml:"on"`
+	Env      any `yaml:"env"`
+	Defaults any `yaml:"defaults"`
+	Jobs     map[string]struct {
+		If              string         `yaml:"if"`
+		Needs           any            `yaml:"needs"`
+		Env             any            `yaml:"env"`
+		Defaults        any            `yaml:"defaults"`
+		ContinueOnError any            `yaml:"continue-on-error"`
+		Steps           []workflowStep `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+func readWorkflow(t *testing.T, name string) workflow {
+	t.Helper()
 	root, err := reporoot.Find()
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, ".github/workflows/bazel.yml"))
+	raw, err := os.ReadFile(filepath.Join(root, ".github/workflows", name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var wf struct {
-		On struct {
-			PullRequest map[string]any `yaml:"pull_request"`
-		} `yaml:"on"`
-		Defaults any `yaml:"defaults"`
-		Jobs     map[string]struct {
-			If              string `yaml:"if"`
-			Needs           any    `yaml:"needs"`
-			Defaults        any    `yaml:"defaults"`
-			ContinueOnError any    `yaml:"continue-on-error"`
-			Steps           []struct {
-				Run             string `yaml:"run"`
-				If              string `yaml:"if"`
-				Shell           string `yaml:"shell"`
-				ContinueOnError any    `yaml:"continue-on-error"`
-			}
-		}
-	}
+	var wf workflow
 	if err := yaml.Unmarshal(raw, &wf); err != nil {
 		t.Fatal(err)
 	}
-	// Any other key (paths, paths-ignore, types, branches-ignore) narrows which pull requests run.
-	if want := map[string]any{"branches": []any{"main"}}; !reflect.DeepEqual(wf.On.PullRequest, want) {
-		t.Errorf("bazel.yml must run on every pull request to main, got %v", wf.On.PullRequest)
+	return wf
+}
+
+// blockingStep returns the position of the one step running `run` and the job's step count, and fails
+// if the workflow, job or step could skip it, ignore its failure, or point it at another tree.
+func blockingStep(t *testing.T, name string, wf workflow, jobName, run string) (int, int) {
+	t.Helper()
+	job := wf.Jobs[jobName]
+	if job.If != "" || job.Needs != nil || job.ContinueOnError != nil {
+		t.Errorf("%s %s must be blocking and unconditional: if=%q needs=%v continue-on-error=%v", name, jobName, job.If, job.Needs, job.ContinueOnError)
 	}
-	job := wf.Jobs["bazel-guards"]
-	if job.If != "" || job.ContinueOnError != nil {
-		t.Errorf("bazel-guards must be blocking and unconditional: if=%q continue-on-error=%v", job.If, job.ContinueOnError)
+	// A default shell can swallow failures; BUILD_WORKSPACE_DIRECTORY in env would redirect the cap.
+	if wf.Defaults != nil || job.Defaults != nil || wf.Env != nil || job.Env != nil {
+		t.Errorf("%s %s must set no defaults or env at workflow or job level", name, jobName)
 	}
-	if job.Needs != nil {
-		t.Errorf("bazel-guards must not wait on a job whose failure would skip it: needs=%v", job.Needs)
-	}
-	// A default shell such as `bash {0} || true` would swallow the failure.
-	if wf.Defaults != nil || job.Defaults != nil {
-		t.Errorf("bazel.yml must not set defaults: workflow=%v job=%v", wf.Defaults, job.Defaults)
-	}
-	var steps int
+	at, count := -1, 0
 	for i, step := range job.Steps {
-		if step.Run != "go run ./tools/bzl/scoping services-cap" {
+		if step.Run != run {
 			continue
 		}
-		steps++
-		if i != len(job.Steps)-1 {
-			t.Errorf("the cap step must be last in bazel-guards, is %d of %d", i+1, len(job.Steps))
-		}
-		if step.Shell != "" {
-			t.Errorf("the cap step must use the default shell, got %q", step.Shell)
-		}
+		at, count = i, count+1
 		if step.If != "${{ !cancelled() }}" || step.ContinueOnError != nil {
-			t.Errorf("the cap step must run after earlier failures and block: if=%q continue-on-error=%v", step.If, step.ContinueOnError)
+			t.Errorf("%s: %q must run after earlier failures and block: if=%q continue-on-error=%v", name, run, step.If, step.ContinueOnError)
+		}
+		if step.Shell != "" || step.WorkingDirectory != "" || step.Env != nil {
+			t.Errorf("%s: %q must set no shell, working-directory or env: %q %q %v", name, run, step.Shell, step.WorkingDirectory, step.Env)
 		}
 	}
-	if steps != 1 {
-		t.Errorf("bazel-guards runs services-cap %d times, want 1", steps)
+	if count != 1 {
+		t.Errorf("%s %s runs %q %d times, want 1", name, jobName, run, count)
+	}
+	return at, len(job.Steps)
+}
+
+// The cap is enforced by one step, and this test by one step in each of two workflows, so that
+// disabling either job is caught by the other.
+func TestServicesCap_ShouldPinCIWiring(t *testing.T) {
+	t.Parallel()
+	bazel := readWorkflow(t, "bazel.yml")
+	// Any other key (paths, paths-ignore, types, branches-ignore) narrows which pull requests run.
+	if want := map[string]any{"branches": []any{"main"}}; !reflect.DeepEqual(bazel.On.PullRequest, want) {
+		t.Errorf("bazel.yml must run on every pull request to main, got %v", bazel.On.PullRequest)
+	}
+	// Last, so that a cap failure skips no other guard.
+	if at, n := blockingStep(t, "bazel.yml", bazel, "bazel-guards", "go run ./tools/bzl/scoping services-cap"); at != n-1 {
+		t.Errorf("the cap step must be last in bazel-guards, is %d of %d", at+1, n)
+	}
+	blockingStep(t, "bazel.yml", bazel, "bazel-guards", pinScript)
+
+	lint := readWorkflow(t, "lint.yml")
+	blockingStep(t, "lint.yml", lint, "lint", pinScript)
+	pr := lint.On.PullRequest
+	if !reflect.DeepEqual(pr["branches"], []any{"main"}) || pr["paths-ignore"] != nil || pr["types"] != nil {
+		t.Errorf("lint.yml must run on pull requests to main, got %v", pr)
+	}
+	paths, _ := pr["paths"].([]any)
+	for _, want := range []string{".github/workflows/bazel.yml", ".github/workflows/lint.yml"} {
+		if !slices.Contains(paths, any(want)) || slices.Contains(paths, any("!"+want)) {
+			t.Errorf("lint.yml pull_request.paths must include %s", want)
+		}
 	}
 }
