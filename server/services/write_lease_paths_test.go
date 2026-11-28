@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/sessionstream"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
@@ -67,11 +68,11 @@ func writeToSessionReq(id string) *connect.Request[sessionv1.WriteToSessionReque
 	return connect.NewRequest(&sessionv1.WriteToSessionRequest{SessionId: id, Input: "ls", PressEnter: true})
 }
 
-func newLeaseTerminalService(t *testing.T, inst *instance.Instance) *TerminalService {
+func newLeaseTerminalService(t *testing.T, insts ...*instance.Instance) *sessionstream.TerminalService {
 	t.Helper()
 	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
-	poller.SetInstances([]*instance.Instance{inst})
-	ts := NewTerminalService()
+	poller.SetInstances(insts)
+	ts := sessionstream.NewTerminalService()
 	ts.SetPoller(poller)
 	return ts
 }

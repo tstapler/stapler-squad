@@ -53,6 +53,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
+	"github.com/tstapler/stapler-squad/server/services/sessionstream"
 	"github.com/tstapler/stapler-squad/server/services/summaryrpc"
 	"github.com/tstapler/stapler-squad/server/services/uploads"
 	"github.com/tstapler/stapler-squad/server/services/wakerpc"
@@ -998,7 +999,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("Unified WebSocket handler configured for external session support")
 
 	// Register external approval endpoints
-	externalWsHandler := services.NewExternalWebSocketHandler(
+	externalWsHandler := sessionstream.NewExternalWebSocketHandler(
 		deps.ExternalDiscovery,
 		deps.TmuxStreamerManager,
 		deps.ExternalApprovalMonitor,

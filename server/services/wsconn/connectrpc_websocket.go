@@ -39,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/sessionstream"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
@@ -786,14 +787,14 @@ var hubCaptureRetryWindow = time.Second
 // transient state (i.e. a concurrent Instance.Resume() may be mid-restore), giving up
 // immediately once the status settles into one that means capture will never succeed.
 func waitForPaneContent(instance *instance.Instance, deadline time.Time) (string, error) {
-	content, err := pollWhileResuming(instanceStatus(instance), deadline, services.CapturePollEvery, instance.CapturePaneContentRaw)
+	content, err := pollWhileResuming(instanceStatus(instance), deadline, sessionstream.CapturePollEvery, instance.CapturePaneContentRaw)
 	return string(content), err
 }
 
 // waitForFullStateFrame is waitForPaneContent for a backend's full-state redraw. ok is false when
 // the backend has none (the caller then runs the legacy text path) or the capture never succeeded.
 func waitForFullStateFrame(instance *instance.Instance, deadline time.Time) (snapshotFrame, bool) {
-	return pollFullStateFrame(instanceStatus(instance), deadline, services.CapturePollEvery, instance.CapturePaneRedraw)
+	return pollFullStateFrame(instanceStatus(instance), deadline, sessionstream.CapturePollEvery, instance.CapturePaneRedraw)
 }
 
 func pollFullStateFrame(status func() domain.Status, deadline time.Time, every time.Duration,
@@ -1190,7 +1191,7 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	}
 
 	if instance.IsHibernated() {
-		if err := services.ResumeHibernatedInstance(instance, sessionID); err != nil {
+		if err := sessionstream.ResumeHibernatedInstance(instance, sessionID); err != nil {
 			return err
 		}
 	}
@@ -1322,7 +1323,7 @@ func parseControlModeHandshake(stream *connectWebSocketStream) (*sessionv1.Curre
 // variant: a stale cached positive (still true after the session died) would
 // otherwise let control mode attach to a dead session and immediately
 // receive %exit.
-func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *instance.Instance, sessionID string, streamer services.SessionStreamer) error {
+func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *instance.Instance, sessionID string, streamer sessionstream.SessionStreamer) error {
 	handled, err := instance.PrepareRetainedTerminalView(context.Background())
 	if err != nil {
 		return err
@@ -1576,7 +1577,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// comment for why the nudge itself needs no separate remote-specific path).
 	// Use the SessionStreamer interface to decouple this handler from the
 	// concrete *tmux.TmuxSession type — *Instance satisfies it via delegation.
-	var streamer services.SessionStreamer = instance
+	var streamer sessionstream.SessionStreamer = instance
 	if err := h.ensureControlModeStarted(instance, sessionID, streamer); err != nil {
 		return err
 	}
@@ -2378,7 +2379,7 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 	// connection while live output still works: retry briefly, then paint blank. Frames held
 	// during the paint are still replayed after it; only frames dropped before it are lost.
 	content, captureErr := pollWhileResuming(instanceStatus(instance), time.Now().Add(hubCaptureRetryWindow),
-		services.CapturePollEvery, instance.CapturePaneContentRaw)
+		sessionstream.CapturePollEvery, instance.CapturePaneContentRaw)
 	if definitivelyGone(captureErr, instance.IsBackendProcessAlive) {
 		// A browser receiving not_found stops reconnecting (isNonRetriableConnectError).
 		logSessionGone("[streamViaHub] initial capture", sessionID, captureErr)

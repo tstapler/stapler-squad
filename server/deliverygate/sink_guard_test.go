@@ -34,6 +34,8 @@ const (
 // events.EventNotification (split out of server/services), so every Subscribe in
 // them is listed all the same.
 var notificationPackages = map[string]bool{
+	svcPkgPath:                     true, // publishes notifications; the converter that named the type is in sessionstream
+	svcPkgPath + "/sessionstream":  true,
 	svcPkgPath + "/approvals":      true,
 	svcPkgPath + "/autonomysvc":    true,
 	svcPkgPath + "/capacity":       true,
@@ -61,10 +63,10 @@ var reviewedConsumers = map[finding]string{
 	"consumer: " + notifPkgPath + ".StartSubscriberWithInterval": "history store ingest; sits behind the bus publish filter",
 	"consumer: " + pushPkgPath + ".StartDeliverySubscriber":      "push fan-out; sits behind the bus publish filter plus the status-change gate",
 
-	// server/services references EventNotification (event_converter, producers),
-	// so every Subscribe there is listed; only WatchSessions forwards it.
-	"consumer: " + svcPkgPath + ".WatchSessions":              "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
-	"consumer: " + svcPkgPath + "/workflowrpc.watchWorkflows": "workflow stream; ignores notifications",
+	// sessionstream references EventNotification (event_converter), so every
+	// Subscribe there is listed; only WatchSessions forwards it.
+	"consumer: " + svcPkgPath + "/sessionstream.WatchSessions": "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
+	"consumer: " + svcPkgPath + "/workflowrpc.watchWorkflows":  "workflow stream; ignores notifications",
 }
 
 // reviewedAppendCallers are the concrete NotificationHistoryStore.Append* call
@@ -77,7 +79,7 @@ var reviewedAppendCallers = map[finding]string{}
 var reviewedRawHiddenReads = map[finding]string{
 	"hidden: " + modulePath + "/server/services.instanceMatchesListFilters":    "session-list include_hidden filtering, not notification delivery",
 	"hidden: " + modulePath + "/server/services.externalMatchesListFilters":    "session-list include_hidden filtering for external sessions, not notification delivery",
-	"hidden: " + modulePath + "/server/services.WatchSessions":                 "session-stream include_hidden filtering, not notification delivery",
+	"hidden: " + modulePath + "/server/services/sessionstream.WatchSessions":   "session-stream include_hidden filtering, not notification delivery",
 	"hidden: " + modulePath + "/server/services/searchrpc.isAutomationSession": "automation-session classification",
 }
 
@@ -323,7 +325,7 @@ func TestSinkGuard_ShouldRequireAllowlistReason_WhenNotifierImplEventNotificatio
 // A package in notificationPackages has every Subscribe listed even though it
 // never names events.EventNotification.
 func TestSinkGuard_ShouldListSubscribe_WhenPackageIsDeclaredNotificationHandling(t *testing.T) {
-	for _, leaf := range []string{"/approvals", "/autonomysvc", "/capacity", "/notify", "/notifyactions", "/prs", "/workflowrpc", "/reviewqueuerpc", "/checkpointrpc", "/wakerpc"} {
+	for _, leaf := range []string{"", "/sessionstream", "/approvals", "/autonomysvc", "/capacity", "/notify", "/notifyactions", "/prs", "/workflowrpc", "/reviewqueuerpc", "/checkpointrpc", "/wakerpc"} {
 		if !notificationPackages[svcPkgPath+leaf] {
 			t.Errorf("server/services%s must stay in notificationPackages", leaf)
 		}

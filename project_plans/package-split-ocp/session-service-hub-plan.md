@@ -456,6 +456,14 @@ Done in the Stage 5 `workflows` PR: the `workflows` rows moved into four leaves 
 
 The `backlogsync` rows did not move in this PR and are now unblocked: the second `providers` PR (6.8) moved `SteerOutcome` to `access`, so `SessionSteerer` in `backlog_ports.go` no longer depends on a hub receiver file. Still to do there: split `backlog_ports.go` and `backlog_shared.go` by concern (6.8), place `item_session_uuids.go` with them, and give `background_models_service.go` (two `*SessionService` RPC methods) a handler type.
 
+### 6.10 Stage 6a `sessionstream`
+
+Done in the Stage 6a PR: the live stream paths moved to `server/services/sessionstream` (9 files, 1,514 lines, 18 internal imports), which never imports `server/services`: `StreamTerminal`, `WatchSessions` with `event_converter`, `GetSessionDiff`, `GetDetectionEvents`, `TerminalService`, `ExternalWebSocketHandler` and the `SessionStreamer` interface. The hub reaches the handler through `session_service_stream_delegates.go`, which builds it per call over `Ports`. `server/services` goes from 52 files / 14,239 to 47 / 12,854 top-level non-test lines. `server/services/wsconn` imports the leaf (one import and one line over its exact row).
+
+Differences from 2.3, 5 and section 6: (1) the CSV rows are a file-name partition, and two of them are not stream code, so they stay in the hub: `session_service_diagnose.go` spawns review, diagnostic, directory and worktree sessions (`sessioncreate`), and `session_service_events.go` is lifecycle listeners, rate-limit notifications, `ArchiveSession`, error, workflow and rules delegators (`sessionrpc`); only `GetDetectionEvents` left it. `delivery_gate_feed.go` stays with the create and delete paths that call it. So 6a removes about 1,400 lines, not 2,394, and 6b has to take those too for the hub to reach the 10k line. (2) No `sessionkit` package: with one consumer the ports are enough; introduce it in 6b if `sessioncreate` and `sessionrpc` need the same members. (3) The `terminal_input_sites_scan_test` top-level-glob row in section 7 is out of date: it already walks every leaf, and it failed on this move until re-keyed. (4) The sink guard's hub rows relied on `event_converter` naming `EventNotification`; the hub is now listed in `notificationPackages` so a future `Subscribe` there is still reported.
+
+Characterization tests (`stream_terminal_characterization_test.go`, `watch_sessions_characterization_test.go`) were committed before the move, run through the Connect wire and stay in `server/services`. They pin two behaviours that look unintended and were not changed: a client half-close ends `StreamTerminal` with `CodeInternal`, and a pane EOF does not end it.
+
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
 Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes while the guard no longer guards.

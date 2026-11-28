@@ -1,4 +1,4 @@
-package services
+package sessionstream
 
 import (
 	"context"
@@ -73,7 +73,7 @@ func waitForTerminalResume(ctx context.Context, instance *instance.Instance) err
 // Browser clients use the WebSocket handler instead.
 //
 //nolint:gocognit,gocyclo,funlen // pre-existing complexity relocated verbatim by the session_service.go split (sdd:fix-hotspot, 2026-09-12); reducing it is a separate follow-up, not a file move
-func (s *SessionService) StreamTerminal(
+func (h *Handler) StreamTerminal(
 	ctx context.Context,
 	stream *connect.BidiStream[sessionv1.TerminalData, sessionv1.TerminalData],
 ) error {
@@ -94,15 +94,12 @@ func (s *SessionService) StreamTerminal(
 	// Get the session instance - CRITICAL: Use the poller's instance to ensure
 	// timestamp updates are visible to the review queue. Loading fresh from storage
 	// creates a separate object that the poller never sees.
-	var instance *instance.Instance
-	if s.ReviewQueuePoller != nil {
-		instance = s.ReviewQueuePoller.FindInstance(initialMsg.SessionId)
-	}
+	instance := h.ports.FindPolled(initialMsg.SessionId)
 
 	// Fallback to storage if poller doesn't have it (shouldn't happen normally)
 	if instance == nil {
 		log.Warn("[StreamTerminal] instance not found in poller, loading from storage (timestamps may desync)", "session", initialMsg.SessionId)
-		instances, err := s.loadInstancesWithWiring()
+		instances, err := h.ports.LoadWired()
 		if err != nil {
 			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 		}
@@ -503,7 +500,7 @@ func (s *SessionService) StreamTerminal(
 					access.RecordTerminalInput(inputSrc, data.Input.Data, access.StageForwarded)
 
 					// Publish user interaction event for immediate review queue reactivity
-					s.eventBus.Publish(events.NewUserInteractionEvent(
+					h.bus.Publish(events.NewUserInteractionEvent(
 						msg.SessionId,
 						"terminal_input",
 						"", // No additional context needed

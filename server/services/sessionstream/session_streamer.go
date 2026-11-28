@@ -1,4 +1,4 @@
-package services
+package sessionstream
 
 // SessionStreamer is the interface the WebSocket streaming handler requires from a session.
 // Defined in the consumer package (server/services) to prevent import cycles and to keep

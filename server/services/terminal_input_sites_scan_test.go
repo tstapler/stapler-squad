@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The websocket input sites are guarded in wsconn; this guards the Connect-stream site that stayed here.
+// The websocket input sites are guarded in wsconn; this guards the Connect-stream site in sessionstream.
 var inputSiteAllowList = map[string]string{
-	"session_service_stream_terminal.go:StreamTerminal": "Connect stream path (path stream)",
+	"sessionstream/stream_terminal.go:StreamTerminal": "Connect stream path (path stream)",
 }
 
 // dirsWithOwnInputScanner maps a leaf directory to the file holding its own input-site scanner,

@@ -66,6 +66,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/rules"
+	"github.com/tstapler/stapler-squad/server/services/sessionstream"
 	"github.com/tstapler/stapler-squad/server/services/taggingrules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -319,7 +320,7 @@ type SessionService struct {
 	featureFlagSvc *flagsvc.FeatureFlagService
 
 	// terminalSvc handles GetTerminalSnapshot/WriteToSession RPCs.
-	terminalSvc *TerminalService
+	terminalSvc *sessionstream.TerminalService
 
 	// promptStore persists prompt history for the "initial prompt" dropdown.
 	promptStore *prompts.PromptStore
@@ -1028,7 +1029,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		projectSvc:                  projectrpc.NewProjectService(concStorage),
 		checkpointSvc:               checkpointrpc.NewCheckpointService(storage, eventBus),
 		featureFlagSvc:              flagsvc.NewFeatureFlagService(),
-		terminalSvc:                 NewTerminalService(),
+		terminalSvc:                 sessionstream.NewTerminalService(),
 		promptStore:                 newPromptStore(),
 		capacityMonitor:             capacityMonitor,
 		deleteSessionCleanupTimeout: defaultDeleteSessionCleanupTimeout,
