@@ -1,4 +1,4 @@
-package services
+package vcsstatus
 
 // vcs_range_cache.go memoizes the two per-range git stages of GetVCSStatus
 // (shipped commits, aggregate diff stat). A range is identified by immutable

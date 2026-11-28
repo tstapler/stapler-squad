@@ -1,4 +1,4 @@
-package services
+package vcsstatus
 
 // vcs_status_flight.go coalesces concurrent GetVCSStatus cache misses for one
 // workdir into a single git computation, bounds how many computations run at

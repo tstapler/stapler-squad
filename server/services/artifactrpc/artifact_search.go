@@ -1,4 +1,4 @@
-package services
+package artifactrpc
 
 import (
 	"context"
@@ -95,7 +95,7 @@ func (a *ArtifactService) SearchSessionArtifacts(
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("query must have at most %d terms", maxArtifactQueryTerms))
 	}
-	prFilter, hasPRFilter, err := listPRFilter(req.Msg.GetPr())
+	prFilter, hasPRFilter, err := prs.ListPRFilter(req.Msg.GetPr())
 	if err != nil {
 		return nil, err
 	}

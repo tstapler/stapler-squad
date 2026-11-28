@@ -17,6 +17,7 @@ _HOST_COUPLED = {
     "server/services/approvals": ["exec-host-binary"],
     "server/services/pathcomplete": ["exec-host-binary"],  # ListWorktrees tests run git, recorded under server/services
     "server/services/prs": ["exec-host-binary"],  # census rows: create_pull_request_test, recorded under server/services (gh, git)
+    "server/services/vcsstatus": ["exec-host-binary"],  # coalescing tests run git on temp repos, recorded under server/services
     "session": ["exec-host-binary", "home"],
     "session/vc": ["home"],
 }

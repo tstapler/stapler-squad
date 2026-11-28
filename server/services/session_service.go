@@ -45,6 +45,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/artifactrpc"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
@@ -308,7 +309,7 @@ type SessionService struct {
 	checkpointSvc *CheckpointService
 
 	// artifactSvc handles RescanSessionArtifacts.
-	artifactSvc *ArtifactService
+	artifactSvc *artifactrpc.ArtifactService
 
 	// prCreationSvc handles DraftPullRequest/CreatePullRequest RPCs.
 	prCreationSvc *prs.PRCreationService
@@ -1030,7 +1031,6 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		launcherPresetsSvc:          sessiondefaults.NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
-		artifactSvc:                 &ArtifactService{},
 		featureFlagSvc:              flagsvc.NewFeatureFlagService(),
 		terminalSvc:                 NewTerminalService(),
 		promptStore:                 newPromptStore(),
@@ -1072,8 +1072,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Wire CheckpointService's instance-load fallback to this service's own
 	// loadInstancesWithWiring so ClearConversationState gets properly-wired instances.
 	svc.checkpointSvc.SetLoadInstancesFn(svc.loadInstancesWithWiring)
-	svc.artifactSvc.findInstance = svc.findInstance
-	svc.artifactSvc.allInstances = svc.allInstances
+	svc.artifactSvc = artifactrpc.NewArtifactService(svc.findInstance, svc.allInstances)
 
 	// Construct prCreationSvc with the shared storage/eventBus and a bound
 	// findInstance method value (narrow dependency, not the whole SessionService —

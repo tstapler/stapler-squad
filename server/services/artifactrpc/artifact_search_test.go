@@ -1,4 +1,4 @@
-package services
+package artifactrpc
 
 import (
 	"context"
