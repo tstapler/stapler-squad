@@ -106,7 +106,7 @@ func (i *Instance) scrollbackPath() string {
 // The actual process re-launch happens asynchronously via resumeFromHibernationLocked.
 func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
 	return i.sendSyncErr(func(s *instanceState) error {
-		if s.inst.ArchivedAt != nil || s.inst.Status != domain.Hibernated {
+		if s.inst.ArchivedAt != nil || s.inst.liveStatus() != domain.Hibernated {
 			return fmt.Errorf("session is not an unarchived hibernated session")
 		}
 		return transitionToLocked(s, ctx, domain.Active)
@@ -125,7 +125,7 @@ func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 		defer i.hibernateWG.Done()
 		if err := i.resumeAfterTeardown(func() error {
 			return i.sendSyncErr(func(s *instanceState) error {
-				if s.inst.Status != domain.Active || s.inst.ArchivedAt != nil {
+				if s.inst.liveStatus() != domain.Active || s.inst.ArchivedAt != nil {
 					return nil
 				}
 				return startLocked(s, false)

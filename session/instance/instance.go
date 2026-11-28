@@ -521,6 +521,9 @@ type Instance struct {
 	// BUG-025 follow-up: a stateMutex-guarded bool caught a real -race failure
 	// at exactly two of these ~30+ access sites; the rest were equally unsafe.
 	started atomic.Bool
+	// statusMirror holds Status+1 for the terminal I/O gates (see gateStatus); zero means
+	// Status has not been written since the struct literal.
+	statusMirror atomic.Int32
 	// processManager abstracts the terminal process lifecycle and I/O.
 	// Initialized to a TmuxBackend by default; future backends implement the ProcessManager interface.
 	pmMu           sync.Mutex
@@ -1219,6 +1222,8 @@ func (i *Instance) Snapshot() *domain.InstanceSnapshot {
 // where scrollForwardVersionMismatchCheck kicks off (Story 1.5.3), so it runs
 // at construction time rather than being deferred until a user scrolls.
 func FinishInstanceConstruction(i *Instance) {
+	// Only if nothing wrote Status yet: a concurrent transition's value must not be overwritten.
+	i.statusMirror.CompareAndSwap(0, int32(i.Status)+1)
 	i.snapshot.Store(BuildSnapshot(i))
 	i.kickOffClaudeVersionMismatchCheck()
 }
@@ -1408,7 +1413,7 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		// could publish the SessionUpdated event while the transition is still
 		// in-flight, racing GetStatus()/Snapshot() reads on the delivery path.
 		if err := i.sendSyncErr(func(s *instanceState) error {
-			if s.inst.Status == domain.Active {
+			if s.inst.liveStatus() == domain.Active {
 				if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 				}
@@ -1578,7 +1583,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			reviveOutcome = domain.ReviveOutcomeResumeLive
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
-			workDir := i.Path
+			workDir := i.GetPath()
 			if i.gitManager.HasWorktree() {
 				workDir = i.gitManager.GetWorktreePath()
 			}
@@ -1592,7 +1597,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	} else {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
 		reviveOutcome = domain.ReviveOutcomeFreshExpected
-		basePath := i.Path
+		basePath := i.GetPath()
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
 			if i.SessionType != domain.SessionTypeExistingWorktree {
@@ -1696,11 +1701,9 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	}
 
 	// Transition to Active — no stateMutex needed inside actor command.
-	if i.Status != domain.Active {
-		if err := transitionToLocked(actorState, context.Background(), domain.Active); err != nil {
-			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
-			return setupErr
-		}
+	if err := ensureActiveLocked(actorState, context.Background()); err != nil {
+		setupErr = fmt.Errorf("failed to transition to Active: %w", err)
+		return setupErr
 	}
 	i.started.Store(true)
 	// buildSnapshot reads every mutable field; take i.mu here (even though this
@@ -1871,7 +1874,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// for an already-running session, but we still allocate so the screencast
 			// goroutine can connect to Chrome if it is already running.
 			i.allocateCDPPort()
-			workDir := i.Path
+			workDir := i.GetPath()
 			if i.gitManager.HasWorktree() {
 				workDir = i.gitManager.GetWorktreePath()
 			}
@@ -1890,7 +1893,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		// inert in production — every StartWithCleanup caller is in a _test.go file
 		// (repo-wide grep) — but a future production caller would bypass isolation
 		// safety entirely. Track consolidation under Epic 7.
-		basePath := i.Path
+		basePath := i.GetPath()
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
 			if i.SessionType != domain.SessionTypeExistingWorktree {
@@ -2226,7 +2229,7 @@ func pauseLocked(s *instanceState) error {
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
 	}
-	if i.Status == domain.Paused {
+	if i.liveStatus() == domain.Paused {
 		return fmt.Errorf("instance is already paused")
 	}
 	if !i.started.Load() {
@@ -2451,14 +2454,14 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
 	}
-	if i.Status == domain.Stopped {
+	if i.liveStatus() == domain.Stopped {
 		return fmt.Errorf("instance is already stopped")
 	}
 	// Validate the transition before any destructive side effect (kill tmux, remove
 	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
 	// the tmux session and worktree untouched.
-	if !canTransitionLocked(s, domain.Stopped) {
-		return domain.ErrInvalidTransition{From: i.Status, To: domain.Stopped}
+	if from, ok := canTransitionLocked(s, domain.Stopped); !ok {
+		return domain.ErrInvalidTransition{From: from, To: domain.Stopped}
 	}
 
 	// Fail closed before any side effect — see pauseLocked.
@@ -2593,7 +2596,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessMa
 		}
 	}
 
-	waspaused := i.Status == domain.Paused
+	waspaused := i.liveStatus() == domain.Paused
 
 	// Capture terminal output if requested
 	var savedOutput string

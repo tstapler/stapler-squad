@@ -413,7 +413,7 @@ func (i *Instance) SetArchivedAtIfNilCtx(ctx context.Context, t time.Time) (bool
 // would return ErrInvalidTransition for an already-archived-and-stopped
 // session on a repeat sweep).
 func stopIfNotStoppedLocked(s *instanceState, ctx context.Context) error {
-	if s.inst.Status == domain.Stopped {
+	if s.inst.liveStatus() == domain.Stopped {
 		return nil
 	}
 	return transitionToLocked(s, ctx, domain.Stopped)
@@ -730,7 +730,7 @@ func (i *Instance) SetAutoApprove(v bool, persist func() error) error {
 			return err
 		}
 	}
-	if i.Status == domain.Active {
+	if i.liveStatus() == domain.Active {
 		return i.Restart(true, "")
 	}
 	return nil
@@ -882,7 +882,7 @@ func (i *Instance) TryStartRetry() (newEpoch uint64, started bool) {
 		started bool
 	}
 	r, _ := sendSyncValue(i, func(s *instanceState) (retry, error) {
-		if s.inst.Status != domain.Failed {
+		if s.inst.liveStatus() != domain.Failed {
 			return retry{}, nil
 		}
 		newEpoch := bumpCreationEpochLocked(s)

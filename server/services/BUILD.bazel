@@ -311,6 +311,7 @@ go_test(
         "session_service_extraargs_test.go",
         "session_service_fanout_test.go",
         "session_service_federation_test.go",
+        "session_service_fork_start_failure_test.go",
         "session_service_fork_test.go",
         "session_service_guarded_steer_test.go",
         "session_service_hibernation_identity_test.go",
