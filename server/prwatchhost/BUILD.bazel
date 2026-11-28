@@ -1,0 +1,87 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "prwatchhost",
+    srcs = [
+        "adapters.go",
+        "inbox.go",
+        "module.go",
+        "notifier.go",
+        "selflogin.go",
+        "sessions.go",
+        "snapshot.go",
+        "status_provider.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/prwatchhost",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//github",
+        "//internal/proflabel",
+        "//log",
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//server/prwatch",
+        "//server/prwatch/inbox",
+        "//server/services/access",
+        "//server/services/prs",
+        "//server/wakes",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+        "//session/steertext",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":prwatchhost",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "prwatchhost_test",
+    srcs = [
+        "adapters_test.go",
+        "module_test.go",
+        "notifier_test.go",
+        "sessions_test.go",
+        "snapshot_test.go",
+        "start_test.go",
+        "testmain_test.go",
+    ],
+    embed = [":prwatchhost"],
+    deps = [
+        "//config",
+        "//envtest",
+        "//github",
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//server/deliverygate",
+        "//server/prwatch",
+        "//server/prwatch/inbox",
+        "//server/services/access",
+        "//server/services/prs",
+        "//server/wakes",
+        "//session",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+exports_files(
+    ["sessions.go"],
+    visibility = ["//session:__pkg__"],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

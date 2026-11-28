@@ -33,7 +33,7 @@ var legacyPRReaders = map[string]string{
 	"session/pr_legacy_safe.go":                                 readsInstanceData, // the shared rule for a legacy number with no link
 	"session/instance/pr_set_rules.go":                          readsSnapshot,     // ExistingPRForCreate reads the set; scalars only for a link-less session
 	"server/pr_annotations.go":                                  readsSnapshot,
-	"server/prwatch_sessions.go":                                readsSnapshot,
+	"server/prwatchhost/sessions.go":                            readsSnapshot,
 	"server/reviewqueue/review_queue_manager.go":                readsSnapshot,
 	"server/services/approvals/approval_service.go":             readsSnapshot,
 	"server/services/debuglogs/debug_snapshot.go":               readsInstanceData,

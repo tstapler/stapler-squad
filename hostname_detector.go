@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server"
 	serverauth "github.com/tstapler/stapler-squad/server/auth"
 	"github.com/tstapler/stapler-squad/server/middleware"
+	"github.com/tstapler/stapler-squad/server/tlscert"
 )
 
 // defaultHostnameRedetectInterval is used when
@@ -79,7 +80,7 @@ type HostnameDetectorConfig struct {
 	// redetect updating only Server.hostnames, per Story 2.2.1's third
 	// acceptance criterion.
 	WAHandler *serverauth.Handler
-	CertStore *server.NetworkCertStore
+	CertStore *tlscert.NetworkCertStore
 	// ValidateFn defaults to verifyHostnameOwnership (set by
 	// NewHostnameDetector) when left nil -- the security gate must never be
 	// silently disabled just because a caller forgot to wire it. It takes a
@@ -138,7 +139,7 @@ type HostnameDetector struct {
 	// therefore never reaches waHandler/certPublisher) without it passing
 	// validateFn first.
 	waHandler  *serverauth.Handler
-	certStore  *server.NetworkCertStore
+	certStore  *tlscert.NetworkCertStore
 	validateFn func(context.Context, string) bool
 
 	// initialVerified seeds the verified set and stays a candidate every cycle.
@@ -147,10 +148,10 @@ type HostnameDetector struct {
 	// goroutine touches it. nil until seedVerified or the first recompute.
 	verified map[string]*verifyState
 
-	// certPublisher wraps server.EnsureNetworkTLSCerts by default; tests
+	// certPublisher is tlscert.EnsureNetworkTLSCerts by default; tests
 	// inject a fake to simulate issuance failure or to count invocations
 	// without touching disk.
-	certPublisher func(map[string][]string) (string, map[string]*server.NetworkCert, error)
+	certPublisher func(map[string][]string) (string, map[string]*tlscert.NetworkCert, error)
 }
 
 // NewHostnameDetector builds a HostnameDetector wired to the real
@@ -181,7 +182,7 @@ func NewHostnameDetector(cfg HostnameDetectorConfig) *HostnameDetector {
 		waHandler:     cfg.WAHandler,
 		certStore:     cfg.CertStore,
 		validateFn:    validateFn,
-		certPublisher: server.EnsureNetworkTLSCerts,
+		certPublisher: tlscert.EnsureNetworkTLSCerts,
 	}
 	d.initialVerified = append([]string(nil), cfg.InitialVerified...)
 	d.seedVerified()
@@ -348,7 +349,7 @@ func (d *HostnameDetector) publishVerified(verifiedNew []string) {
 	}
 }
 
-// publishCertsWithTimeout runs d.certPublisher (server.EnsureNetworkTLSCerts
+// publishCertsWithTimeout runs d.certPublisher (tlscert.EnsureNetworkTLSCerts
 // by default) with its own bounded timeout. certPublisher takes no context of
 // its own and does synchronous, blocking disk I/O (MkdirAll, LoadX509KeyPair,
 // WriteFile) plus cert generation -- calling it directly from redetect, as
@@ -364,11 +365,11 @@ func (d *HostnameDetector) publishVerified(verifiedNew []string) {
 // d.networks' own doc comment ("only Run's own goroutine ever reads or
 // mutates this"). On timeout the goroutine is simply abandoned (certPublisher
 // has no way to be cancelled); the next cycle retries.
-func (d *HostnameDetector) publishCertsWithTimeout() (map[string]*server.NetworkCert, error) {
+func (d *HostnameDetector) publishCertsWithTimeout() (map[string]*tlscert.NetworkCert, error) {
 	networksSnapshot := cloneNetworks(d.networks)
 
 	type result struct {
-		certs map[string]*server.NetworkCert
+		certs map[string]*tlscert.NetworkCert
 		err   error
 	}
 	resCh := make(chan result, 1)

@@ -36,6 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/federation"
+	"github.com/tstapler/stapler-squad/server/tlscert"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -1438,7 +1439,7 @@ func verifyHostnameOwnership(ctx context.Context, hostname string) bool {
 // per-IP hostname map (the detector's starting `networks` state).
 type remoteAccessResult struct {
 	Handler   *serverauth.Handler
-	CertStore *server.NetworkCertStore
+	CertStore *tlscert.NetworkCertStore
 	Networks  map[string][]string
 	// VerifiedHostnames is the boot-time set that passed verifyHostnameOwnership;
 	// Networks holds the raw, unverified candidates and must not feed the verdict.
@@ -1618,14 +1619,14 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		networks[ip] = append([]string{ip}, resolveLANHostnames(ctx, ip)...)
 	}
 
-	caFile, netCerts, err := server.EnsureNetworkTLSCerts(networks)
+	caFile, netCerts, err := tlscert.EnsureNetworkTLSCerts(networks)
 	if err != nil {
 		return nil, fmt.Errorf("ensure TLS certs: %w", err)
 	}
-	certStore := server.NewNetworkCertStore(netCerts)
+	certStore := tlscert.NewNetworkCertStore(netCerts)
 
 	tlsCfg := &tls.Config{
-		GetCertificate: server.GetCertificateByLocalAddr(certStore),
+		GetCertificate: tlscert.GetCertificateByLocalAddr(certStore),
 		MinVersion:     tls.VersionTLS12,
 	}
 
@@ -1764,7 +1765,7 @@ func startHostnameDetector(mux *http.ServeMux, srv *server.Server, remoteAccess 
 	onStop func(name string, fn func(context.Context) error)) *HostnameDetector {
 	initialNetworks := map[string][]string{}
 	var waHandler *serverauth.Handler
-	var certStore *server.NetworkCertStore
+	var certStore *tlscert.NetworkCertStore
 	var initialVerified []string
 	if remoteAccess != nil {
 		initialVerified = remoteAccess.VerifiedHostnames

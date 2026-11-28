@@ -161,3 +161,6 @@ server/services/backgroundmodels !server/web
 server/services/claimcheck !server/web
 server/services/itemsessions !server/web
 server/services/sessionports !server/web
+server/actuator !server/web
+server/prwatchhost !server/web
+server/tlscert !server/web

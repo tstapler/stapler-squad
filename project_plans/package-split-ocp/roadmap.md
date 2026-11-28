@@ -349,7 +349,7 @@ Physical leaf moves that become honest only after waves 1-3 removed the concrete
 
 ## Size status (2026-11-28)
 
-Measured with `wc -l` over each directory's own `*.go` files minus `_test.go`, at `e95687f2f`. `server/services` (8,803) and `session` (9,451) are now under 10k. Still over 10k, and remaining work under the 2026-11-12 owner decision that every package goes under 10,000 non-test lines: `session/instance` 23,541 (plan: Track B of `session-hub-redesign-plan.md`), `server/services/backlogsvc` 16,016 (plan: Part 2 of `other-packages-under-10k-plan.md`), and, with no split plan yet, `server/mcp` 13,451, `server` 10,667, `session/tmux` 10,454 and `session/unfinished` 10,186.
+Measured with `wc -l` over each directory's own `*.go` files minus `_test.go`, at `e95687f2f`. `server/services` (8,803) and `session` (9,451) are now under 10k. Still over 10k, and remaining work under the 2026-11-12 owner decision that every package goes under 10,000 non-test lines: `session/instance` 23,541 (plan: Track B of `session-hub-redesign-plan.md`), `server/services/backlogsvc` 16,016 (plan: Part 2 of `other-packages-under-10k-plan.md`), and, with no split plan yet, `server/mcp` 13,451, `session/tmux` 10,454 and `session/unfinished` 10,186. Top-level `server` (10,667 at that commit) is under 10k since the `actuator`, `prwatchhost` and `tlscert` leaves moved out of it (8,941).
 
 ## Owner questions
 

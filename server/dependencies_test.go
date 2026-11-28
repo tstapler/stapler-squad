@@ -16,11 +16,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
-	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/zalando/go-keyring"
 
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/search"
+
 	"connectrpc.com/connect"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -31,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	serverevents "github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/prwatch"
+	"github.com/tstapler/stapler-squad/server/prwatchhost"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -655,23 +658,23 @@ func TestParseShadowVerifyEvery(t *testing.T) {
 // status route answering "not running" even though the module compiled.
 func TestBuildRuntimeDeps_should_WirePRWatchStatusProviderAndClearOnShutdown_When_ServerBoots(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
-	SetPRWatchStatusProvider(nil)
+	prwatchhost.SetStatusProvider(nil)
 
 	deps, err := BuildDependencies()
 	require.NoError(t, err)
 	srv := NewServerWithDeps("localhost:0", deps)
-	require.NotNil(t, currentPRWatchStatusProvider(), "startPRWatch must install the status provider")
-	st := currentPRWatchStatusProvider()()
+	require.NotNil(t, prwatchhost.CurrentStatusProvider(), "startPRWatch must install the status provider")
+	st := prwatchhost.CurrentStatusProvider()()
 	assert.False(t, st.Polls, "flag defaults off: nothing polls")
 
 	require.NoError(t, srv.Shutdown())
-	assert.Nil(t, currentPRWatchStatusProvider(), "shutdown must clear the provider")
+	assert.Nil(t, prwatchhost.CurrentStatusProvider(), "shutdown must clear the provider")
 }
 
 // TestBuildDependencies_should_NotStartPollerAndWarn_When_ConfiguredInboxURLIsNotLoopback (R7).
 func TestBuildDependencies_should_NotStartPollerAndWarn_When_ConfiguredInboxURLIsNotLoopback(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
-	SetPRWatchStatusProvider(nil)
+	prwatchhost.SetStatusProvider(nil)
 	cfg := config.LoadConfig()
 	cfg.InboxPRWatch.URL = "http://example.com:8789"
 	cfg.FeatureFlags = map[string]bool{config.FeatureInboxPRWatch: true}
@@ -682,7 +685,7 @@ func TestBuildDependencies_should_NotStartPollerAndWarn_When_ConfiguredInboxURLI
 	newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	// No poller, but status reports why instead of staying silent.
-	provider := currentPRWatchStatusProvider()
+	provider := prwatchhost.CurrentStatusProvider()
 	require.NotNil(t, provider, "status must show the non-loopback state")
 	assert.Equal(t, prwatch.InboxStateNonLoopback, provider().InboxState)
 	assert.NotNil(t, deps.SessionService, "the server still boots")

@@ -17,6 +17,7 @@ import (
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/profiling"
+	"github.com/tstapler/stapler-squad/server/actuator"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
@@ -135,7 +136,7 @@ type Server struct {
 	hookIPC                    *hookIPCState                            // resident instance-scoped PreToolUse classifier; started with the HTTP server
 
 	// workflowEngineSoak is what /actuator/workflow-engine reads; set via SetWorkflowEngineSoakSource.
-	workflowEngineSoak atomic.Pointer[WorkflowEngineSoakSource]
+	workflowEngineSoak atomic.Pointer[actuator.WorkflowEngineSoakSource]
 }
 
 // ServeHTTP makes *Server an http.Handler wrapping s.mux. Beyond delegating,
@@ -916,7 +917,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("WorkflowScheduler started")
 	}
 	startWakes(serverCtx, srv, deps, guidanceRequestSvc, wakeTriggerSvc) // ADR-006 wake timer; server/wakes_module.go
-	startPRWatch(serverCtx, srv, deps)                                   // PR watch inbox consumer; server/prwatch_module.go
+	startPRWatch(serverCtx, srv, deps)                                   // PR watch inbox consumer; server/prwatchhost
 
 	// Register BacklogService shutdown so in-flight triage goroutines are signalled
 	// to stop acquiring new semaphore slots and existing calls can complete cleanly.

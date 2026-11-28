@@ -1,4 +1,4 @@
-package server
+package actuator
 
 import (
 	"encoding/json"
@@ -20,7 +20,7 @@ func TestActuatorTerminalLatency_should_ReportPercentilesPerBackendAndListener(t
 	rec.Record(termlat.StageInputTotal, termlat.Labels{Backend: "tmux", Listener: "remote"}, 40*time.Millisecond)
 
 	w := httptest.NewRecorder()
-	handleActuatorTerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/actuator/terminal-latency", nil))
+	TerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/actuator/terminal-latency", nil))
 
 	require.Equal(t, http.StatusOK, w.Code)
 	var got terminalLatencyReport
@@ -38,13 +38,13 @@ func TestActuatorTerminalLatency_should_ReportDroppedFrames(t *testing.T) {
 	rec.CountDrop(termlat.DropFanoutFull, "tymux")
 
 	w := httptest.NewRecorder()
-	handleActuatorTerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
+	TerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
 	var got terminalLatencyReport
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, []termlat.DropCount{{Cause: "tymux_fanout_full", Backend: "tymux", Total: 1}}, got.Drops)
 
 	w = httptest.NewRecorder()
-	handleActuatorTerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x?format=text", nil))
+	TerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x?format=text", nil))
 	assert.Contains(t, w.Body.String(), "drop tymux_fanout_full")
 }
 
@@ -54,10 +54,10 @@ func TestActuatorTerminalLatency_should_RenderTextAndRejectWrites(t *testing.T) 
 	rec.Record(termlat.StageOutputSend, termlat.Labels{Backend: "tmux", Listener: "local"}, time.Millisecond)
 
 	w := httptest.NewRecorder()
-	handleActuatorTerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x?format=text", nil))
+	TerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x?format=text", nil))
 	assert.Contains(t, w.Body.String(), "output_send")
 
 	w = httptest.NewRecorder()
-	handleActuatorTerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/x", nil))
+	TerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/x", nil))
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }

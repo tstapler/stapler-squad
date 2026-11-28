@@ -93,7 +93,7 @@ func TestRegisterActuatorRoutes_should_RegisterAllRows_When_DependenciesNilAndSe
 		assert.Equal(t, want, serveGet(s, path).Code, "nil dep: "+path)
 	}
 
-	s.SetWorkflowEngineSoakSource(soakTestSource(soakReadyLedger(), nil))
+	s.SetWorkflowEngineSoakSource(wiredSoakSource())
 	rec := serveGet(s, "/actuator/workflow-engine")
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.False(t, strings.Contains(rec.Body.String(), "not wired"))

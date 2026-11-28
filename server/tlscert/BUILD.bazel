@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "tlscert",
+    srcs = ["tls.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/tlscert",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tlscert",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "tlscert_test",
+    srcs = [
+        "testmain_test.go",
+        "tls_test.go",
+    ],
+    embed = [":tlscert"],
+    deps = ["//envtest"],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

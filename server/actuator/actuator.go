@@ -1,4 +1,6 @@
-package server
+// Package actuator holds the /actuator/* HTTP handlers: health, metrics and
+// soak reports. The server owns the route table and passes each handler what it reads.
+package actuator
 
 import (
 	"encoding/json"
@@ -8,7 +10,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services/access"
@@ -23,50 +24,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
-// registerActuatorRoutes wires a small actuator-style surface (inspired by
-// Spring Boot's /actuator/health, /actuator/metrics): a machine-checkable
-// health rollup and a flat metrics snapshot, always available on the main
-// server (unlike /debug/blob-cache and friends, which only exist when the
-// process is started with --profile). Both read the exact same snapshot
-// functions the OTel instruments use (session/unfinished.RegisterMetrics,
-// tmux.ForkPressureSnapshot) — there is one source of truth per metric, this
-// just gives it a second, always-on export shape for curl/uptime checks.
-func (s *Server) registerActuatorRoutes() {
-	for _, e := range s.actuatorEndpoints() {
-		s.mux.Handle(e.Path, e.Handler)
-	}
-}
-
-// actuatorEndpoint is one row of the actuator route table.
-type actuatorEndpoint struct {
-	Path    string
-	Handler http.Handler
-}
-
-// actuatorEndpoints is the single list of actuator routes: a new endpoint is a
-// handler file plus one row here. Row order is registration order. Every row is
-// unconditional: a missing dependency is answered by the handler (503, "not
-// running"), never by leaving the route unregistered.
-func (s *Server) actuatorEndpoints() []actuatorEndpoint {
-	return []actuatorEndpoint{
-		{"/actuator/health", http.HandlerFunc(handleActuatorHealth)},
-		{"/actuator/metrics", http.HandlerFunc(handleActuatorMetrics)},
-		{"/actuator/db", http.HandlerFunc(handleActuatorDB)},
-		{"/actuator/git-backend", http.HandlerFunc(handleActuatorGitBackend)},
-		{"/actuator/workflow-engine", http.HandlerFunc(s.handleActuatorWorkflowEngine)},
-		{"/actuator/nudge-outcomes", http.HandlerFunc(handleActuatorNudgeOutcomes)},
-		{"/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner)},
-		{"/actuator/inbox-pr-watch", http.HandlerFunc(handleActuatorInboxPRWatch)},
-		{"/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load)},
-		{"/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load)},
-		{"/actuator/terminal-input", handleActuatorTerminalInput(access.TerminalInputReport)},
-		{"/actuator/terminal-latency", handleActuatorTerminalLatency(termlat.Default)},
-	}
-}
-
-// handleActuatorTerminalInput serves the bounded per-session terminal input tally (frames,
+// TerminalInput serves the bounded per-session terminal input tally (frames,
 // bytes, class counts, last activity; never content). JSON by default; ?format=text for a terminal.
-func handleActuatorTerminalInput(report func() []access.TerminalInputSession) http.HandlerFunc {
+func TerminalInput(report func() []access.TerminalInputSession) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -83,10 +43,10 @@ func handleActuatorTerminalInput(report func() []access.TerminalInputSession) ht
 	}
 }
 
-// handleActuatorTerminalMux reports the terminal socket pool (docs/reference/terminal-ws-pool.md).
+// TerminalMux reports the terminal socket pool (docs/reference/terminal-ws-pool.md).
 // POST ?poolSize=N changes the advertised size at runtime and pushes it to connected clients; it is
 // accepted only on the local (loopback) listener, never on remote access.
-func handleActuatorTerminalMux(bridge func() *wsconn.TerminalMuxBridge) http.HandlerFunc {
+func TerminalMux(bridge func() *wsconn.TerminalMuxBridge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := bridge()
 		if b == nil {
@@ -113,10 +73,14 @@ func handleActuatorTerminalMux(bridge func() *wsconn.TerminalMuxBridge) http.Han
 	}
 }
 
-// handleActuatorInboxPRWatch serves the PR watch status snapshot (D14). JSON by default;
-// ?format=text for a terminal. With no provider it answers "not running" (never 404).
-func handleActuatorInboxPRWatch(w http.ResponseWriter, r *http.Request) {
-	provider := currentPRWatchStatusProvider()
+// InboxPRWatch serves the PR watch status snapshot (D14). JSON by default;
+// ?format=text for a terminal. current is asked per request; when it returns nil
+// the answer is "not running" (never 404).
+func InboxPRWatch(current func() func() prwatch.Status) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { writeInboxPRWatch(w, r, current()) }
+}
+
+func writeInboxPRWatch(w http.ResponseWriter, r *http.Request, provider func() prwatch.Status) {
 	text := r.URL.Query().Get("format") == "text"
 	if text {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -140,44 +104,44 @@ func handleActuatorInboxPRWatch(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(st)
 }
 
-// handleActuatorDB serves per-pool sql.DBStats and query counters (session/dbobs),
+// DB serves per-pool sql.DBStats and query counters (session/dbobs),
 // maintenance state (session/dbmaint) and one row per open database (session/dbpool:
 // use case, class, journal mode, file and WAL size).
 // With the single-connection pool, wait_count/wait_duration_ms rising is DB queueing.
-func handleActuatorDB(w http.ResponseWriter, _ *http.Request) {
+func DB(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"pools": dbobs.Snapshot(), "maintenance": dbmaint.Snapshot(), "databases": dbpool.Snapshot()})
 }
 
-// handleActuatorNudgeOutcomes serves the durable nudge_outcome_total counters
+// NudgeOutcomes serves the durable nudge_outcome_total counters
 // and the time of the first record (Story 4.1.2).
-func handleActuatorNudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
+func NudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(nudgeoutcomes.DefaultNudgeOutcomes().Snapshot())
 }
 
-// handleActuatorWsUnary serves the unary WebSocket bridge counters as JSON. The bridge is
+// WsUnary serves the unary WebSocket bridge counters as JSON. The bridge is
 // resolved per request because it may be built after the routes are registered.
-func handleActuatorWsUnary(bridge func() *wsconn.UnaryWsBridge) http.HandlerFunc {
+func WsUnary(bridge func() *wsconn.UnaryWsBridge) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(bridge().Report())
 	}
 }
 
-// handleActuatorUnfinishedScanner serves the unfinished-work scanner's counters as JSON, read
+// UnfinishedScanner serves the unfinished-work scanner's counters as JSON, read
 // from atomics, so soak decisions need neither OpenTelemetry nor a profile
 // (docs/how-to/tune-unfinished-scanner-caches.md).
-func handleActuatorUnfinishedScanner(s *unfinished.Scanner) http.HandlerFunc {
+func UnfinishedScanner(s *unfinished.Scanner) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(unfinished.BuildReport(s))
 	}
 }
 
-// handleActuatorGitBackend serves the git backend shadow-soak counters and the mechanical flip
+// GitBackend serves the git backend shadow-soak counters and the mechanical flip
 // verdict (docs/how-to/flip-git-backend-cohort.md). JSON by default; ?format=text for a terminal.
-func handleActuatorGitBackend(w http.ResponseWriter, r *http.Request) {
+func GitBackend(w http.ResponseWriter, r *http.Request) {
 	writeGitBackendSoak(w, r, gitwiring.SoakStatus(r.Context()))
 }
 
@@ -197,7 +161,7 @@ type actuatorComponent struct {
 	Detail any    `json:"detail,omitempty"`
 }
 
-func handleActuatorHealth(w http.ResponseWriter, _ *http.Request) {
+func Health(w http.ResponseWriter, _ *http.Request) {
 	writeActuatorHealth(w, tmux.ForkPressureSnapshot().Level, runtime.NumGoroutine(), profiling.DefaultGoroutineWatch.Last())
 }
 
@@ -267,7 +231,7 @@ func goroutineHealthStatus(count int, growth profiling.GoroutineVerdict) string 
 	return "ok"
 }
 
-func handleActuatorMetrics(w http.ResponseWriter, _ *http.Request) {
+func Metrics(w http.ResponseWriter, _ *http.Request) {
 	blobCache := unfinished.BlobCacheStatsSnapshot()
 	blobCacheTotal := blobCache.Hits + blobCache.Misses
 	var blobCacheHitRate float64

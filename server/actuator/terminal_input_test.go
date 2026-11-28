@@ -1,4 +1,4 @@
-package server
+package actuator
 
 import (
 	"encoding/json"
@@ -27,7 +27,7 @@ func twoSessionRows() []access.TerminalInputSession {
 func getTerminalInput(t *testing.T, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
-	handleActuatorTerminalInput(twoSessionRows)(w, httptest.NewRequest(http.MethodGet, "/actuator/terminal-input"+query, nil))
+	TerminalInput(twoSessionRows)(w, httptest.NewRequest(http.MethodGet, "/actuator/terminal-input"+query, nil))
 	return w
 }
 
@@ -62,24 +62,14 @@ func TestActuatorTerminalInput_ShouldReturnTextFormat_When_FormatTextQuery(t *te
 func TestActuatorTerminalInput_ShouldRejectNonGet_When_PostRequest(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	handleActuatorTerminalInput(twoSessionRows)(w, httptest.NewRequest(http.MethodPost, "/actuator/terminal-input", nil))
+	TerminalInput(twoSessionRows)(w, httptest.NewRequest(http.MethodPost, "/actuator/terminal-input", nil))
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
 func TestActuatorTerminalInput_ShouldReturnEmptyArray_When_NothingRecorded(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	handleActuatorTerminalInput(func() []access.TerminalInputSession { return []access.TerminalInputSession{} })(w,
+	TerminalInput(func() []access.TerminalInputSession { return []access.TerminalInputSession{} })(w,
 		httptest.NewRequest(http.MethodGet, "/actuator/terminal-input", nil))
 	assert.JSONEq(t, "[]", w.Body.String())
-}
-
-func TestRegisterActuatorRoutes_ShouldServeTerminalInput_When_RoutesRegistered(t *testing.T) {
-	t.Parallel()
-	s := &Server{mux: http.NewServeMux()}
-	s.registerActuatorRoutes()
-	rec := httptest.NewRecorder()
-	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/actuator/terminal-input", nil))
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.True(t, json.Valid(rec.Body.Bytes()))
 }
