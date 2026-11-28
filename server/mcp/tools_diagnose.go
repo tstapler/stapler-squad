@@ -38,7 +38,7 @@ type diagnoseHandlers struct {
 
 // diagnoseOutcomeValues are the valid submit_diagnosis_result outcomes,
 // matching buildDiagnosePrompt's three-way action space (server/services/
-// diagnostic_service.go): a genuine defect, an inconclusive/informational
+// diagnosesvc/diagnostic_service.go): a genuine defect, an inconclusive/informational
 // note, a successful nudge, or (added for completeness) no action needed at
 // all.
 const maxDiagnosisSummaryLen = 2000

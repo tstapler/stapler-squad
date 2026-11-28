@@ -773,7 +773,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Register DiagnosticService handler ("Diagnose & Nudge", backlog item
 	// 68964304): AssembleDiagnosticBundle/DispatchDiagnose. deps.SessionService
-	// satisfies services.DiagnosticSpawner (SpawnDiagnosticSession); a nil
+	// satisfies diagnosesvc.DiagnosticSpawner (SpawnDiagnosticSession); a nil
 	// *SessionService (same nil-interface-boxing hazard the GuidanceRequestService
 	// block above documents) is guarded by only assigning it when non-nil.
 	if deps.Storage != nil {
